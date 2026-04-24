@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TindaAgent ✿</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #fff5f9;
+      --surface: #ffffff;
+      --surface-2: #fef0f5;
+      --border: #fcd5e5;
+      --border-strong: #f9a8c9;
+      --text: #3d1f2f;
+      --text-dim: #9b5f78;
+      --text-faint: #d4a0b5;
+      --accent: #ff6eb4;
+      --accent-2: #ff9fd3;
+      --accent-deep: #c2185b;
+      --lavender: #a78bfa;
+      --gradient: linear-gradient(135deg, #ff6eb4 0%, #ff9fd3 70%, #ffb3c6 100%);
+      --gradient-lavender: linear-gradient(135deg, #a78bfa 0%, #f472b6 100%);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+      height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Nunito', -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+      font-size: 14px;
+      line-height: 1.65;
+      -webkit-font-smoothing: antialiased;
+      overflow: hidden;
+    }
+
+    @keyframes pageIn {
+      from { opacity: 0; transform: translateY(10px) scale(0.985); }
+      to   { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    body { display: flex; flex-direction: column; position: relative;
+           animation: pageIn 0.42s cubic-bezier(0.4, 0, 0.2, 1) both; }
+
+    /* ── 背景光晕 ── */
+    body::before {
+      content: "";
+      position: fixed;
+      top: -15%; right: -10%;
+      width: 560px; height: 560px;
+      background: radial-gradient(circle, rgba(255,110,180,0.14) 0%, transparent 65%);
+      pointer-events: none; z-index: 0;
+    }
+    body::after {
+      content: "";
+      position: fixed;
+      bottom: -20%; left: -10%;
+      width: 500px; height: 500px;
+      background: radial-gradient(circle, rgba(167,139,250,0.12) 0%, transparent 65%);
+      pointer-events: none; z-index: 0;
+    }
+
+    /* ── 浮动装饰 ── */
+    .deco {
+      position: fixed; pointer-events: none;
+      z-index: 0; user-select: none; opacity: 0;
+      animation: floatUp linear infinite;
+    }
+    @keyframes floatUp {
+      0%   { transform: translateY(0) rotate(0deg);    opacity: 0.28; }
+      50%  { opacity: 0.52; }
+      100% { transform: translateY(-50px) rotate(20deg); opacity: 0.28; }
+    }
+
+    /* ── Header ── */
+    header {
+      position: relative; z-index: 10;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 20px;
+      background: rgba(255,255,255,0.82);
+      backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px);
+      border-bottom: 1.5px solid var(--border);
+    }
+
+    .brand {
+      display: flex; align-items: center; gap: 10px;
+      font-weight: 700; font-size: 15.5px;
+    }
+
+    .brand-logo {
+      width: 34px; height: 34px; border-radius: 50%;
+      background: var(--gradient);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px;
+      box-shadow: 0 4px 16px rgba(255,110,180,0.38);
+      animation: wiggle 3.5s ease-in-out infinite; flex-shrink: 0;
+    }
+    @keyframes wiggle {
+      0%,100% { transform: rotate(-5deg); }
+      50%      { transform: rotate(5deg); }
+    }
+
+    .brand-name {
+      background: var(--gradient);
+      -webkit-background-clip: text; background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .version-badge {
+      font-size: 10.5px; color: var(--text-faint);
+      background: var(--surface-2);
+      padding: 2px 9px; border-radius: 999px;
+      border: 1.5px solid var(--border); font-weight: 700;
+    }
+
+    .header-decos {
+      font-size: 13px; letter-spacing: 5px;
+      opacity: 0.5; user-select: none;
+    }
+
+    /* ── Main hero ── */
+    main {
+      position: relative; z-index: 1;
+      flex: 1; display: flex;
+      align-items: center; justify-content: center;
+      padding: 24px 20px;
+    }
+
+    .hero {
+      display: flex; flex-direction: column;
+      align-items: center; gap: 16px;
+      text-align: center;
+      animation: heroFadeIn 0.7s cubic-bezier(0.34,1.3,0.64,1) forwards;
+    }
+    @keyframes heroFadeIn {
+      from { opacity: 0; transform: translateY(20px) scale(0.96); }
+      to   { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    /* ── Avatar ── */
+    .avatar-wrap {
+      position: relative; cursor: pointer;
+      transition: transform 0.25s cubic-bezier(0.34,1.56,0.64,1);
+    }
+    .avatar-wrap:hover { transform: scale(1.08); }
+    .avatar-wrap:active { transform: scale(0.95); }
+
+    .avatar-circle {
+      width: 96px; height: 96px; border-radius: 50%;
+      background: var(--gradient);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 50px;
+      box-shadow: 0 12px 40px rgba(255,110,180,0.32);
+      animation: floatAvatar 3.5s ease-in-out infinite;
+    }
+    @keyframes floatAvatar {
+      0%,100% { transform: translateY(0) rotate(-3deg); }
+      50%      { transform: translateY(-10px) rotate(3deg); }
+    }
+
+    .avatar-ring {
+      position: absolute; inset: -5px;
+      border-radius: 50%;
+      border: 2.5px solid transparent;
+      background:
+        linear-gradient(#fff5f9, #fff5f9) padding-box,
+        conic-gradient(
+          from 0deg,
+          rgba(255,110,180,0)   0%,
+          rgba(255,110,180,0.85) 28%,
+          rgba(167,139,250,0.75) 58%,
+          rgba(255,110,180,0)   100%
+        ) border-box;
+      animation: ringRotate 6s linear infinite;
+    }
+    @keyframes ringRotate { to { transform: rotate(360deg); } }
+
+    .avatar-badge {
+      position: absolute; bottom: 2px; right: 2px;
+      width: 22px; height: 22px; border-radius: 50%;
+      background: var(--gradient-lavender);
+      border: 2.5px solid var(--bg);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 11px;
+    }
+
+    /* ── Title ── */
+    .hero-title {
+      font-size: 28px; font-weight: 800;
+      background: var(--gradient);
+      -webkit-background-clip: text; background-clip: text;
+      -webkit-text-fill-color: transparent;
+      letter-spacing: 0.5px;
+    }
+
+    .sparkle-row {
+      font-size: 17px; letter-spacing: 8px;
+      opacity: 0.55; user-select: none;
+      margin: -6px 0;
+    }
+
+    .hero-subtitle {
+      font-size: 13.5px; color: var(--text-dim);
+      font-weight: 500; max-width: 300px;
+    }
+
+    /* ── Feature tags ── */
+    .tags {
+      display: flex; flex-wrap: wrap; gap: 8px;
+      justify-content: center;
+    }
+
+    .tag {
+      background: var(--surface);
+      border: 1.5px solid var(--border);
+      color: var(--text-dim);
+      padding: 5px 14px; border-radius: 999px;
+      font-size: 12px; font-weight: 600;
+      transition: all 0.2s cubic-bezier(0.34,1.56,0.64,1);
+    }
+    .tag:hover {
+      background: var(--surface-2);
+      border-color: var(--accent-2); color: var(--accent-deep);
+      transform: translateY(-3px) scale(1.05);
+      box-shadow: 0 6px 16px rgba(255,110,180,0.15);
+    }
+
+    /* ── Open chat button ── */
+    .btn-chat {
+      display: flex; align-items: center; justify-content: center;
+      gap: 10px;
+      width: 280px;
+      padding: 14px 32px;
+      background: var(--gradient);
+      color: #fff; border: none;
+      border-radius: 999px;
+      font-family: inherit; font-size: 16px; font-weight: 700;
+      cursor: pointer; text-decoration: none;
+      box-shadow: 0 6px 24px rgba(255,110,180,0.35);
+      transition: all 0.25s cubic-bezier(0.34,1.56,0.64,1);
+      letter-spacing: 0.5px;
+      margin-top: 6px;
+    }
+    .btn-chat:hover {
+      transform: translateY(-4px) scale(1.04);
+      box-shadow: 0 12px 32px rgba(255,110,180,0.45);
+    }
+    .btn-chat:active { transform: scale(0.97); }
+
+    .btn-chat-icon { font-size: 20px; }
+
+    /* ── Modal overlay ── */
+    .modal-overlay {
+      position: fixed; inset: 0; z-index: 100;
+      background: rgba(61,31,47,0.25);
+      backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+      display: flex; align-items: center; justify-content: center;
+      padding: 20px;
+      opacity: 0; pointer-events: none;
+      transition: opacity 0.25s ease;
+    }
+    .modal-overlay.open {
+      opacity: 1; pointer-events: auto;
+    }
+
+    .modal-card {
+      background: var(--surface);
+      border: 1.5px solid var(--border);
+      border-radius: 28px;
+      width: 100%; max-width: 320px;
+      padding: 28px 24px 24px;
+      box-shadow: 0 20px 60px rgba(255,110,180,0.18), 0 4px 20px rgba(0,0,0,0.06);
+      transform: scale(0.88) translateY(16px);
+      transition: transform 0.32s cubic-bezier(0.34,1.4,0.64,1);
+      display: flex; flex-direction: column; gap: 20px;
+      position: relative;
+    }
+    .modal-overlay.open .modal-card {
+      transform: scale(1) translateY(0);
+    }
+
+    .modal-close {
+      position: absolute; top: 16px; right: 16px;
+      width: 30px; height: 30px; border-radius: 50%;
+      background: var(--surface-2); border: 1.5px solid var(--border);
+      color: var(--text-dim); font-size: 14px;
+      cursor: pointer; display: flex; align-items: center; justify-content: center;
+      transition: all 0.2s cubic-bezier(0.34,1.56,0.64,1);
+    }
+    .modal-close:hover {
+      background: var(--border); color: var(--text);
+      transform: rotate(90deg) scale(1.1);
+    }
+
+    .modal-avatar-wrap {
+      display: flex; flex-direction: column;
+      align-items: center; gap: 10px;
+    }
+
+    .modal-avatar {
+      width: 72px; height: 72px; border-radius: 50%;
+      background: var(--gradient);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 38px;
+      box-shadow: 0 8px 28px rgba(255,110,180,0.28);
+    }
+
+    .modal-username {
+      font-size: 17px; font-weight: 700;
+      background: var(--gradient);
+      -webkit-background-clip: text; background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    /* ── Info rows ── */
+    .modal-divider {
+      height: 1px; background: var(--border); margin: -4px 0;
+    }
+
+    .info-list {
+      display: flex; flex-direction: column; gap: 10px;
+    }
+
+    .info-row {
+      display: flex; align-items: center; gap: 10px;
+      padding: 8px 12px; border-radius: 12px;
+      background: var(--surface-2); border: 1.5px solid var(--border);
+    }
+
+    .info-icon { font-size: 16px; flex-shrink: 0; opacity: 0.7; }
+
+    .info-label {
+      font-size: 11.5px; color: var(--text-faint);
+      font-weight: 700; min-width: 48px;
+    }
+
+    .info-value {
+      flex: 1; text-align: right;
+      font-size: 12.5px; color: var(--text-faint);
+      font-weight: 600;
+      display: flex; align-items: center; justify-content: flex-end; gap: 5px;
+      word-break: break-all;
+    }
+    .info-value .lock { font-size: 11px; opacity: 0.6; }
+
+    @media (max-width: 640px) {
+      .hero { gap: 13px; }
+      .hero-title { font-size: 24px; }
+      .btn-chat { width: 240px; font-size: 15px; }
+      .header-decos { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- 浮动装饰 -->
+<span class="deco" style="top:7%;left:4%;font-size:20px;animation-duration:4.4s;">🌸</span>
+<span class="deco" style="top:16%;right:5%;font-size:13px;animation-duration:5.6s;animation-delay:-1.2s;">⭐</span>
+<span class="deco" style="top:52%;left:2.5%;font-size:14px;animation-duration:4.9s;animation-delay:-2.1s;">💕</span>
+<span class="deco" style="top:72%;right:5%;font-size:17px;animation-duration:6.1s;animation-delay:-0.6s;">🌟</span>
+<span class="deco" style="top:38%;right:3%;font-size:11px;animation-duration:5.2s;animation-delay:-1.7s;">✿</span>
+<span class="deco" style="top:85%;left:7%;font-size:12px;animation-duration:5.8s;animation-delay:-3s;">🎀</span>
+<span class="deco" style="top:30%;left:8%;font-size:10px;animation-duration:6.3s;animation-delay:-0.9s;">💫</span>
+<span class="deco" style="top:65%;right:8%;font-size:11px;animation-duration:4.7s;animation-delay:-2.4s;">🌷</span>
+
+<header>
+  <div class="brand">
+    <div class="brand-logo">🌸</div>
+    <span class="brand-name">TindaAgent</span>
+    <span class="version-badge">v0.1.0</span>
+  </div>
+  <span class="header-decos">✿ ♡ ✿</span>
+</header>
+
+<main>
+  <div class="hero">
+
+    <!-- 头像 -->
+    <div class="avatar-wrap" onclick="openModal()" title="点击查看账户">
+      <div class="avatar-ring"></div>
+      <div class="avatar-circle">🌸</div>
+      <div class="avatar-badge">👤</div>
+    </div>
+
+    <!-- 标题 -->
+    <div class="hero-title">TindaAgent</div>
+    <div class="sparkle-row">✿ ♡ ⭐ ♡ ✿</div>
+    <div class="hero-subtitle">Tinda 开发的 AI Agent 助手<br>可对话 · 可调用工具 · 可扩展</div>
+
+    <!-- 功能标签 -->
+    <div class="tags">
+      <span class="tag">💬 智能对话</span>
+      <span class="tag">🔧 工具调用</span>
+      <span class="tag">🛡️ 权限管理</span>
+      <span class="tag">🔌 可扩展</span>
+    </div>
+
+    <!-- 打开聊天按钮 -->
+    <a class="btn-chat" href="/app" onclick="event.preventDefault(); smoothNavigate('/app');">
+      <span class="btn-chat-icon">💬</span>
+      打开聊天
+    </a>
+
+  </div>
+</main>
+
+<!-- 账户信息弹窗 -->
+<div class="modal-overlay" id="modalOverlay" onclick="closeModalOnBackdrop(event)">
+  <div class="modal-card" id="modalCard">
+    <button class="modal-close" onclick="closeModal()">✕</button>
+
+    <div class="modal-avatar-wrap">
+      <div class="modal-avatar">🌸</div>
+      <div class="modal-username">TindaAgent 用户</div>
+    </div>
+
+    <div class="modal-divider"></div>
+
+    <div class="info-list">
+      <div class="info-row">
+        <span class="info-icon">👤</span>
+        <span class="info-label">用户名</span>
+        <span class="info-value" id="u_name">加载中...</span>
+      </div>
+      <div class="info-row">
+        <span class="info-icon">🔢</span>
+        <span class="info-label">UID</span>
+        <span class="info-value" id="u_uid">加载中...</span>
+      </div>
+      <div class="info-row">
+        <span class="info-icon">🛡️</span>
+        <span class="info-label">权限</span>
+        <span class="info-value" id="u_perm">加载中...</span>
+      </div>
+      <div class="info-row">
+        <span class="info-icon">🔑</span>
+        <span class="info-label">Token</span>
+        <span class="info-value" id="u_token">加载中...</span>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+  function smoothNavigate(url) {
+    document.body.style.animation  = "none";
+    document.body.style.transition = "opacity 0.22s ease, transform 0.22s ease";
+    document.body.style.opacity    = "0";
+    document.body.style.transform  = "translateY(-8px) scale(0.99)";
+    setTimeout(() => { location.href = url; }, 240);
+  }
+
+  const ui = {
+    name: document.getElementById("u_name"),
+    uid: document.getElementById("u_uid"),
+    perm: document.getElementById("u_perm"),
+    token: document.getElementById("u_token"),
+  };
+
+  function maskToken(token) {
+    const t = String(token || "");
+    if (t.length <= 12) return t || "-";
+    return `${t.slice(0, 8)}...${t.slice(-6)}`;
+  }
+
+  async function loadProfile() {
+    try {
+      const res = await fetch("/user/profile", { method: "GET" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      ui.name.textContent = data.name || "-";
+      ui.uid.textContent = data.uid || "-";
+      const permValue = Number(data.perm ?? 0);
+      const permLabel = data.perm_label || "UNKNOWN";
+      ui.perm.textContent = String(permValue);
+      ui.perm.title = permLabel;
+      ui.token.textContent = maskToken(data.token);
+      ui.token.title = String(data.token || "");
+    } catch (e) {
+      ui.name.textContent = "加载失败";
+      ui.uid.textContent = "加载失败";
+      ui.perm.textContent = "加载失败";
+      ui.perm.title = "";
+      ui.token.textContent = "加载失败";
+      ui.token.title = "";
+    }
+  }
+
+  function openModal() {
+    document.getElementById("modalOverlay").classList.add("open");
+  }
+
+  function closeModal() {
+    document.getElementById("modalOverlay").classList.remove("open");
+  }
+
+  function closeModalOnBackdrop(e) {
+    if (e.target === document.getElementById("modalOverlay")) closeModal();
+  }
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeModal();
+  });
+
+  loadProfile();
+</script>
+</body>
+</html>
