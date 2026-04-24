@@ -11,3 +11,5 @@
 
 # backup working files
 backup/*.passphrase.txt
+
+backup/
