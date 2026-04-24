@@ -1,0 +1,13 @@
+# logs/cache
+**/__pycache__/
+*.pyc
+*.pyo
+*.log
+
+# local secrets (outside release source/full_data)
+.env
+*.key
+*.pem
+
+# backup working files
+backup/*.passphrase.txt
