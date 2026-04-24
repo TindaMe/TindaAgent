@@ -1,0 +1,24 @@
+﻿**********************
+Windows PowerShell 脚本开始
+开始时间: 20260419172228
+用户名: YLS\31768
+RunAs 用户: YLS\31768
+配置名称: 
+计算机: YLS (Microsoft Windows NT 10.0.26200.0)
+主机应用程序: C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe -Command . 'E:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1'; Start-Transcript -Path 'e:/Python/test_log.txt' -Append; & 'E:/AnacondaAnaconda3/Scripts/conda.exe' run -n base python e:/Python/TindaAgent/Master/main.py; Stop-Transcript
+进程 ID: 13548
+PSVersion: 5.1.26100.8115
+PSEdition: Desktop
+PSCompatibleVersions: 1.0, 2.0, 3.0, 4.0, 5.0, 5.1.26100.8115
+BuildVersion: 10.0.26100.8115
+CLRVersion: 4.0.30319.42000
+WSManStackVersion: 3.0
+PSRemotingProtocolVersion: 2.3
+SerializationVersion: 1.1.0.1
+**********************
+已启动脚本，输出文件为 e:/Python/test_log.txt
+
+**********************
+Windows PowerShell 脚本结束
+结束时间: 20260419172233
+**********************
