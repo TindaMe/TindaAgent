@@ -110,6 +110,92 @@ class LLMClient:
         return message
 
     @staticmethod
+    def _build_done_payload(
+        reply: str,
+        working_messages: list[dict[str, Any]],
+        base_len: int,
+        steps: int,
+        tool_trace: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        return {
+            "reply": reply,
+            "history_delta": working_messages[base_len:],
+            "tool_steps": steps,
+            "tool_trace": tool_trace,
+        }
+
+    @staticmethod
+    def _normalize_tool_call(
+        *,
+        call_id: str | None,
+        call_type: str | None,
+        function_name: str | None,
+        function_arguments: str | None,
+        fallback_id: str,
+    ) -> dict[str, Any]:
+        return {
+            "id": str(call_id or "").strip() or fallback_id,
+            "type": str(call_type or "function").strip() or "function",
+            "function": {
+                "name": str(function_name or "").strip(),
+                "arguments": function_arguments or "{}",
+            },
+        }
+
+    def _run_normalized_tool_calls(
+        self,
+        *,
+        normalized_tool_calls: list[dict[str, Any]],
+        user_perm: int,
+        working_messages: list[dict[str, Any]],
+        tool_trace: list[dict[str, Any]],
+    ) -> None:
+        for call in normalized_tool_calls:
+            tool_name = str(call["function"].get("name", ""))
+            raw_arguments = call["function"].get("arguments", "")
+            parsed_args = self._parse_tool_arguments(raw_arguments)
+            tool_result = tool_registry.run_agent_tool(
+                tool_name,
+                user_perm,
+                parsed_args,
+            )
+            parsed_result = self._parse_json(tool_result)
+            tool_trace.append(
+                {
+                    "agent_tool": tool_name,
+                    "arguments": parsed_args,
+                    "result": parsed_result,
+                    "raw_result": tool_result,
+                }
+            )
+            working_messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": call["id"],
+                    "content": tool_result,
+                }
+            )
+
+    def _append_assistant_tool_message(
+        self,
+        *,
+        working_messages: list[dict[str, Any]],
+        content: str,
+        reasoning_content: str,
+        normalized_tool_calls: list[dict[str, Any]],
+    ) -> None:
+        assistant_tool_msg: dict[str, Any] = self._attach_reasoning_content(
+            {
+                "role": "assistant",
+                "content": content,
+                "tool_calls": [],
+            },
+            reasoning_content,
+        )
+        assistant_tool_msg["tool_calls"].extend(normalized_tool_calls)
+        working_messages.append(assistant_tool_msg)
+
+    @staticmethod
     def _build_tool_limit_fallback(tool_trace: list[dict[str, Any]]) -> str:
         """
         工具调用过多时，输出可读汇总，避免只返回生硬上限提示。
@@ -179,9 +265,20 @@ class LLMClient:
             )
             msg = response.choices[0].message
             reasoning_content = self._normalize_reasoning_content(getattr(msg, "reasoning_content", None))
-            tool_calls = [] if force_finalize else (msg.tool_calls or [])
+            normalized_tool_calls: list[dict[str, Any]] = []
+            if not force_finalize:
+                for idx, call in enumerate(msg.tool_calls or []):
+                    normalized_tool_calls.append(
+                        self._normalize_tool_call(
+                            call_id=getattr(call, "id", None),
+                            call_type=getattr(call, "type", None),
+                            function_name=getattr(call.function, "name", ""),
+                            function_arguments=getattr(call.function, "arguments", None),
+                            fallback_id=f"call_{steps}_{idx}",
+                        )
+                    )
 
-            if not tool_calls:
+            if not normalized_tool_calls:
                 assistant_msg = self._attach_reasoning_content(
                     {
                         "role": "assistant",
@@ -190,57 +287,26 @@ class LLMClient:
                     reasoning_content,
                 )
                 working_messages.append(assistant_msg)
-                return {
-                    "reply": assistant_msg["content"],
-                    "history_delta": working_messages[base_len:],
-                    "tool_steps": steps,
-                    "tool_trace": tool_trace,
-                }
+                return self._build_done_payload(
+                    assistant_msg["content"],
+                    working_messages,
+                    base_len,
+                    steps,
+                    tool_trace,
+                )
 
-            assistant_tool_msg: dict[str, Any] = self._attach_reasoning_content(
-                {
-                    "role": "assistant",
-                    "content": msg.content or "",
-                    "tool_calls": [],
-                },
-                reasoning_content,
+            self._append_assistant_tool_message(
+                working_messages=working_messages,
+                content=msg.content or "",
+                reasoning_content=reasoning_content,
+                normalized_tool_calls=normalized_tool_calls,
             )
-            for call in tool_calls:
-                assistant_tool_msg["tool_calls"].append(
-                    {
-                        "id": call.id,
-                        "type": call.type,
-                        "function": {
-                            "name": call.function.name,
-                            "arguments": call.function.arguments or "{}",
-                        },
-                    }
-                )
-            working_messages.append(assistant_tool_msg)
-
-            for call in tool_calls:
-                parsed_args = self._parse_tool_arguments(call.function.arguments)
-                tool_result = tool_registry.run_agent_tool(
-                    call.function.name,
-                    user_perm,
-                    parsed_args,
-                )
-                parsed_result = self._parse_json(tool_result)
-                tool_trace.append(
-                    {
-                        "agent_tool": call.function.name,
-                        "arguments": parsed_args,
-                        "result": parsed_result,
-                        "raw_result": tool_result,
-                    }
-                )
-                working_messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": call.id,
-                        "content": tool_result,
-                    }
-                )
+            self._run_normalized_tool_calls(
+                normalized_tool_calls=normalized_tool_calls,
+                user_perm=user_perm,
+                working_messages=working_messages,
+                tool_trace=tool_trace,
+            )
 
             steps += 1
             if steps >= max_tool_steps:
@@ -250,12 +316,13 @@ class LLMClient:
                     "content": fallback_text,
                 }
                 working_messages.append(fallback_msg)
-                return {
-                    "reply": fallback_text,
-                    "history_delta": working_messages[base_len:],
-                    "tool_steps": steps,
-                    "tool_trace": tool_trace,
-                }
+                return self._build_done_payload(
+                    fallback_text,
+                    working_messages,
+                    base_len,
+                    steps,
+                    tool_trace,
+                )
 
     def stream_chat_with_tools(
         self,
@@ -339,7 +406,19 @@ class LLMClient:
 
             round_content = "".join(content_parts)
             round_reasoning = "".join(reasoning_parts)
-            ordered_tool_calls = [] if force_finalize else [tool_calls_map[i] for i in sorted(tool_calls_map.keys())]
+            ordered_tool_calls: list[dict[str, Any]] = []
+            if not force_finalize:
+                for idx, key in enumerate(sorted(tool_calls_map.keys())):
+                    call = tool_calls_map[key]
+                    ordered_tool_calls.append(
+                        self._normalize_tool_call(
+                            call_id=call.get("id"),
+                            call_type=call.get("type"),
+                            function_name=call.get("function", {}).get("name"),
+                            function_arguments=call.get("function", {}).get("arguments"),
+                            fallback_id=f"call_{steps}_{idx}",
+                        )
+                    )
 
             if not ordered_tool_calls:
                 assistant_msg = self._attach_reasoning_content(
@@ -349,10 +428,13 @@ class LLMClient:
                 working_messages.append(assistant_msg)
                 yield {
                     "type": "done",
-                    "reply": round_content,
-                    "history_delta": working_messages[base_len:],
-                    "tool_steps": steps,
-                    "tool_trace": tool_trace,
+                    **self._build_done_payload(
+                        round_content,
+                        working_messages,
+                        base_len,
+                        steps,
+                        tool_trace,
+                    ),
                 }
                 return
 
@@ -360,43 +442,18 @@ class LLMClient:
             # 不能依赖 round_content，否则某些“纯工具轮”会完全看不到调用痕迹。
             yield {"type": "reset"}
 
-            assistant_tool_msg: dict[str, Any] = self._attach_reasoning_content(
-                {
-                    "role": "assistant",
-                    "content": round_content,
-                    "tool_calls": [],
-                },
-                round_reasoning,
+            self._append_assistant_tool_message(
+                working_messages=working_messages,
+                content=round_content,
+                reasoning_content=round_reasoning,
+                normalized_tool_calls=ordered_tool_calls,
             )
-            for call in ordered_tool_calls:
-                if not call["id"]:
-                    call["id"] = f"call_{steps}_{len(assistant_tool_msg['tool_calls'])}"
-                assistant_tool_msg["tool_calls"].append(call)
-            working_messages.append(assistant_tool_msg)
-
-            for call in ordered_tool_calls:
-                parsed_args = self._parse_tool_arguments(call["function"].get("arguments", ""))
-                tool_result = tool_registry.run_agent_tool(
-                    call["function"].get("name", ""),
-                    user_perm,
-                    parsed_args,
-                )
-                parsed_result = self._parse_json(tool_result)
-                tool_trace.append(
-                    {
-                        "agent_tool": call["function"].get("name", ""),
-                        "arguments": parsed_args,
-                        "result": parsed_result,
-                        "raw_result": tool_result,
-                    }
-                )
-                working_messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": call["id"],
-                        "content": tool_result,
-                    }
-                )
+            self._run_normalized_tool_calls(
+                normalized_tool_calls=ordered_tool_calls,
+                user_perm=user_perm,
+                working_messages=working_messages,
+                tool_trace=tool_trace,
+            )
 
             steps += 1
             if steps >= max_tool_steps:
@@ -405,9 +462,12 @@ class LLMClient:
                 yield {"type": "delta", "content": fallback_text}
                 yield {
                     "type": "done",
-                    "reply": fallback_text,
-                    "history_delta": working_messages[base_len:],
-                    "tool_steps": steps,
-                    "tool_trace": tool_trace,
+                    **self._build_done_payload(
+                        fallback_text,
+                        working_messages,
+                        base_len,
+                        steps,
+                        tool_trace,
+                    ),
                 }
                 return
