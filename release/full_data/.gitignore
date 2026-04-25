@@ -1,8 +1,0 @@
-.env
-__pycache__/
-*.pyc
-*.egg-info/
-.venv/
-venv/
-.vscode/
-.idea/
