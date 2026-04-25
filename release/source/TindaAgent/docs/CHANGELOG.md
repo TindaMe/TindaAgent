@@ -2,6 +2,12 @@
 
 本文档用于补录 TindaAgent 的版本演进历史，后续按版本持续维护。
 
+## v1.6.4 - 2026-04-26
+
+1. 重构 LLM 层为 Provider Adapter 架构，新增 `ProviderAdapter` 抽象接口。
+2. 新增 `OpenAICompatibleProviderAdapter`，保留当前 DeepSeek 接入方式并降低耦合。
+3. 更新架构文档并完成版本位点同步（README / Web / Agent / pyproject）。
+
 ## v1.6.3 - 2026-04-26
 
 1. 新增后端统一错误日志模块，异常写入 `Data/Log/error.log`（含 traceback）。

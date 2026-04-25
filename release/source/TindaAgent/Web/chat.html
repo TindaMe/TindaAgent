@@ -1189,7 +1189,7 @@
   <div class="brand">
     <div class="brand-logo">🌸</div>
     <span class="brand-name">TindaAgent</span>
-    <button class="version-badge version-btn" onclick="showVersionTip()" title="版本信息">v1.6.3</button>
+    <button class="version-badge version-btn" onclick="showVersionTip()" title="版本信息">v1.6.4</button>
   </div>
   <div class="header-center">
     <span id="statusPill" class="status-pill">
@@ -1418,7 +1418,7 @@
   }
 
   function initTermContent() {
-    addTermLine("out", "Tinda Terminal v1.6.3  ✿", "info", { persist: false });
+    addTermLine("out", "Tinda Terminal v1.6.4  ✿", "info", { persist: false });
     addTermLine("out", "使用 /tool echo <文本> 在此输出内容", "dim", { persist: false });
     addTermSep({ persist: false });
   }
@@ -2353,7 +2353,7 @@
 
   function showVersionTip() {
     clearEmptyState();
-    const badgeText = document.querySelector(".version-badge")?.textContent?.trim() || "v1.6.3";
+    const badgeText = document.querySelector(".version-badge")?.textContent?.trim() || "v1.6.4";
     addSystemNotice(`当前版本${badgeText}，已为最新版本`);
   }
 
