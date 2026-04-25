@@ -2,6 +2,13 @@
 
 本文档用于补录 TindaAgent 的版本演进历史，后续按版本持续维护。
 
+## v1.6.5 - 2026-04-26
+
+1. 修复版本来源不一致问题：统一版本读取优先级为 `pyproject.toml`，避免残留 `egg-info (0.1.0)` 覆盖真实版本。
+2. 新增后端版本接口 `GET /system/version`，前端版本徽章与版本提示改为运行时读取，不再依赖硬编码显示。
+3. 修复日志文件命名落地问题：审计内部错误主写入 `~/.tinda/agent/log/error.log`，同时兼容镜像 `audit_error.log`。
+4. 对齐原项目目录与发布目录的版本位点差异，统一更新到 `1.6.5`（README / Web / Agent / pyproject / CHANGELOG）。
+
 ## v1.6.4 - 2026-04-26
 
 1. 重构 LLM 层为 Provider Adapter 架构，新增 `ProviderAdapter` 抽象接口。

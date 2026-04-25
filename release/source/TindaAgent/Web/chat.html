@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>TindaAgent ✿</title>
+  <title>TindaAgent</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -23,8 +23,8 @@
       --accent-deep: #c2185b;
       --lavender: #b39ddb;
       --lavender-2: #d1c4e9;
-      --gradient: linear-gradient(135deg, #ff6eb4 0%, #ff9fd3 70%, #ffb3c6 100%);
-      --gradient-lavender: linear-gradient(135deg, #a78bfa 0%, #f472b6 100%);
+      --gradient: #ff6eb4;
+      --gradient-lavender: #c084fc;
       --radius: 20px;
     }
 
@@ -61,7 +61,7 @@
       right: -10%;
       width: 520px;
       height: 520px;
-      background: radial-gradient(circle, rgba(255,110,180,0.13) 0%, transparent 65%);
+      background: rgba(255,110,180,0.08);
       pointer-events: none;
       z-index: 0;
     }
@@ -72,7 +72,7 @@
       left: -10%;
       width: 480px;
       height: 480px;
-      background: radial-gradient(circle, rgba(167,139,250,0.11) 0%, transparent 65%);
+      background: rgba(167,139,250,0.06);
       pointer-events: none;
       z-index: 0;
     }
@@ -85,6 +85,16 @@
       user-select: none;
       opacity: 0;
       animation: floatUp linear infinite;
+    }
+    .deco svg {
+      display: block;
+      width: 1em;
+      height: 1em;
+      stroke: currentColor;
+      fill: none;
+      stroke-width: 1.9;
+      stroke-linecap: round;
+      stroke-linejoin: round;
     }
     @keyframes floatUp {
       0%   { transform: translateY(0)    rotate(0deg);  opacity: 0.18; }
@@ -156,10 +166,18 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 18px;
       box-shadow: 0 4px 16px rgba(255,110,180,0.38);
       animation: wiggle 3.5s ease-in-out infinite;
       flex-shrink: 0;
+    }
+    .brand-logo svg {
+      width: 18px;
+      height: 18px;
+      stroke: #fff;
+      fill: none;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
     }
     @keyframes wiggle {
       0%,100% { transform: rotate(-5deg); }
@@ -204,12 +222,71 @@
       gap: 10px;
       justify-self: end;
     }
+    .header-user-switch {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+      flex-shrink: 1;
+    }
+    .header-user-switch select {
+      width: 188px;
+      max-width: 26vw;
+      height: 30px;
+      border-radius: 999px;
+      border: 1.5px solid var(--border);
+      background: #fff;
+      color: var(--text-dim);
+      padding: 0 10px;
+      font-family: inherit;
+      font-size: 12px;
+      line-height: 1;
+      outline: none;
+    }
+    .header-user-switch select:focus {
+      border-color: var(--accent-2);
+      box-shadow: 0 0 0 3px rgba(255,110,180,0.12);
+    }
+    .header-user-switch select:disabled {
+      opacity: 0.6;
+    }
+    .header-user-switch button {
+      height: 30px;
+      border-radius: 999px;
+      border: 1.5px solid var(--border);
+      background: #fff;
+      color: var(--text-dim);
+      padding: 0 10px;
+      font-family: inherit;
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: border-color 0.16s ease, color 0.16s ease, background 0.16s ease;
+      white-space: nowrap;
+    }
+    .header-user-switch button:hover:not(:disabled) {
+      border-color: var(--accent-2);
+      color: var(--accent-deep);
+      background: var(--surface-2);
+    }
+    .header-user-switch button:disabled {
+      opacity: 0.58;
+      cursor: not-allowed;
+    }
 
     .header-decos {
-      font-size: 13px;
-      letter-spacing: 5px;
+      display: flex;
+      align-items: center;
+      gap: 7px;
       opacity: 0.5;
       user-select: none;
+    }
+    .header-decos .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 999px;
+      background: var(--accent-2);
+      box-shadow: 0 0 0 3px rgba(255,110,180,0.12);
     }
 
     .icon-btn {
@@ -229,6 +306,20 @@
       flex-shrink: 0;
       position: relative;
       overflow: visible;
+    }
+    .icon-btn .icon {
+      width: 16px;
+      height: 16px;
+      stroke: currentColor;
+      fill: none;
+      stroke-width: 1.9;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      flex-shrink: 0;
+    }
+    .icon-btn .icon-fill {
+      fill: currentColor;
+      stroke: none;
     }
     .icon-btn:hover {
       background: var(--surface-2);
@@ -280,8 +371,7 @@
 
     /* 流式按钮：仅改颜色状态，形状同 icon-btn */
     .stream-btn {
-      font-size: 16px;
-      font-weight: 700;
+      font-size: 15px;
     }
     .stream-btn.on {
       background: var(--gradient);
@@ -314,7 +404,7 @@
       flex-shrink: 0;
     }
     .model-btn.on {
-      background: linear-gradient(135deg, rgba(255, 110, 180, 0.14) 0%, rgba(167, 139, 250, 0.14) 100%);
+      background: rgba(255, 110, 180, 0.10);
       border-color: var(--accent-2);
       color: var(--accent-deep);
     }
@@ -350,7 +440,7 @@
       color: var(--accent-deep);
     }
     .model-item.active {
-      background: linear-gradient(135deg, rgba(255, 110, 180, 0.12) 0%, rgba(167, 139, 250, 0.12) 100%);
+      background: rgba(255, 110, 180, 0.08);
       color: var(--accent-deep);
       font-weight: 700;
     }
@@ -416,9 +506,18 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 18px;
       transition: transform 0.22s cubic-bezier(0.34,1.56,0.64,1);
       cursor: default;
+      color: #fff;
+    }
+    .avatar svg {
+      width: 16px;
+      height: 16px;
+      stroke: currentColor;
+      fill: none;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
     }
     .avatar:hover { transform: scale(1.18) rotate(-8deg); }
 
@@ -428,9 +527,9 @@
     }
 
     .msg.user .avatar {
-      background: linear-gradient(135deg, #e9e3ff 0%, #ffdaec 100%);
+      background: #f4edf7;
       border: 1.5px solid var(--border);
-      font-size: 16px;
+      color: var(--text-dim);
     }
 
     .msg.same-as-prev .avatar { visibility: hidden; }
@@ -643,9 +742,17 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 44px;
       box-shadow: 0 12px 40px rgba(255,110,180,0.3);
       animation: floatLogo 3.2s ease-in-out infinite;
+    }
+    .empty-state .logo-big svg {
+      width: 44px;
+      height: 44px;
+      stroke: #fff;
+      fill: none;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
     }
     @keyframes floatLogo {
       0%,100% { transform: translateY(0) rotate(-3deg); }
@@ -662,10 +769,21 @@
     }
 
     .sparkle-row {
-      font-size: 18px;
-      letter-spacing: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 9px;
       opacity: 0.55;
       user-select: none;
+    }
+    .sparkle-row svg {
+      width: 13px;
+      height: 13px;
+      stroke: var(--text-dim);
+      fill: none;
+      stroke-width: 1.9;
+      stroke-linecap: round;
+      stroke-linejoin: round;
     }
 
     .empty-state p {
@@ -696,7 +814,7 @@
       transition: all 0.22s cubic-bezier(0.34,1.56,0.64,1);
     }
     .suggest button:hover {
-      background: linear-gradient(135deg,rgba(255,110,180,0.1) 0%,rgba(167,139,250,0.1) 100%);
+      background: rgba(255,110,180,0.08);
       color: var(--accent-deep);
       border-color: var(--accent-2);
       transform: translateY(-4px) scale(1.05);
@@ -709,7 +827,7 @@
       left: 0; right: 0; bottom: 0;
       z-index: 5;
       padding: 14px 20px 22px;
-      background: linear-gradient(to bottom, rgba(255,245,249,0) 0%, rgba(255,245,249,0.9) 28%, var(--bg) 100%);
+      background: rgba(255,245,249,0.95);
       pointer-events: none;
     }
 
@@ -770,8 +888,26 @@
                   opacity 0.2s ease;
       flex-shrink: 0;
       align-self: flex-end;
-      font-size: 18px;
       box-shadow: 0 2px 10px rgba(255,110,180,0.28);
+    }
+    #sendBtn .icon {
+      width: 18px;
+      height: 18px;
+      stroke: currentColor;
+      fill: none;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+    .time-btn .icon {
+      width: 16px;
+      height: 16px;
+      stroke: currentColor;
+      fill: none;
+      stroke-width: 1.9;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      flex-shrink: 0;
     }
     #sendBtn:hover:not(:disabled) {
       transform: scale(1.08);
@@ -811,7 +947,7 @@
       transform: translateY(-1px);
     }
     .time-btn.on {
-      background: linear-gradient(135deg, rgba(255, 110, 180, 0.14) 0%, rgba(167, 139, 250, 0.14) 100%);
+      background: rgba(255, 110, 180, 0.10);
       border-color: var(--accent-2);
       color: var(--accent-deep);
     }
@@ -847,7 +983,7 @@
       color: var(--accent-deep);
     }
     .time-item.active {
-      background: linear-gradient(135deg, rgba(255, 110, 180, 0.12) 0%, rgba(167, 139, 250, 0.12) 100%);
+      background: rgba(255, 110, 180, 0.08);
       color: var(--accent-deep);
       font-weight: 700;
     }
@@ -1092,6 +1228,10 @@
       font-family: inherit;
       cursor: pointer;
     }
+    .records-actions button:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
     .records-actions button:hover {
       border-color: var(--accent-2);
       color: var(--accent-deep);
@@ -1130,6 +1270,11 @@
       display: flex;
       flex-direction: column;
       gap: 6px;
+    }
+    .record-item.active {
+      border-color: var(--accent-2);
+      box-shadow: 0 4px 14px rgba(255, 110, 180, 0.14);
+      background: rgba(255, 110, 180, 0.05);
     }
     .record-item-title {
       font-size: 12px;
@@ -1171,6 +1316,7 @@
       .btn-sep { display: none; }
       header { grid-template-columns: 1fr auto; }
       .header-center { display: none; }
+      .header-user-switch { display: none; }
       .tinda-toast { bottom: 100px; }
     }
   </style>
@@ -1178,18 +1324,18 @@
 <body>
 
 <!-- 浮动装饰 -->
-<span class="deco" style="top:7%;left:4%;font-size:20px;animation-duration:4.4s;">🌸</span>
-<span class="deco" style="top:18%;right:5%;font-size:13px;animation-duration:5.6s;animation-delay:-1.2s;">⭐</span>
-<span class="deco" style="top:52%;left:2.5%;font-size:14px;animation-duration:4.9s;animation-delay:-2.1s;">💕</span>
-<span class="deco" style="top:72%;right:5%;font-size:17px;animation-duration:6.1s;animation-delay:-0.6s;">🌟</span>
-<span class="deco" style="top:38%;right:3%;font-size:11px;animation-duration:5.2s;animation-delay:-1.7s;">✿</span>
-<span class="deco" style="top:85%;left:7%;font-size:12px;animation-duration:5.8s;animation-delay:-3s;">🎀</span>
+<span class="deco" style="top:7%;left:4%;font-size:20px;animation-duration:4.4s;color:#f472b6;" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"></circle><path d="M12 2.8v4.2M12 17v4.2M2.8 12h4.2M17 12h4.2M5.3 5.3l3 3M15.7 15.7l3 3M18.7 5.3l-3 3M8.3 15.7l-3 3"></path></svg></span>
+<span class="deco" style="top:18%;right:5%;font-size:13px;animation-duration:5.6s;animation-delay:-1.2s;color:#fb7185;" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3.5l2.4 4.9 5.4.8-3.9 3.8.9 5.4L12 16l-4.8 2.4.9-5.4-3.9-3.8 5.4-.8z"></path></svg></span>
+<span class="deco" style="top:52%;left:2.5%;font-size:14px;animation-duration:4.9s;animation-delay:-2.1s;color:#ec4899;" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 20c-4.5-3.1-7-5.6-7-8.8a4.2 4.2 0 0 1 7-3.1 4.2 4.2 0 0 1 7 3.1c0 3.2-2.5 5.7-7 8.8z"></path></svg></span>
+<span class="deco" style="top:72%;right:5%;font-size:17px;animation-duration:6.1s;animation-delay:-0.6s;color:#f59e0b;" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 2.8v4M12 17.2v4M2.8 12h4M17.2 12h4M5.2 5.2l2.9 2.9M15.9 15.9l2.9 2.9M18.8 5.2l-2.9 2.9M8.1 15.9l-2.9 2.9"></path><circle cx="12" cy="12" r="3"></circle></svg></span>
+<span class="deco" style="top:38%;right:3%;font-size:11px;animation-duration:5.2s;animation-delay:-1.7s;color:#a78bfa;" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 4v16M4 12h16M6.3 6.3l11.4 11.4M17.7 6.3 6.3 17.7"></path></svg></span>
+<span class="deco" style="top:85%;left:7%;font-size:12px;animation-duration:5.8s;animation-delay:-3s;color:#fb7185;" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 7h14M7 17h10M7 7v10M17 7v10M9 11h6M9 14h6"></path></svg></span>
 
 <header>
   <div class="brand">
-    <div class="brand-logo">🌸</div>
+    <div class="brand-logo" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"></circle><path d="M12 2.8v4.2M12 17v4.2M2.8 12h4.2M17 12h4.2M5.3 5.3l3 3M15.7 15.7l3 3M18.7 5.3l-3 3M8.3 15.7l-3 3"></path></svg></div>
     <span class="brand-name">TindaAgent</span>
-    <button class="version-badge version-btn" onclick="showVersionTip()" title="版本信息">v1.6.4</button>
+    <button id="versionBadgeBtn" class="version-badge version-btn" onclick="showVersionTip()" title="版本信息">v1.6.5</button>
   </div>
   <div class="header-center">
     <span id="statusPill" class="status-pill">
@@ -1198,16 +1344,78 @@
     </span>
   </div>
   <div class="header-right">
+    <div class="header-user-switch">
+      <select id="headerUserSwitchSelect" title="选择账户"></select>
+      <button id="headerUserSwitchBtn" type="button">切换</button>
+    </div>
     <div class="model-wrap">
-      <button id="modelSwitchBtn" class="icon-btn model-btn" type="button" title="切换模型" data-tip="切换模型">🧠</button>
+      <button id="modelSwitchBtn" class="icon-btn model-btn" type="button" title="切换模型" data-tip="切换模型" aria-label="切换模型">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M9 3h6"></path>
+          <path d="M12 3v4"></path>
+          <rect x="5" y="7" width="14" height="14" rx="3"></rect>
+          <path d="M9 12h.01M15 12h.01M9 16h6"></path>
+        </svg>
+      </button>
       <div id="modelPanel" class="model-panel"></div>
     </div>
-    <button id="streamToggleBtn" class="icon-btn stream-btn" onclick="toggleStream()" title="流式输出" data-tip="切换流式输出">💬</button>
+    <button id="streamToggleBtn" class="icon-btn stream-btn" onclick="toggleStream()" title="流式输出" data-tip="切换流式输出" aria-label="流式输出">
+      <svg class="icon stream-icon stream-off" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M4 5h16"></path>
+        <path d="M4 12h12"></path>
+        <path d="M4 19h8"></path>
+      </svg>
+      <svg class="icon stream-icon stream-on" viewBox="0 0 24 24" aria-hidden="true" style="display:none;">
+        <path d="M3 12h4l2 3 3-6 3 6 2-3h4"></path>
+      </svg>
+    </button>
     <div class="btn-sep"></div>
-    <button id="termToggleBtn" class="icon-btn term-toggle" onclick="toggleTerm()" title="打开终端" data-tip="打开终端">💻</button>
-    <button id="recordsToggleBtn" class="icon-btn" onclick="toggleRecordsPanel()" title="聊天记录" data-tip="聊天记录">📚</button>
-    <a class="icon-btn" href="/" title="返回主页" data-tip="返回主页" onclick="event.preventDefault(); smoothNavigate('/');">🏠</a>
-    <button class="icon-btn" onclick="resetChat()" title="清空上下文" data-tip="清空当前会话上下文">🔄</button>
+    <button id="termToggleBtn" class="icon-btn term-toggle" onclick="toggleTerm()" title="打开终端" data-tip="打开终端" aria-label="打开终端">
+      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+        <rect x="3" y="4" width="18" height="14" rx="2"></rect>
+        <path d="M8 20h8"></path>
+      </svg>
+    </button>
+    <button id="recordsToggleBtn" class="icon-btn" onclick="toggleRecordsPanel()" title="会话管理" data-tip="会话管理" aria-label="会话管理">
+      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M4 5h12a2 2 0 0 1 2 2v12H6a2 2 0 0 1-2-2z"></path>
+        <path d="M8 9h6M8 13h6"></path>
+        <path d="M18 7h2v12h-2"></path>
+      </svg>
+    </button>
+    <a id="adminLinkBtn" class="icon-btn" href="/user-admin" title="用户管理" data-tip="用户管理" onclick="event.preventDefault(); smoothNavigate('/user-admin');" aria-label="用户管理" style="display:none;">
+      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 3l7 3v6c0 4.2-2.9 7.8-7 8.8-4.1-1-7-4.6-7-8.8V6z"></path>
+        <path d="M9.5 12.5l1.8 1.8 3.4-3.4"></path>
+      </svg>
+    </a>
+    <a class="icon-btn" href="/" title="返回主页" data-tip="返回主页" onclick="event.preventDefault(); smoothNavigate('/');" aria-label="返回主页">
+      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M3 11.5 12 4l9 7.5"></path>
+        <path d="M6 10.5V20h12v-9.5"></path>
+      </svg>
+    </a>
+    <a class="icon-btn" href="/logs" title="日志查看" data-tip="日志查看" onclick="event.preventDefault(); smoothNavigate('/logs');" aria-label="日志查看">
+      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+        <rect x="4" y="4" width="16" height="16" rx="2"></rect>
+        <path d="M8 9h8M8 13h8M8 17h6"></path>
+      </svg>
+    </a>
+    <button id="compressCtxBtn" class="icon-btn" onclick="compressCurrentContext()" title="压缩上下文" data-tip="压缩上下文" aria-label="压缩上下文">
+      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M4 6h16"></path>
+        <path d="M4 12h10"></path>
+        <path d="M4 18h7"></path>
+        <path d="M18 10v8"></path>
+        <path d="M14 14h8"></path>
+      </svg>
+    </button>
+    <button class="icon-btn" onclick="resetChat()" title="清空上下文" data-tip="清空当前会话上下文" aria-label="清空上下文">
+      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M20 12a8 8 0 1 1-2.3-5.7"></path>
+        <path d="M20 4v5h-5"></path>
+      </svg>
+    </button>
   </div>
 </header>
 
@@ -1218,9 +1426,21 @@
     </div>
     <div class="input-dock">
       <div class="input-box">
-        <textarea id="input" rows="1" placeholder="跟 Tinda 说说话吧 ✿ ..."></textarea>
+        <textarea id="input" rows="1" placeholder="跟 Tinda 说说话吧 ..."></textarea>
         <div class="time-wrap">
-          <button id="timeModeBtn" class="time-btn on" type="button" title="时间注入模式">🕒</button>
+          <button id="timeModeBtn" class="time-btn on" type="button" title="时间注入模式" aria-label="时间注入模式">
+            <svg class="icon icon-clock" viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="12" cy="12" r="8"></circle>
+              <path d="M12 8v5l3 2"></path>
+            </svg>
+            <svg class="icon icon-calendar" viewBox="0 0 24 24" aria-hidden="true" style="display:none;">
+              <rect x="4" y="5" width="16" height="15" rx="2"></rect>
+              <path d="M8 3v4M16 3v4M4 10h16"></path>
+            </svg>
+            <svg class="icon icon-stop" viewBox="0 0 24 24" aria-hidden="true" style="display:none;">
+              <rect x="7" y="7" width="10" height="10" rx="1.5"></rect>
+            </svg>
+          </button>
           <div id="timeModePanel" class="time-panel">
             <button type="button" class="time-item active" data-mode="now">发送当前时间</button>
             <button type="button" class="time-item" data-mode="none">不发送时间</button>
@@ -1231,9 +1451,13 @@
             </div>
           </div>
         </div>
-        <button id="sendBtn" onclick="sendMessage()" title="发送">🌸</button>
+        <button id="sendBtn" onclick="sendMessage()" title="发送" aria-label="发送">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M3 12 20 4l-5 16-3-6-9-2z"></path>
+          </svg>
+        </button>
       </div>
-      <div class="hint"><span class="hint-inner"><kbd>Enter</kbd> 发送 · <kbd>Shift</kbd>+<kbd>Enter</kbd> 换行 · 输入 <kbd>/help</kbd> 查看指令 ✿</span></div>
+      <div class="hint"><span class="hint-inner"><kbd>Enter</kbd> 发送 · <kbd>Shift</kbd>+<kbd>Enter</kbd> 换行 · 输入 <kbd>/help</kbd> 查看指令</span></div>
     </div>
   </div>
 
@@ -1251,7 +1475,7 @@
         <span class="term-dot"></span>
         <span class="term-dot"></span>
       </div>
-      <span class="term-title">💻 Tinda Terminal</span>
+      <span class="term-title">Tinda Terminal</span>
       <button class="term-clear-btn" onclick="clearTerm()">清空</button>
     </div>
     <div class="term-body" id="termBody"></div>
@@ -1261,14 +1485,16 @@
 <div id="recordsMask" class="records-mask" onclick="closeRecordsPanel()"></div>
 <aside id="recordsPanel" class="records-panel" aria-hidden="true">
   <div class="records-head">
-    <h3>聊天记录</h3>
+    <h3>会话管理</h3>
     <div class="records-actions">
+      <button type="button" onclick="createSessionFromPanel()">新建</button>
+      <button type="button" onclick="deleteCurrentSessionFromPanel()">删除当前</button>
       <button type="button" onclick="refreshRecords()">刷新</button>
       <button type="button" onclick="closeRecordsPanel()">关闭</button>
     </div>
   </div>
   <div class="records-search">
-    <input id="recordsSearchInput" placeholder="按 session_id 或 record_id 搜索..." />
+    <input id="recordsSearchInput" placeholder="按会话ID或标题搜索..." />
   </div>
   <div id="recordsList" class="records-list"></div>
 </aside>
@@ -1283,6 +1509,9 @@
   const resizerEl   = document.getElementById("resizer");
   const modelSwitchBtnEl = document.getElementById("modelSwitchBtn");
   const modelPanelEl = document.getElementById("modelPanel");
+  const adminLinkBtnEl = document.getElementById("adminLinkBtn");
+  const userSwitchSelectEl = document.getElementById("headerUserSwitchSelect");
+  const userSwitchBtnEl = document.getElementById("headerUserSwitchBtn");
   const streamToggleBtnEl = document.getElementById("streamToggleBtn");
   const termToggleBtnEl = document.getElementById("termToggleBtn");
   const recordsToggleBtnEl = document.getElementById("recordsToggleBtn");
@@ -1296,12 +1525,12 @@
   const timeCustomBoxEl = document.getElementById("timeCustomBox");
   const timeCustomInputEl = document.getElementById("timeCustomInput");
   const timeCustomApplyBtnEl = document.getElementById("timeCustomApplyBtn");
-  const SESSION_KEY = "tinda_session_id";
+  const SESSION_KEY = "tinda_active_session_id";
   const TERM_WIDTH_KEY = "tinda_term_width";
   const STREAM_ENABLED_KEY = "tinda_stream_enabled";
   const TIME_MODE_KEY = "tinda_time_mode";
   const TIME_CUSTOM_KEY = "tinda_time_custom";
-  const RECORDS_PAGE_LIMIT = 100;
+  const RECORDS_PAGE_LIMIT = 200;
   const MODEL_CHOICES_FALLBACK = [
     { id: "deepseek-chat", label: "deepseek-chat" },
     { id: "deepseek-v4-pro", label: "deepseek-pro" },
@@ -1320,6 +1549,35 @@
     "v4-flash": "deepseek-v4-flash",
     "flash": "deepseek-v4-flash",
   };
+  const SYSTEM_WRITE_BIT = 1 << 7;
+  const AUTH_TOKEN_KEY = "ta_auth_token";
+  const VERSION_FALLBACK = "v1.6.5";
+
+  function getAuthToken() {
+    return String(localStorage.getItem(AUTH_TOKEN_KEY) || "").trim();
+  }
+
+  function setAuthToken(token) {
+    const t = String(token || "").trim();
+    if (!t) {
+      localStorage.removeItem(AUTH_TOKEN_KEY);
+      return;
+    }
+    localStorage.setItem(AUTH_TOKEN_KEY, t);
+  }
+
+  function authHeaders(extra) {
+    const headers = Object.assign({}, extra || {});
+    const token = getAuthToken();
+    if (token) headers["X-User-Token"] = token;
+    return headers;
+  }
+
+  async function apiFetch(url, options = {}) {
+    const opts = Object.assign({}, options);
+    opts.headers = authHeaders(opts.headers || {});
+    return fetch(url, opts);
+  }
 
   let termInitialized = false;
   let termOpen = false;
@@ -1329,6 +1587,11 @@
   let resetStageActive = false;
   let spacerRecalcRaf = 0;
   let recordsPanelOpen = false;
+  let sessionsCache = [];
+  let activeSessionTitle = "新对话";
+  let toolPollTimer = 0;
+  let toolLastSeq = 0;
+  const processedTerminalSeq = new Set();
   let userMeta = {
     name: "N/A",
     uid: "N/A",
@@ -1337,8 +1600,10 @@
   let timeMode = "now";
   let customTimeValue = "";
   let modelChoices = MODEL_CHOICES_FALLBACK.slice();
-  let currentModel = "deepseek-v4-pro";
+  let currentModel = "deepseek-v4-flash";
   let sessionPersistQueue = Promise.resolve();
+  let creatingSessionFromPanel = false;
+  let appVersionDisplay = VERSION_FALLBACK;
 
   // --- Toast ---
   let toastTimer = 0;
@@ -1363,6 +1628,21 @@
     const prefix = source ? `[error/${source}]` : "[error]";
     showTerm();
     addTermLine("out", `${prefix} ${text}`, "err", { sessionId, persist });
+  }
+
+  function getVersionBadgeText() {
+    return String(appVersionDisplay || VERSION_FALLBACK).trim() || VERSION_FALLBACK;
+  }
+
+  async function syncAppVersion() {
+    try {
+      const res = await fetch("/system/version", { method: "GET" });
+      const data = res.ok ? await res.json() : {};
+      const display = String(data?.display || "").trim();
+      if (display) appVersionDisplay = display;
+    } catch {}
+    const badgeEl = document.getElementById("versionBadgeBtn");
+    if (badgeEl) badgeEl.textContent = getVersionBadgeText();
   }
 
   // --- Terminal ---
@@ -1418,7 +1698,7 @@
   }
 
   function initTermContent() {
-    addTermLine("out", "Tinda Terminal v1.6.4  ✿", "info", { persist: false });
+    addTermLine("out", `Tinda Terminal ${getVersionBadgeText()}`, "info", { persist: false });
     addTermLine("out", "使用 /tool echo <文本> 在此输出内容", "dim", { persist: false });
     addTermSep({ persist: false });
   }
@@ -1507,37 +1787,41 @@
     try { return JSON.stringify(v, null, 2); } catch { return String(v); }
   }
 
-  function renderToolTraceToTerminal(trace, { sessionId = getSessionId() } = {}) {
+  function renderToolTraceToTerminal(trace, { sessionId = getSessionId(), persist = false } = {}) {
     if (!Array.isArray(trace) || trace.length === 0) return false;
     showTerm();
     trace.forEach((step) => {
       const name = step?.agent_tool || "unknown_tool";
       const args = step?.arguments || {};
-      addTermLine("cmd", `[tool] ${name} ${stringifyValue(args)}`, "", { sessionId });
+      addTermLine("cmd", `[tool] ${name} ${stringifyValue(args)}`, "", { sessionId, persist });
 
       const result = step?.result;
       if (result && typeof result === "object") {
         if (result.ok === false) {
-          addTermLine("out", `[error] ${result.error || "工具执行失败"}`, "err", { sessionId });
+          if (result.error_code === "permission_denied" && result.expose_to_user === false) {
+            addTermLine("out", `[error] ${result.user_message || "该工具当前不可用，请尝试其它方式。"}`, "err", { sessionId, persist });
+          } else {
+            addTermLine("out", `[error] ${result.error || "工具执行失败"}`, "err", { sessionId, persist });
+          }
         } else {
-          if (result.tool_name) addTermLine("out", `tool: ${result.tool_name}`, "info", { sessionId });
+          if (result.tool_name) addTermLine("out", `tool: ${result.tool_name}`, "info", { sessionId, persist });
           if (result.stdout) {
-            String(result.stdout).split("\n").forEach((line) => addTermLine("out", line, "", { sessionId }));
+            String(result.stdout).split("\n").forEach((line) => addTermLine("out", line, "", { sessionId, persist }));
           }
           if (result.result !== undefined) {
             const rendered = stringifyValue(result.result);
-            if (rendered) rendered.split("\n").forEach((line) => addTermLine("out", line, "", { sessionId }));
+            if (rendered) rendered.split("\n").forEach((line) => addTermLine("out", line, "", { sessionId, persist }));
           }
           if (result.tools && typeof result.tools === "object") {
-            addTermLine("out", "可用工具列表：", "info", { sessionId });
-            Object.entries(result.tools).forEach(([k, v]) => addTermLine("out", `- ${k}: ${v}`, "", { sessionId }));
+            addTermLine("out", "可用工具列表：", "info", { sessionId, persist });
+            Object.entries(result.tools).forEach(([k, v]) => addTermLine("out", `- ${k}: ${v}`, "", { sessionId, persist }));
           }
         }
       } else {
         const raw = stringifyValue(step?.raw_result);
-        if (raw) raw.split("\n").forEach((line) => addTermLine("out", line, "", { sessionId }));
+        if (raw) raw.split("\n").forEach((line) => addTermLine("out", line, "", { sessionId, persist }));
       }
-      addTermSep({ sessionId });
+      addTermSep({ sessionId, persist });
     });
     showToast("已同步工具调用到终端");
     return true;
@@ -1591,6 +1875,52 @@
     return sid;
   }
 
+  async function ensureActiveSession() {
+    let sid = String(localStorage.getItem(SESSION_KEY) || "").trim();
+    if (!sid) {
+      try {
+        const res = await apiFetch("/sessions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title: "新对话" }),
+        });
+        const data = await res.json();
+        sid = String(data?.session?.id || "").trim();
+      } catch {
+        sid = "";
+      }
+      if (!sid) sid = genSessionId();
+      localStorage.setItem(SESSION_KEY, sid);
+    }
+    return sid;
+  }
+
+  function setActiveSession(sessionId, { title = "新对话", silent = false } = {}) {
+    const sid = String(sessionId || "").trim();
+    if (!sid) return;
+    localStorage.setItem(SESSION_KEY, sid);
+    activeSessionTitle = String(title || "新对话");
+    const statusText = document.querySelector(".status-text");
+    if (statusText) statusText.textContent = `会话：${activeSessionTitle}`;
+    if (!silent) showToast(`已切换会话：${activeSessionTitle}`);
+    toolLastSeq = 0;
+    processedTerminalSeq.clear();
+  }
+
+  async function createSessionAndSwitch(title = "新对话", { silent = false } = {}) {
+    const res = await apiFetch("/sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data?.session?.id) {
+      throw new Error(String(data?.error || `http ${res.status}`));
+    }
+    setActiveSession(data.session.id, { title: data.session.title || title, silent });
+    return data.session;
+  }
+
   function normalizeEntryForPersist(raw) {
     if (!raw || typeof raw !== "object") return null;
     const role = String(raw.role || "").trim();
@@ -1628,7 +1958,7 @@
     sessionPersistQueue = sessionPersistQueue
       .then(async () => {
         try {
-          await fetch("/session/events", {
+          await apiFetch("/session/events", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -1705,7 +2035,7 @@
 
   async function loadModelInfo() {
     try {
-      const res = await fetch("/model");
+      const res = await apiFetch("/model");
       if (!res.ok) throw new Error(`http ${res.status}`);
       const data = await res.json();
       currentModel = normalizeModelChoice(data?.current_model) || currentModel;
@@ -1720,7 +2050,7 @@
     } catch (e) {
       reportErrorToTerminal(`读取模型信息失败：${String(e?.message || e)}`, { source: "model_info" });
     }
-    if (!currentModel) currentModel = "deepseek-v4-pro";
+    if (!currentModel) currentModel = "deepseek-v4-flash";
     if (!Array.isArray(modelChoices) || modelChoices.length === 0) {
       modelChoices = MODEL_CHOICES_FALLBACK.slice();
     }
@@ -1736,7 +2066,7 @@
       return;
     }
     try {
-      const res = await fetch("/model", {
+      const res = await apiFetch("/model", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ model: target }),
@@ -1780,26 +2110,109 @@
     }
     recordsListEl.innerHTML = "";
     rows.forEach((item) => {
-      const recordId = String(item?.record_id || "");
+      const recordId = String(item?.id || item?.session_id || "");
       const messageCount = Number(item?.message_count || 0);
       const node = document.createElement("div");
       node.className = "record-item";
+      if (recordId === getSessionId()) node.classList.add("active");
       node.innerHTML = `
-        <div class="record-item-title">${escapeHtml(recordId || "unknown_record")}</div>
+        <div class="record-item-title">${escapeHtml(String(item?.title || "新对话"))}</div>
         <div class="record-item-meta">
-          session: ${escapeHtml(String(item?.session_id || "N/A"))}<br/>
+          session: ${escapeHtml(String(item?.id || item?.session_id || "N/A"))}<br/>
           updated: ${escapeHtml(formatRecordTime(item?.updated_at))}<br/>
-          messages: ${messageCount} · files: ${item?.has_md ? "md" : ""}${item?.has_md && item?.has_txt ? "+" : ""}${item?.has_txt ? "txt" : ""}
+          messages: ${messageCount}
         </div>
       `;
       const btn = document.createElement("button");
       btn.className = "record-item-btn";
       btn.type = "button";
-      btn.textContent = "导入替换";
-      btn.addEventListener("click", () => importRecord(recordId));
+      btn.textContent = "切换";
+      btn.addEventListener("click", async () => {
+        setActiveSession(recordId, { title: String(item?.title || "新对话") });
+        await loadCurrentSessionRecord();
+        closeRecordsPanel();
+      });
       node.appendChild(btn);
       recordsListEl.appendChild(node);
     });
+  }
+
+  async function createSessionFromPanel() {
+    if (creatingSessionFromPanel) return;
+    creatingSessionFromPanel = true;
+    const createBtn = recordsPanelEl?.querySelector(".records-actions button");
+    if (createBtn) createBtn.disabled = true;
+    try {
+      const currentId = String(getSessionId() || "").trim();
+      const res = await apiFetch("/sessions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: "新对话",
+          current_session_id: currentId,
+          reuse_if_current_empty: true,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data?.session?.id) {
+        throw new Error(String(data?.error || `http ${res.status}`));
+      }
+      const row = data.session;
+      if (data?.reused) {
+        addSystemNotice("当前已是空会话", { pinTop: true, sessionId: currentId || row.id, persist: false });
+        await refreshRecords();
+        return;
+      }
+      setActiveSession(row.id, { title: row.title || "新对话", silent: true });
+      showEmptyState();
+      clearTerm();
+      await refreshRecords();
+      addSystemNotice("已新建会话", { pinTop: true, sessionId: row.id, persist: false });
+      startToolPolling(row.id);
+    } catch (e) {
+      reportErrorToTerminal(`创建会话失败：${String(e?.message || e)}`, { source: "session_create" });
+      addSystemNotice(`创建会话失败：${String(e?.message || e)}`);
+    } finally {
+      creatingSessionFromPanel = false;
+      if (createBtn) createBtn.disabled = false;
+    }
+  }
+
+  async function deleteCurrentSessionFromPanel() {
+    const sid = String(getSessionId() || "").trim();
+    if (!sid) return;
+    try {
+      const res = await apiFetch(`/sessions/${encodeURIComponent(sid)}`, { method: "DELETE" });
+      const data = await res.json();
+      if (!res.ok || data?.ok === false) {
+        throw new Error(String(data?.error || `http ${res.status}`));
+      }
+      await refreshRecords();
+      const next = Array.isArray(sessionsCache) && sessionsCache.length > 0 ? sessionsCache[0] : null;
+      if (next && String(next?.id || "").trim()) {
+        const nextId = String(next.id || "").trim();
+        setActiveSession(nextId, { title: String(next?.title || "新对话"), silent: true });
+        showEmptyState();
+        clearTerm();
+        await loadCurrentSessionRecord();
+        startToolPolling(nextId);
+        addSystemNotice("当前会话已删除，已切换到其他会话", { pinTop: true, sessionId: nextId, persist: false });
+      } else {
+        localStorage.removeItem(SESSION_KEY);
+        activeSessionTitle = "无会话";
+        const statusText = document.querySelector(".status-text");
+        if (statusText) statusText.textContent = "会话：无会话";
+        toolLastSeq = 0;
+        processedTerminalSeq.clear();
+        stopToolPolling();
+        showEmptyState();
+        clearTerm();
+        addSystemNotice("当前会话已删除", { pinTop: true, sessionId: sid, persist: false });
+      }
+    } catch (e) {
+      reportErrorToTerminal(`删除会话失败：${String(e?.message || e)}`, { source: "session_delete" });
+      addSystemNotice(`删除会话失败：${String(e?.message || e)}`);
+    }
   }
 
   async function refreshRecords() {
@@ -1811,11 +2224,16 @@
         limit: String(RECORDS_PAGE_LIMIT),
         offset: "0",
       });
-      if (keyword) params.set("q", keyword);
-      const res = await fetch(`/records?${params.toString()}`);
+      const res = await apiFetch(`/sessions?${params.toString()}`);
       if (!res.ok) throw new Error(`http ${res.status}`);
       const data = await res.json();
-      renderRecordsList(Array.isArray(data.records) ? data.records : []);
+      let rows = Array.isArray(data.sessions) ? data.sessions : [];
+      if (keyword) {
+        const kw = keyword.toLowerCase();
+        rows = rows.filter((x) => String(x?.id || "").toLowerCase().includes(kw) || String(x?.title || "").toLowerCase().includes(kw));
+      }
+      sessionsCache = rows;
+      renderRecordsList(rows);
     } catch (e) {
       reportErrorToTerminal(`读取记录失败：${String(e?.message || e)}`, { source: "records" });
       recordsListEl.innerHTML = `<div class="records-empty">读取记录失败</div>`;
@@ -1867,6 +2285,22 @@
     return true;
   }
 
+  function renderImportedNotice(content) {
+    const text = String(content || "").trim();
+    if (!text) return false;
+    clearEmptyState();
+    const pill = document.createElement("div");
+    pill.className = "sys-notice";
+    pill.textContent = text;
+    const spacer = messagesEl.querySelector(".sys-pin-spacer");
+    if (spacer) {
+      messagesEl.insertBefore(pill, spacer);
+    } else {
+      messagesEl.appendChild(pill);
+    }
+    return true;
+  }
+
   function renderImportedEntries(entries) {
     resetStageActive = false;
     clearPinnedSpacer();
@@ -1878,8 +2312,37 @@
     }
     let hasChatBubble = false;
     let hasTerminal = false;
-    let lastBotBubble = null;
-    let mergeNextAssistantIntoLastBot = false;
+
+    const parseLegacyContextEntry = (text) => {
+      const raw = String(text || "").trim();
+      if (!raw) return null;
+
+      const termMatch = /^\[终端\/(cmd|out|sep)\]\s*([\s\S]*)$/u.exec(raw);
+      if (termMatch) {
+        const kind = termMatch[1];
+        const payload = String(termMatch[2] || "");
+        if (kind === "cmd") {
+          return { kind: "terminal", terminal_kind: "cmd", content: payload };
+        }
+        if (kind === "sep") {
+          return { kind: "terminal", terminal_kind: "sep", content: payload || "─".repeat(36) };
+        }
+        return { kind: "terminal", terminal_kind: "out", content: payload };
+      }
+
+      const noticeMatch = /^\[系统提示\]\s*([\s\S]*)$/u.exec(raw);
+      if (noticeMatch) {
+        return { kind: "notice", content: String(noticeMatch[1] || "").trim() };
+      }
+
+      const toolMatch = /^\[工具调用\]\s*([\s\S]*)$/u.exec(raw);
+      if (toolMatch) {
+        return { kind: "tool_marker", content: String(toolMatch[1] || "").trim() || "> --调用工具中--" };
+      }
+
+      return null;
+    };
+
     entries.forEach((entry) => {
       const role = String(entry?.role || "").trim();
       const entryType = String(entry?.entry_type || "chat").trim() || "chat";
@@ -1891,20 +2354,14 @@
         return;
       }
 
-      if (entryType === "notice" || entryType === "tool_marker") {
-        if (entryType === "tool_marker") {
-          clearEmptyState();
-          if (!lastBotBubble) {
-            const bot = addBubble("", "bot");
-            lastBotBubble = bot.bubble;
-          }
-          appendMarkdownToBotBubble(lastBotBubble, `\n\n${content}\n`);
-          mergeNextAssistantIntoLastBot = true;
-          hasChatBubble = true;
-          return;
-        }
+      if (entryType === "notice") {
+        hasChatBubble = renderImportedNotice(content) || hasChatBubble;
+        return;
+      }
+
+      if (entryType === "tool_marker") {
         clearEmptyState();
-        addSystemNotice(content, { persist: false });
+        addBubble(content, "bot");
         hasChatBubble = true;
         return;
       }
@@ -1912,20 +2369,31 @@
       if (role === "user") {
         clearEmptyState();
         addBubble(content, "user");
-        lastBotBubble = null;
-        mergeNextAssistantIntoLastBot = false;
         hasChatBubble = true;
         return;
       }
       if (role === "assistant") {
-        clearEmptyState();
-        if (mergeNextAssistantIntoLastBot && lastBotBubble) {
-          appendMarkdownToBotBubble(lastBotBubble, `\n\n${content}`);
-          mergeNextAssistantIntoLastBot = false;
-        } else {
-          const bot = addBubble(content, "bot");
-          lastBotBubble = bot.bubble;
+        if (entryType === "chat") {
+          const legacy = parseLegacyContextEntry(content);
+          if (legacy) {
+            if (legacy.kind === "terminal") {
+              hasTerminal = renderImportedTerminalEntry(legacy) || hasTerminal;
+              return;
+            }
+            if (legacy.kind === "notice") {
+              hasChatBubble = renderImportedNotice(legacy.content) || hasChatBubble;
+              return;
+            }
+            if (legacy.kind === "tool_marker") {
+              clearEmptyState();
+              addBubble(legacy.content, "bot");
+              hasChatBubble = true;
+              return;
+            }
+          }
         }
+        clearEmptyState();
+        addBubble(content, "bot");
         hasChatBubble = true;
       }
     });
@@ -1937,7 +2405,7 @@
   async function importRecord(recordId) {
     if (!recordId) return;
     try {
-      const res = await fetch("/records/import", {
+      const res = await apiFetch("/records/import", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1950,7 +2418,7 @@
         throw new Error(data?.error || `http ${res.status}`);
       }
       renderImportedEntries(Array.isArray(data.entries) ? data.entries : []);
-      addSystemNotice(`已导入记录：${recordId}`);
+      addSystemNotice(`已切换记录：${recordId}`);
       closeRecordsPanel();
     } catch (e) {
       reportErrorToTerminal(`导入记录失败：${String(e?.message || e)}`, { source: "record_import" });
@@ -1960,13 +2428,11 @@
 
   async function loadCurrentSessionRecord() {
     try {
-      const params = new URLSearchParams({ session_id: getSessionId() });
-      const res = await fetch(`/records/session?${params.toString()}`);
+      const sid = await ensureActiveSession();
+      const res = await apiFetch(`/sessions/${encodeURIComponent(sid)}/messages`);
       if (!res.ok) return;
       const data = await res.json();
-      if (!data?.found) return;
       const entries = Array.isArray(data.entries) ? data.entries : [];
-      if (entries.length === 0) return;
       renderImportedEntries(entries);
     } catch (e) {
       reportErrorToTerminal(`读取当前会话记录失败：${String(e?.message || e)}`, { source: "session_record" });
@@ -2042,11 +2508,13 @@
 
     const avatar = document.createElement("div");
     avatar.className = "avatar";
-    avatar.textContent = role === "bot" ? "🌸" : "🐱";
+    avatar.innerHTML = role === "bot"
+      ? `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2"></circle><path d="M12 2.8v4.2M12 17v4.2M2.8 12h4.2M17 12h4.2M5.3 5.3l3 3M15.7 15.7l3 3M18.7 5.3l-3 3M8.3 15.7l-3 3"></path></svg>`
+      : `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 21a8 8 0 0 0-16 0"></path><circle cx="12" cy="8" r="3.2"></circle></svg>`;
 
     const bubble = document.createElement("div");
     bubble.className = "bubble" + (isCommand ? " cmd" : "");
-    if (role === "bot" && !isCommand) {
+    if (role === "bot") {
       bubble.classList.add("md");
       bubble.dataset.rawMd = String(text ?? "");
       bubble.innerHTML = renderMarkdown(text);
@@ -2126,7 +2594,9 @@
     if (!s || !s.includes("|")) return false;
     const cells = parseTableCells(s);
     if (!cells.length) return false;
-    return cells.every((cell) => /^:?-{3,}:?$/.test(cell));
+    // 兼容常见 markdown 变体：允许 :--: / --: / :--
+    // （标准多为 3 个以上横杠，但不少模型会产出 2 个横杠）
+    return cells.every((cell) => /^:?-{2,}:?$/.test(cell));
   }
 
   function parseTableAlign(cell) {
@@ -2254,7 +2724,7 @@
     const row = document.createElement("div");
     row.className = "msg bot";
     row.innerHTML = `
-      <div class="avatar">🌸</div>
+      <div class="avatar"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2"></circle><path d="M12 2.8v4.2M12 17v4.2M2.8 12h4.2M17 12h4.2M5.3 5.3l3 3M15.7 15.7l3 3M18.7 5.3l-3 3M8.3 15.7l-3 3"></path></svg></div>
       <div class="bubble"><div class="typing"><span></span><span></span><span></span></div></div>
     `;
     const spacer = messagesEl.querySelector(".sys-pin-spacer");
@@ -2269,7 +2739,12 @@
 
   function setStreamToggleUI() {
     if (!streamToggleBtnEl) return;
-    streamToggleBtnEl.textContent = streamEnabled ? "🌊" : "💬";
+    const iconOn = streamToggleBtnEl.querySelector(".stream-on");
+    const iconOff = streamToggleBtnEl.querySelector(".stream-off");
+    if (iconOn && iconOff) {
+      iconOn.style.display = streamEnabled ? "" : "none";
+      iconOff.style.display = streamEnabled ? "none" : "";
+    }
     streamToggleBtnEl.classList.toggle("on", streamEnabled);
     const tip = "切换流式输出";
     streamToggleBtnEl.title = tip;
@@ -2353,7 +2828,7 @@
 
   function showVersionTip() {
     clearEmptyState();
-    const badgeText = document.querySelector(".version-badge")?.textContent?.trim() || "v1.6.4";
+    const badgeText = getVersionBadgeText();
     addSystemNotice(`当前版本${badgeText}，已为最新版本`);
   }
 
@@ -2362,14 +2837,14 @@
     clearPinnedSpacer();
     messagesEl.innerHTML = `
       <div class="empty-state">
-        <div class="logo-big">🌸</div>
+        <div class="logo-big"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6"></path><path d="M12 3v4"></path><rect x="5" y="7" width="14" height="14" rx="3"></rect><path d="M9 12h.01M15 12h.01M9 16h6"></path></svg></div>
         <h2>TindaAgent</h2>
-        <div class="sparkle-row">✿ ♡ ⭐ ♡ ✿</div>
+        <div class="sparkle-row" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"></path></svg><svg viewBox="0 0 24 24"><path d="M12 4l2.2 4.9L19 10l-4.8 2.1L12 17l-2.2-4.9L5 10l4.8-2.1z"></path></svg><svg viewBox="0 0 24 24"><path d="M12 2.8v4M12 17.2v4M2.8 12h4M17.2 12h4"></path><circle cx="12" cy="12" r="3"></circle></svg><svg viewBox="0 0 24 24"><path d="M12 4l2.2 4.9L19 10l-4.8 2.1L12 17l-2.2-4.9L5 10l4.8-2.1z"></path></svg><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"></path></svg></div>
         <p>由 Tinda 开发的可爱 AI Agent 助手，可对话、可调用工具～</p>
         <div class="suggest">
-          <button onclick="insertPrompt('/help')">✦ /help</button>
-          <button onclick="insertPrompt('/tools')">🔧 /tools</button>
-          <button onclick="insertPrompt('你好')">👋 你好</button>
+          <button onclick="insertPrompt('/help')">/help</button>
+          <button onclick="insertPrompt('/tools')">/tools</button>
+          <button onclick="insertPrompt('你好')">你好</button>
         </div>
       </div>
     `;
@@ -2480,8 +2955,14 @@
     }
 
     if (timeModeBtnEl) {
-      const icon = mode === "none" ? "⏹" : mode === "custom" ? "🗓" : "🕒";
-      timeModeBtnEl.textContent = icon;
+      const iconClock = timeModeBtnEl.querySelector(".icon-clock");
+      const iconCalendar = timeModeBtnEl.querySelector(".icon-calendar");
+      const iconStop = timeModeBtnEl.querySelector(".icon-stop");
+      if (iconClock && iconCalendar && iconStop) {
+        iconClock.style.display = mode === "now" ? "" : "none";
+        iconCalendar.style.display = mode === "custom" ? "" : "none";
+        iconStop.style.display = mode === "none" ? "" : "none";
+      }
       timeModeBtnEl.classList.toggle("on", mode !== "none");
       const tip =
         mode === "none"
@@ -2510,16 +2991,176 @@
   async function ensureUserMetaLoaded() {
     if (userMeta.name !== "N/A" && userMeta.uid !== "N/A") return;
     try {
-      const res = await fetch("/user/profile");
+      const res = await apiFetch("/user/profile");
       if (!res.ok) return;
       const data = await res.json();
-      userMeta = {
-        name: sanitizeMetaText(data.name),
-        uid: sanitizeMetaText(data.uid),
-        perm: sanitizeMetaText(data.perm_label ?? data.perm),
-      };
+      applyUserMeta(data);
     } catch (e) {
       reportErrorToTerminal(`读取用户信息失败：${String(e?.message || e)}`, { source: "user_profile" });
+    }
+  }
+
+  function applyUserMeta(data) {
+    userMeta = {
+      name: sanitizeMetaText(data?.name),
+      uid: sanitizeMetaText(data?.uid),
+      perm: sanitizeMetaText(data?.perm_label ?? data?.perm),
+    };
+    if (adminLinkBtnEl) {
+      const p = Number(data?.perm ?? 0);
+      const visible = Number.isFinite(p) && ((p & SYSTEM_WRITE_BIT) === SYSTEM_WRITE_BIT);
+      adminLinkBtnEl.style.display = visible ? "" : "none";
+    }
+    if (userSwitchSelectEl && userMeta.uid !== "N/A") {
+      const hasOption = Array.from(userSwitchSelectEl.options).some((opt) => opt.value === userMeta.uid);
+      if (hasOption) userSwitchSelectEl.value = userMeta.uid;
+    }
+  }
+
+  function renderHeaderUserOptions(users, currentUid) {
+    if (!userSwitchSelectEl) return;
+    userSwitchSelectEl.innerHTML = "";
+    if (!Array.isArray(users) || users.length === 0) {
+      const opt = document.createElement("option");
+      opt.value = "";
+      opt.textContent = "无可用账户";
+      userSwitchSelectEl.appendChild(opt);
+      userSwitchSelectEl.disabled = true;
+      if (userSwitchBtnEl) userSwitchBtnEl.disabled = true;
+      return;
+    }
+    users.forEach((u) => {
+      const opt = document.createElement("option");
+      opt.value = String(u?.uid || "");
+      const uname = String(u?.name || "-");
+      const uuid = String(u?.uid || "-");
+      opt.textContent = `${uname} (${uuid})`;
+      if (String(u?.uid || "") === String(currentUid || "")) opt.selected = true;
+      userSwitchSelectEl.appendChild(opt);
+    });
+    userSwitchSelectEl.disabled = false;
+    if (userSwitchBtnEl) userSwitchBtnEl.disabled = false;
+  }
+
+  async function loadHeaderUsersAndSelection() {
+    if (!userSwitchSelectEl) return;
+    try {
+      const res = await apiFetch("/users");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      window.__headerUsersCache = Array.isArray(data?.users) ? data.users : [];
+      renderHeaderUserOptions(data?.users || [], data?.current_uid || userMeta.uid);
+    } catch (e) {
+      window.__headerUsersCache = [];
+      renderHeaderUserOptions([], "");
+      reportErrorToTerminal(`读取账户列表失败：${String(e?.message || e)}`, { source: "users", persist: false });
+    }
+  }
+
+  async function switchHeaderSelectedUser() {
+    if (!userSwitchSelectEl || !userSwitchBtnEl) return;
+    const uid = String(userSwitchSelectEl.value || "").trim();
+    if (!uid) return;
+    if (uid === String(userMeta.uid || "").trim()) return;
+
+    const oldText = userSwitchBtnEl.textContent;
+    userSwitchBtnEl.disabled = true;
+    userSwitchBtnEl.textContent = "切换中...";
+    try {
+      const users = Array.isArray(window.__headerUsersCache) ? window.__headerUsersCache : [];
+      const target = users.find((x) => String(x?.uid || "") === uid) || null;
+      const token = String(target?.token || "").trim();
+      if (!token) throw new Error("目标账户缺少 token");
+      setAuthToken(token);
+
+      const res = await apiFetch("/user/switch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ uid }),
+      });
+      const data = await res.json();
+      if (!res.ok || data?.ok === false) {
+        throw new Error(String(data?.error || `HTTP ${res.status}`));
+      }
+      applyUserMeta(data);
+      await loadHeaderUsersAndSelection();
+      addSystemNotice(`已切换账户：${userMeta.name} (${userMeta.uid})`, { persist: false });
+      showToast("账户已切换");
+      if (!adminLinkBtnEl || adminLinkBtnEl.style.display === "none") {
+        if (location.pathname === "/user-admin") location.href = "/";
+      }
+    } catch (e) {
+      setAuthToken("");
+      reportErrorToTerminal(`切换账户失败：${String(e?.message || e)}`, { source: "user_switch" });
+      addSystemNotice(`切换账户失败：${String(e?.message || e)}`);
+    } finally {
+      userSwitchBtnEl.disabled = false;
+      userSwitchBtnEl.textContent = oldText;
+    }
+  }
+
+
+  async function pollToolEventsOnce(sessionId) {
+    const sid = String(sessionId || getSessionId()).trim();
+    if (!sid) return;
+    try {
+      const params = new URLSearchParams({ after_seq: String(toolLastSeq), limit: "200" });
+      const res = await apiFetch(`/sessions/${encodeURIComponent(sid)}/tool-events?${params.toString()}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      const events = Array.isArray(data.events) ? data.events : [];
+      if (typeof data.next_seq === "number") toolLastSeq = data.next_seq;
+      if (!events.length) return;
+      showTerm();
+      events.forEach((ev) => {
+        const seq = Number(ev?.seq || 0);
+        if (seq > 0) {
+          if (processedTerminalSeq.has(seq)) return;
+          processedTerminalSeq.add(seq);
+        }
+        if (ev?.type !== "terminal") return;
+        const kind = String(ev?.kind || "out");
+        const text = String(ev?.text || "");
+        if (kind === "cmd") addTermLine("cmd", text, "", { persist: false, sessionId: sid });
+        else if (kind === "sep") addTermSep({ persist: false, sessionId: sid });
+        else addTermLine("out", text, String(ev?.class || ""), { persist: false, sessionId: sid });
+      });
+    } catch (e) {
+      reportErrorToTerminal(`工具事件读取失败：${String(e?.message || e)}`, { source: "tool_events", sessionId: sid, persist: false });
+    }
+  }
+
+  function stopToolPolling() {
+    if (toolPollTimer) {
+      clearInterval(toolPollTimer);
+      toolPollTimer = 0;
+    }
+  }
+
+  function startToolPolling(sessionId) {
+    stopToolPolling();
+    const sid = String(sessionId || getSessionId()).trim();
+    if (!sid) return;
+    pollToolEventsOnce(sid);
+    toolPollTimer = setInterval(() => {
+      pollToolEventsOnce(sid);
+    }, 1000);
+  }
+
+  async function compressCurrentContext() {
+    const sid = await ensureActiveSession();
+    try {
+      const res = await apiFetch(`/sessions/${encodeURIComponent(sid)}/compress`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok || data?.ok === false) {
+        throw new Error(String(data?.error || `http ${res.status}`));
+      }
+      addSystemNotice(`上下文已压缩：压缩 ${Number(data?.compressed_count || 0)} 条历史消息`);
+      await loadCurrentSessionRecord();
+      await refreshRecords();
+    } catch (e) {
+      reportErrorToTerminal(`压缩失败：${String(e?.message || e)}`, { source: "compress", sessionId: sid });
+      addSystemNotice(`压缩失败：${String(e?.message || e)}`);
     }
   }
 
@@ -2527,7 +3168,7 @@
   async function sendMessage() {
     const text = inputEl.value.trim();
     if (!text) return;
-    const sid = getSessionId();
+    const sid = await ensureActiveSession();
 
     await ensureUserMetaLoaded();
 
@@ -2538,22 +3179,28 @@
 
     const echo = isEchoCmd(text);
     addBubble(text, "user");
-    if (echo) { showTerm(); addTermLine("cmd", text.trim(), "", { sessionId: sid }); }
-    const useStream = streamEnabled && !text.startsWith("/");
-    const typingRow = useStream ? null : addTyping();
+    if (echo) { showTerm(); }
+    const isCommand = text.startsWith("/");
+    // 对普通对话统一走 SSE：即使“非流式显示”，也能实时接收 tool_step 终端事件
+    const useStream = !isCommand;
+    const renderDelta = streamEnabled;
+    const typingRow = useStream ? (renderDelta ? null : addTyping()) : addTyping();
     const metaPayload = buildRequestMeta();
 
     try {
       if (useStream) {
-        const bot = addBubble("", "bot");
-        bot.bubble.classList.add("md");
+        let bot = null;
+        if (renderDelta) {
+          bot = addBubble("", "bot");
+          bot.bubble.classList.add("md");
+        }
         const params = new URLSearchParams({
           message: text,
           session_id: sid,
         });
         Object.entries(metaPayload).forEach(([k, v]) => params.set(k, String(v)));
         const url = `/chat/stream?${params.toString()}`;
-        const res = await fetch(url, {
+        const res = await apiFetch(url, {
           method: "GET",
           headers: { "Accept": "text/event-stream" },
         });
@@ -2590,15 +3237,24 @@
 
             if (eventName === "delta") {
               streamText += String(payload.content || "");
-              bot.bubble.dataset.rawMd = streamText;
-              bot.bubble.innerHTML = renderMarkdown(streamText);
-              scrollToBottom();
+              if (renderDelta && bot) {
+                bot.bubble.dataset.rawMd = streamText;
+                bot.bubble.innerHTML = renderMarkdown(streamText);
+                scrollToBottom();
+              }
             } else if (eventName === "reset") {
               const marker = `\n\n> --调用工具中--\n`;
               streamText += marker;
-              bot.bubble.dataset.rawMd = streamText;
-              bot.bubble.innerHTML = renderMarkdown(streamText);
-              scrollToBottom();
+              if (renderDelta && bot) {
+                bot.bubble.dataset.rawMd = streamText;
+                bot.bubble.innerHTML = renderMarkdown(streamText);
+                scrollToBottom();
+              }
+            } else if (eventName === "tool_step") {
+              const trace = Array.isArray(payload?.trace) ? payload.trace : [];
+              if (trace.length > 0) {
+                renderToolTraceToTerminal(trace, { sessionId: sid, persist: false });
+              }
             } else if (eventName === "done") {
               donePayload = payload;
             } else if (eventName === "error") {
@@ -2610,18 +3266,33 @@
         if (donePayload) {
           if (!streamText && donePayload.reply) {
             streamText = String(donePayload.reply);
-            bot.bubble.dataset.rawMd = streamText;
-            bot.bubble.innerHTML = renderMarkdown(streamText);
+            if (renderDelta && bot) {
+              bot.bubble.dataset.rawMd = streamText;
+              bot.bubble.innerHTML = renderMarkdown(streamText);
+            }
           }
-          const traced = renderToolTraceToTerminal(donePayload.tool_trace, { sessionId: sid });
-          if ((donePayload.tool_steps || 0) > 0 && !traced) {
-            showToast("本轮工具调用没有终端输出", "warn");
+          if (typingRow) typingRow.remove();
+          if (!renderDelta) {
+            addBubble(streamText || String(donePayload.reply || "（无回复）"), "bot");
+          }
+          if (donePayload.tool_async) {
+            startToolPolling(sid);
+          } else if (!renderDelta) {
+            const traced = renderToolTraceToTerminal(donePayload.tool_trace, { sessionId: sid, persist: false });
+            if ((donePayload.tool_steps || 0) > 0 && !traced) {
+              showToast("本轮工具调用没有终端输出", "warn");
+            }
+          }
+        } else if (typingRow) {
+          typingRow.remove();
+          if (!renderDelta) {
+            addBubble(streamText || "（无回复）", "bot");
           }
         }
         return;
       }
 
-      const res = await fetch("/chat", {
+      const res = await apiFetch("/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -2635,7 +3306,11 @@
         throw new Error(String(data?.detail || data?.error || `http ${res.status}`));
       }
       if (typingRow) typingRow.remove();
-      if (echo) {
+      if (data?.tool_async) {
+        const replyText = String(data.reply || "> --调用工具中--");
+        addBubble(replyText, "bot", { isCommand: true });
+        if (data?.tool_job?.job_id) startToolPolling(sid);
+      } else if (echo) {
         const reply = data.reply ?? "";
         reply.split("\n").forEach(line => addTermLine("out", line, "", { sessionId: sid }));
         if (Array.isArray(data.tool_trace) && data.tool_trace.length > 0) {
@@ -2645,7 +3320,8 @@
         showToast("已输出至终端");
       } else {
         addBubble(data.reply ?? "（无回复）", "bot", { isCommand: text.startsWith("/") });
-        const traced = renderToolTraceToTerminal(data.tool_trace, { sessionId: sid });
+        // 工具轨迹由后端同轮次写入会话，前端这里仅做实时展示（不落盘），避免刷新后位置漂移。
+        const traced = renderToolTraceToTerminal(data.tool_trace, { sessionId: sid, persist: false });
         if (data.tool_steps > 0 && !traced) {
           showToast("本轮工具调用没有终端输出", "warn");
         }
@@ -2661,17 +3337,22 @@
   }
 
   async function resetChat() {
+    const sid = String(getSessionId() || "").trim();
+    if (!sid) return;
     try {
-      const res = await fetch("/reset", {
+      const res = await apiFetch("/reset", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ session_id: getSessionId() }),
+        body: JSON.stringify({ session_id: sid }),
       });
-      if (!res.ok) throw new Error(`reset failed: ${res.status}`);
-      rotateSessionId();
+      const data = await res.json();
+      if (!res.ok || data?.ok === false) throw new Error(String(data?.error || `reset failed: ${res.status}`));
       closeRecordsPanel();
       clearEmptyState();
-      addSystemNotice("✿ 上下文已清理，开始新的对话吧！", { pinTop: true });
+      clearTerm();
+      addSystemNotice("上下文已清理，当前会话已开始新上下文", { pinTop: true, sessionId: sid });
+      await refreshRecords();
+      startToolPolling(sid);
     } catch (e) {
       reportErrorToTerminal(`上下文清理失败：${String(e?.message || e)}`, { source: "reset" });
       clearEmptyState();
@@ -2690,6 +3371,7 @@
       refreshRecords();
     }
   });
+  userSwitchBtnEl?.addEventListener("click", switchHeaderSelectedUser);
   modelSwitchBtnEl?.addEventListener("click", (e) => {
     e.stopPropagation();
     toggleModelPanel();
@@ -2787,6 +3469,9 @@
   }, { passive: true });
 
   // --- Init ---
+  if (!getAuthToken()) {
+    location.href = "/";
+  }
   const savedWidth = Number(localStorage.getItem(TERM_WIDTH_KEY));
   if (Number.isFinite(savedWidth) && savedWidth >= 180) {
     termWidth = Math.min(savedWidth, Math.max(180, Math.floor(window.innerWidth * 0.65)));
@@ -2797,11 +3482,34 @@
   if (savedCustomTime) customTimeValue = savedCustomTime;
   setTimeMode(timeMode, { silent: true });
   loadModelInfo();
+  syncAppVersion();
   streamEnabled = localStorage.getItem(STREAM_ENABLED_KEY) === "1";
   setStreamToggleUI();
-  ensureUserMetaLoaded();
   showEmptyState();
-  loadCurrentSessionRecord();
+  (async () => {
+    try {
+      const authRes = await apiFetch("/auth/status");
+      const authData = authRes.ok ? await authRes.json() : {};
+      if (!authRes.ok || !authData?.logged_in) {
+        location.href = "/";
+        return;
+      }
+    } catch {
+      location.href = "/";
+      return;
+    }
+    await ensureUserMetaLoaded();
+    await loadHeaderUsersAndSelection();
+    const sid = await ensureActiveSession();
+    const sessionsRes = await apiFetch(`/sessions?limit=${RECORDS_PAGE_LIMIT}&offset=0`);
+    if (sessionsRes.ok) {
+      const payload = await sessionsRes.json();
+      const first = Array.isArray(payload.sessions) ? payload.sessions.find((x) => String(x?.id || "") === sid) : null;
+      if (first) setActiveSession(sid, { title: String(first.title || "新对话"), silent: true });
+    }
+    await loadCurrentSessionRecord();
+    startToolPolling(sid);
+  })();
   closeTerm();
   inputEl.focus();
 </script>

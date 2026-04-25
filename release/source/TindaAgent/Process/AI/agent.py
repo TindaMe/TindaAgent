@@ -1,13 +1,15 @@
 from importlib.metadata import version as _pkg_version
+import json
 from typing import Iterator
 from TindaAgent.Process.Architecture import perm
+from TindaAgent.Process.Architecture.versioning import get_app_version
 from TindaAgent.Process.AI.client import LLMClient
 from TindaAgent.User import userdata
 
 try:
-    _VERSION = _pkg_version("TindaAgent")
+    _VERSION = get_app_version() or _pkg_version("TindaAgent")
 except Exception:
-    _VERSION = "1.6.4"
+    _VERSION = "1.6.5"
 
 
 def _build_system_prompt(model_name: str | None) -> str:
@@ -52,7 +54,8 @@ class Agent:
             model_name: str // 当前接入的模型名，写入默认 prompt；传 None 则显示"未指定"
             max_turns: int // 最多保留的对话轮数（不含 system/fewshot）
         """
-        self.user = userdata.UserManager(user_name, user_perm)
+        # Web 会话 Agent 仅作为运行时身份，不应写入用户注册表
+        self.user = userdata.UserManager(user_name, user_perm, persist=False)
         self.perm = self.user.get_perm()
         self.system_prompt = system_prompt if system_prompt is not None else _build_system_prompt(model_name)
         self._fewshot = _build_fewshot(_VERSION)
@@ -60,8 +63,29 @@ class Agent:
         self.history: list[dict] = self._build_base_history()
         self._client = client
 
+    def _compose_system_prompt(self) -> str:
+        if getattr(self, "_memory_context", None):
+            return f"{self.system_prompt}\n\n{self._memory_context}"
+        return self.system_prompt
+
     def _build_base_history(self) -> list[dict]:
-        return [{"role": "system", "content": self.system_prompt}] + [m.copy() for m in self._fewshot]
+        return [{"role": "system", "content": self._compose_system_prompt()}] + [m.copy() for m in self._fewshot]
+
+    def set_memory_context(self, memory_payload: dict) -> None:
+        """
+        用处：设置每轮请求前注入的记忆上下文，并重建当前基座消息。
+        """
+        payload = memory_payload if isinstance(memory_payload, dict) else {"version": 1, "items": []}
+        memory_json = json.dumps(payload, ensure_ascii=False)
+        self._memory_context = (
+            "[MEMORY_POLICY]\n"
+            "你可自行判断是否调用 save_memory 写入长期记忆。仅写入长期有价值、稳定、可复用的信息；"
+            "闲聊、一次性任务过程、临时情绪不应写入。\n"
+            "[MEMORY_CONTEXT_JSON]\n"
+            f"{memory_json}"
+        )
+        conv = self.get_conversation_messages()
+        self.replace_conversation(conv)
 
     def _trim_history(self) -> None:
         """
