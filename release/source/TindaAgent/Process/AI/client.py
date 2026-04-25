@@ -1,9 +1,12 @@
-import os
 import json
+import os
+from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Iterator
-from openai import OpenAI
+
 from dotenv import load_dotenv
+from openai import OpenAI
+
 from TindaAgent.Tool import tool as tool_registry
 
 # .env 位于 TindaAgent 包根目录
@@ -11,9 +14,62 @@ _ENV_PATH = Path(__file__).resolve().parent.parent.parent / ".env"
 load_dotenv(dotenv_path=_ENV_PATH)
 
 
+class ProviderAdapter(ABC):
+    """
+    用处：抽象模型供应商适配层，为多模型/多厂商预留统一接口。
+    """
+
+    @abstractmethod
+    def chat_create(
+        self,
+        *,
+        model: str,
+        messages: list[dict[str, Any]],
+        temperature: float,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | None = None,
+        stream: bool = False,
+    ) -> Any:
+        """
+        发起一次 chat.completions 请求（可流式）。
+        """
+        raise NotImplementedError
+
+
+class OpenAICompatibleProviderAdapter(ProviderAdapter):
+    """
+    用处：适配 OpenAI 兼容接口（当前 DeepSeek 走该适配器）。
+    """
+
+    def __init__(self, api_key: str, base_url: str) -> None:
+        self._client = OpenAI(api_key=api_key, base_url=base_url)
+
+    def chat_create(
+        self,
+        *,
+        model: str,
+        messages: list[dict[str, Any]],
+        temperature: float,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | None = None,
+        stream: bool = False,
+    ) -> Any:
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "temperature": temperature,
+            "stream": stream,
+        }
+        if tools is not None:
+            kwargs["tools"] = tools
+        if tool_choice is not None:
+            kwargs["tool_choice"] = tool_choice
+        return self._client.chat.completions.create(**kwargs)
+
+
 class LLMClient:
     """
-    用处： 封装 LLM 调用，未来换厂商/接 LiteLLM 只改这一个文件
+    用处：封装 LLM 调用，Provider 可替换，业务层接口保持稳定。
     """
 
     def __init__(
@@ -21,14 +77,14 @@ class LLMClient:
         api_key: str = None,
         base_url: str = None,
         model: str = None,
+        provider: ProviderAdapter | None = None,
     ) -> None:
         """
-        用处： 初始化 LLM 客户端，默认读取环境变量
-
         参数：
-            api_key: str // API 密钥，默认读 DEEPSEEK_API_KEY
-            base_url: str // 接口地址，默认读 DEEPSEEK_BASE_URL
-            model: str // 模型名，默认读 DEEPSEEK_MODEL
+            api_key: 默认读取 DEEPSEEK_API_KEY
+            base_url: 默认读取 DEEPSEEK_BASE_URL
+            model: 默认读取 DEEPSEEK_MODEL
+            provider: 可注入自定义适配器，便于未来多厂商扩展
         """
         self.api_key = api_key or os.getenv("DEEPSEEK_API_KEY")
         self.base_url = base_url or os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
@@ -37,23 +93,20 @@ class LLMClient:
         if not self.api_key:
             raise ValueError("缺少 DEEPSEEK_API_KEY，请在 .env 中配置")
 
-        self._client = OpenAI(api_key=self.api_key, base_url=self.base_url)
+        self._provider = provider or OpenAICompatibleProviderAdapter(
+            api_key=self.api_key,
+            base_url=self.base_url,
+        )
 
     def chat(self, messages: list[dict], temperature: float = 0.7) -> str:
         """
-        用处： 发起一次对话请求，返回模型回复文本
-
-        参数：
-            messages: list[dict] // OpenAI 格式的消息列表
-            temperature: float // 采样温度，0-2
-
-        返回：
-            str // 模型回复内容
+        用处：发起一次对话请求，返回模型回复文本。
         """
-        response = self._client.chat.completions.create(
+        response = self._provider.chat_create(
             model=self.model,
             messages=messages,
             temperature=temperature,
+            stream=False,
         )
         return response.choices[0].message.content
 
@@ -241,10 +294,10 @@ class LLMClient:
 
         返回：
             {
-                "reply": str,               # 最终 assistant 文本回复
-                "history_delta": list[dict],# 本轮新增到历史的消息（assistant/tool 等）
-                "tool_steps": int,          # 实际工具循环次数
-                "tool_trace": list[dict],   # 本轮工具调用轨迹
+                "reply": str,
+                "history_delta": list[dict],
+                "tool_steps": int,
+                "tool_trace": list[dict],
             }
         """
         working_messages: list[dict[str, Any]] = [m.copy() for m in messages]
@@ -254,14 +307,14 @@ class LLMClient:
         tool_trace: list[dict[str, Any]] = []
 
         while True:
-            # 接近上限时，强制模型基于现有工具结果作答，避免继续 tool-call 循环
             force_finalize = steps >= max_tool_steps - 1 and len(tool_trace) > 0
-            response = self._client.chat.completions.create(
+            response = self._provider.chat_create(
                 model=self.model,
                 messages=working_messages,
                 temperature=temperature,
                 tools=tools,
                 tool_choice="none" if force_finalize else "auto",
+                stream=False,
             )
             msg = response.choices[0].message
             reasoning_content = self._normalize_reasoning_content(getattr(msg, "reasoning_content", None))
@@ -336,7 +389,7 @@ class LLMClient:
 
         事件：
             {"type":"delta","content":str}
-            {"type":"reset"}  # 本轮出现 tool_call，清空临时文本
+            {"type":"reset"}
             {"type":"done","reply":str,"history_delta":list,"tool_trace":list,"tool_steps":int}
         """
         working_messages: list[dict[str, Any]] = [m.copy() for m in messages]
@@ -346,9 +399,8 @@ class LLMClient:
         tool_trace: list[dict[str, Any]] = []
 
         while True:
-            # 接近上限时，强制模型基于现有工具结果作答，避免继续 tool-call 循环
             force_finalize = steps >= max_tool_steps - 1 and len(tool_trace) > 0
-            stream = self._client.chat.completions.create(
+            stream = self._provider.chat_create(
                 model=self.model,
                 messages=working_messages,
                 temperature=temperature,
@@ -438,8 +490,6 @@ class LLMClient:
                 }
                 return
 
-            # 只要进入 tool_call 轮次就发 reset，前端据此追加工具调用标记。
-            # 不能依赖 round_content，否则某些“纯工具轮”会完全看不到调用痕迹。
             yield {"type": "reset"}
 
             self._append_assistant_tool_message(

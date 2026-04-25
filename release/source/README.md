@@ -39,7 +39,7 @@ TindaAgent 是一个以 Web 对话为主入口的本地 Agent 系统，核心目
 - `TindaAgent/Web`
   - Web API 入口、页面路由、流式输出、会话装配、记录读写编排。
 - `TindaAgent/Process/AI`
-  - Agent 对话状态机、LLM 客户端、工具调用循环控制。
+  - Agent 对话状态机、LLM 客户端、Provider 适配器、工具调用循环控制。
 - `TindaAgent/Tool`
   - 工具注册、权限校验、工具调度、内置工具集合。
 - `TindaAgent/User`
@@ -54,6 +54,8 @@ TindaAgent 是一个以 Web 对话为主入口的本地 Agent 系统，核心目
 ### 3.2 运行时核心对象
 
 - `LLMClient`：负责与模型 API 通信，支持工具 schema 与工具回路。
+- `ProviderAdapter`：模型供应商抽象接口，解耦业务层与底层 SDK。
+- `OpenAICompatibleProviderAdapter`：当前默认适配器（DeepSeek 通过 OpenAI 兼容接口接入）。
 - `Agent`：维护会话历史（含 system/fewshot 基座），对外提供普通与流式对话。
 - `ChatRecordStore`：会话记录双文件持久化与恢复。
 - `UserManager`：用户实体与注册表持久化。
@@ -318,4 +320,3 @@ release/source/
 - 为日志系统增加按时间分片与自动归档。
 - 引入更严格的 secret pre-commit 检查。
 - 为权限系统增加后端中间件级统一校验上下文。
-
