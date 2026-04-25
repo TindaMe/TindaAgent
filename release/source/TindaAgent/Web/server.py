@@ -16,6 +16,7 @@ from TindaAgent.Process.AI.client import LLMClient
 from TindaAgent.Tool import tool as tool_registry
 from TindaAgent.User import userstatus, userdata
 from TindaAgent.Web.records_store import ChatRecordStore, RecordStoreError, strip_user_meta_block
+from TindaAgent.log.error_logger import log_exception
 
 app = FastAPI()
 
@@ -168,6 +169,7 @@ def _get_agent(session_id: str) -> Agent:
                 agent.replace_conversation(saved_msgs)
         except Exception as e:
             _logger.warning("restore session from records failed: session=%s err=%s", session_id, e)
+            log_exception("web.restore_session", e, session_id=session_id)
         _sessions[session_id] = agent
     _touch_session(session_id)
     return _sessions[session_id]
@@ -367,6 +369,7 @@ def _save_session_record(agent: Agent, session_id: str) -> dict | None:
         return _record_store.save_session_entries(session_id, entries, preserve_non_chat=True)
     except Exception as e:
         _logger.warning("save session record failed: session=%s err=%s", session_id, e)
+        log_exception("web.save_session_record", e, session_id=session_id)
         return None
 
 
@@ -388,27 +391,31 @@ async def chat_page():
 @app.post("/chat")
 async def chat(req: ChatRequest):
     sid = _normalize_session_id(req.session_id)
-    agent = _get_agent(sid)
-    command_reply = _exec_tool_command(agent, req.message.strip())
-    if command_reply is not None:
-        return JSONResponse({"reply": command_reply})
-    llm_message = _build_user_message_with_meta(
-        req.message,
-        meta_user_name=req.meta_user_name,
-        meta_user_id=req.meta_user_id,
-        meta_user_perm=req.meta_user_perm,
-        meta_time_iso=req.meta_time_iso,
-        meta_time_text=req.meta_time_text,
-    )
-    result = agent.chat_with_meta(llm_message)
-    _save_session_record(agent, sid)
-    return JSONResponse(
-        {
-            "reply": result.get("reply", ""),
-            "tool_trace": result.get("tool_trace", []),
-            "tool_steps": result.get("tool_steps", 0),
-        }
-    )
+    try:
+        agent = _get_agent(sid)
+        command_reply = _exec_tool_command(agent, req.message.strip())
+        if command_reply is not None:
+            return JSONResponse({"reply": command_reply})
+        llm_message = _build_user_message_with_meta(
+            req.message,
+            meta_user_name=req.meta_user_name,
+            meta_user_id=req.meta_user_id,
+            meta_user_perm=req.meta_user_perm,
+            meta_time_iso=req.meta_time_iso,
+            meta_time_text=req.meta_time_text,
+        )
+        result = agent.chat_with_meta(llm_message)
+        _save_session_record(agent, sid)
+        return JSONResponse(
+            {
+                "reply": result.get("reply", ""),
+                "tool_trace": result.get("tool_trace", []),
+                "tool_steps": result.get("tool_steps", 0),
+            }
+        )
+    except Exception as e:
+        log_exception("web.chat", e, session_id=sid)
+        return JSONResponse({"detail": "chat failed"}, status_code=500)
 
 
 @app.get("/chat/stream")
@@ -464,6 +471,7 @@ async def chat_stream(
             if saw_done:
                 _save_session_record(agent, sid)
         except Exception as e:
+            log_exception("web.chat_stream", e, session_id=sid)
             yield _sse_event("error", {"message": str(e)})
 
     from starlette.responses import StreamingResponse
@@ -491,9 +499,11 @@ async def session_events(req: SessionEventsRequest):
     try:
         saved = _record_store.append_session_entries(sid, entries)
     except RecordStoreError as e:
+        log_exception("web.session_events.validation", e, session_id=sid)
         return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
     except Exception as e:
         _logger.warning("append session events failed: session=%s err=%s", sid, e)
+        log_exception("web.session_events", e, session_id=sid)
         return JSONResponse({"ok": False, "error": "append failed"}, status_code=500)
 
     # 按用户要求：系统小气泡/终端轨迹也进入模型上下文
@@ -563,7 +573,11 @@ async def import_record(req: ImportRecordRequest):
     try:
         payload = _record_store.load_record(req.record_id)
     except RecordStoreError as e:
+        log_exception("web.import_record.validation", e, session_id=sid, record_id=req.record_id)
         return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+    except Exception as e:
+        log_exception("web.import_record", e, session_id=sid, record_id=req.record_id)
+        return JSONResponse({"ok": False, "error": "import failed"}, status_code=500)
 
     entries = payload.get("entries", [])
     msgs = _entries_to_agent_messages(entries)

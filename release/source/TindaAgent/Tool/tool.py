@@ -8,6 +8,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from typing import Any, Callable
 from TindaAgent.Process.Architecture import perm
+from TindaAgent.log.error_logger import log_exception
 
 # 系统工具注册表 {func_name: {"des": str, "perm": int, "func": function}}
 SYSTEM_TOOL: dict[str, dict[str, Any]] = {}
@@ -262,11 +263,23 @@ def run_agent_tool(agent_tool_name: str, user_perm: int, arguments: dict[str, An
         with contextlib.redirect_stdout(capture):
             result = run_tool(tool_name, user_perm, *call_args, **call_kwargs)
     except (ValueError, PermissionError) as e:
+        log_exception(
+            "tool.run_agent_tool.validation",
+            e,
+            agent_tool_name=agent_tool_name,
+            tool_name=tool_name,
+        )
         return json.dumps(
             {"ok": False, "tool_name": tool_name, "error": str(e)},
             ensure_ascii=False,
         )
     except Exception as e:
+        log_exception(
+            "tool.run_agent_tool",
+            e,
+            agent_tool_name=agent_tool_name,
+            tool_name=tool_name,
+        )
         return json.dumps(
             {"ok": False, "tool_name": tool_name, "error": f"执行异常: {e}"},
             ensure_ascii=False,
