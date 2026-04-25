@@ -1,15 +1,34 @@
-# logs/cache
+# Local/env secrets
+**/.env
+**/.env.*
+!.env.example
+
+# Python caches/build
 **/__pycache__/
-*.pyc
-*.pyo
-*.log
+**/*.pyc
+**/*.pyo
+**/*.pyd
+**/*.egg-info/
 
-# local secrets (outside release source/full_data)
-.env
-*.key
-*.pem
+# Runtime/data/logs
+**/*.log
+**/.web.log
+**/Data/
+**/.tinda/
+**/.openclaw/
 
-# backup working files
-backup/*.passphrase.txt
+# Editors/system
+.vscode/
+.trae/
 
-backup/
+# backups and sensitive archives
+Tindaagent_old_backup_20260426/
+*_backup_*/
+*secret*
+*sensitive*
+*.tar.gz
+*.gpg
+
+# node/temp
+**/node_modules/
+**/.DS_Store

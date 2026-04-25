@@ -1,0 +1,1164 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>用户管理 · TindaAgent</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #fff5f9;
+      --surface: #ffffff;
+      --surface-2: #fef0f5;
+      --surface-3: #fce4ee;
+      --border: #fcd5e5;
+      --border-strong: #f9a8c9;
+      --text: #3d1f2f;
+      --text-dim: #9b5f78;
+      --text-faint: #d4a0b5;
+      --accent: #ff6eb4;
+      --accent-2: #ff9fd3;
+      --accent-deep: #c2185b;
+      --lavender: #a78bfa;
+      --danger: #ef4444;
+      --danger-deep: #b91c1c;
+      --gradient: #ff6eb4;
+      --gradient-lavender: #c084fc;
+      --gradient-soft: rgba(255, 110, 180, 0.08);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+      min-height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Nunito', -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+      font-size: 14px;
+      line-height: 1.55;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    @keyframes pageIn {
+      from { opacity: 0; transform: translateY(10px) scale(0.985); }
+      to   { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    @keyframes cardIn {
+      from { opacity: 0; transform: translateY(14px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes wiggle {
+      0%,100% { transform: rotate(-5deg); }
+      50%      { transform: rotate(5deg); }
+    }
+    @keyframes floatUp {
+      0%   { transform: translateY(0) rotate(0deg);     opacity: 0.22; }
+      50%  { opacity: 0.46; }
+      100% { transform: translateY(-50px) rotate(20deg); opacity: 0.22; }
+    }
+    @keyframes modalIn {
+      from { opacity: 0; transform: translateY(12px) scale(0.96); }
+      to   { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    body {
+      display: flex;
+      flex-direction: column;
+      position: relative;
+      animation: pageIn 0.42s cubic-bezier(0.4, 0, 0.2, 1) both;
+    }
+
+    /* ── 背景光晕 ── */
+    body::before {
+      content: "";
+      position: fixed;
+      top: -15%; right: -10%;
+      width: 560px; height: 560px;
+      background: rgba(255,110,180,0.08);
+      pointer-events: none; z-index: 0;
+    }
+    body::after {
+      content: "";
+      position: fixed;
+      bottom: -20%; left: -10%;
+      width: 500px; height: 500px;
+      background: rgba(167,139,250,0.06);
+      pointer-events: none; z-index: 0;
+    }
+
+    /* ── 浮动装饰 ── */
+    .deco {
+      position: fixed;
+      pointer-events: none;
+      z-index: 0;
+      user-select: none;
+      opacity: 0.28;
+      color: var(--accent-2);
+      animation: floatUp linear infinite;
+    }
+    .deco svg {
+      display: block;
+      width: 1em; height: 1em;
+      stroke: currentColor;
+      fill: none;
+      stroke-width: 1.8;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+    .deco.d1 { top: 18%; left: 6%;  font-size: 22px; animation-duration: 14s; }
+    .deco.d2 { top: 70%; left: 4%;  font-size: 18px; color: var(--lavender); animation-duration: 18s; animation-delay: -4s; }
+    .deco.d3 { top: 30%; right: 5%; font-size: 20px; animation-duration: 16s; animation-delay: -7s; }
+    .deco.d4 { top: 78%; right: 8%; font-size: 18px; color: var(--lavender); animation-duration: 20s; animation-delay: -2s; }
+
+    /* ── Header ── */
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 11px 22px;
+      background: rgba(255,255,255,0.85);
+      backdrop-filter: blur(24px);
+      -webkit-backdrop-filter: blur(24px);
+      border-bottom: 1.5px solid var(--border);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-weight: 800;
+      font-size: 15.5px;
+    }
+
+    .brand-logo {
+      width: 34px; height: 34px;
+      border-radius: 50%;
+      background: var(--gradient);
+      display: flex; align-items: center; justify-content: center;
+      box-shadow: 0 4px 16px rgba(255,110,180,0.38);
+      animation: wiggle 3.5s ease-in-out infinite;
+      flex-shrink: 0;
+    }
+    .brand-logo svg {
+      width: 18px; height: 18px;
+      stroke: #fff; fill: none;
+      stroke-width: 2;
+      stroke-linecap: round; stroke-linejoin: round;
+    }
+    .brand-name {
+      background: var(--gradient);
+      -webkit-background-clip: text; background-clip: text;
+      -webkit-text-fill-color: transparent;
+      letter-spacing: 0.3px;
+    }
+    .badge {
+      font-size: 10.5px;
+      color: var(--accent-deep);
+      border: 1.5px solid var(--border-strong);
+      border-radius: 999px;
+      padding: 2px 10px;
+      background: var(--surface-2);
+      font-weight: 800;
+      letter-spacing: 0.6px;
+    }
+
+    .actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .top-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border: 1.5px solid var(--border);
+      background: #fff;
+      color: var(--text-dim);
+      border-radius: 999px;
+      padding: 7px 14px;
+      text-decoration: none;
+      font-weight: 700;
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.2s cubic-bezier(0.34,1.56,0.64,1);
+    }
+    .top-btn:hover {
+      border-color: var(--accent);
+      color: var(--accent-deep);
+      background: var(--surface-2);
+      transform: translateY(-2px);
+      box-shadow: 0 6px 16px rgba(255,110,180,0.16);
+    }
+    .top-btn svg {
+      width: 13px; height: 13px;
+      stroke: currentColor; fill: none;
+      stroke-width: 2;
+      stroke-linecap: round; stroke-linejoin: round;
+    }
+
+    /* ── Main ── */
+    main {
+      position: relative;
+      z-index: 1;
+      max-width: 1240px;
+      width: 100%;
+      margin: 22px auto;
+      padding: 0 18px 28px;
+      display: grid;
+      gap: 16px;
+    }
+
+    /* ── Card ── */
+    .card {
+      position: relative;
+      background: var(--surface);
+      border: 1.5px solid var(--border);
+      border-radius: 18px;
+      padding: 18px;
+      box-shadow: 0 10px 30px rgba(61, 31, 47, 0.07);
+      animation: cardIn 0.5s cubic-bezier(0.34,1.3,0.64,1) both;
+      transition: box-shadow 0.25s ease, transform 0.25s ease, border-color 0.25s ease;
+    }
+    .card:hover {
+      border-color: var(--border-strong);
+      box-shadow: 0 14px 36px rgba(255, 110, 180, 0.12);
+    }
+    .card::before {
+      content: "";
+      position: absolute;
+      left: 0; top: 18px; bottom: 18px;
+      width: 3px;
+      border-radius: 0 3px 3px 0;
+      background: var(--gradient);
+      opacity: 0.0;
+      transition: opacity 0.25s ease;
+    }
+    .card:hover::before { opacity: 0.85; }
+    .card:nth-child(1) { animation-delay: 0.04s; }
+    .card:nth-child(2) { animation-delay: 0.10s; }
+    .card:nth-child(3) { animation-delay: 0.16s; }
+
+    .card h3 {
+      font-size: 15px;
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      letter-spacing: 0.3px;
+    }
+    .h-icon {
+      width: 26px; height: 26px;
+      border-radius: 8px;
+      background: var(--gradient-soft);
+      border: 1.5px solid var(--border);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+    .h-icon svg {
+      width: 14px; height: 14px;
+      stroke: var(--accent-deep); fill: none;
+      stroke-width: 2;
+      stroke-linecap: round; stroke-linejoin: round;
+    }
+
+    .status-line {
+      font-size: 12.5px;
+      color: var(--text-dim);
+      margin-bottom: 4px;
+      font-weight: 600;
+    }
+
+    /* ── Create grid ── */
+    .create-grid {
+      display: grid;
+      grid-template-columns: minmax(180px, 1fr) minmax(180px, auto) auto;
+      gap: 10px;
+      align-items: stretch;
+    }
+    input {
+      width: 100%;
+      border: 1.5px solid var(--border);
+      border-radius: 12px;
+      padding: 10px 14px;
+      font-size: 13.5px;
+      font-family: inherit;
+      color: var(--text);
+      background: #fff;
+      outline: none;
+      transition: all 0.2s ease;
+    }
+    input::placeholder { color: var(--text-faint); }
+    input:hover { border-color: var(--border-strong); }
+    input:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 4px rgba(255,110,180,0.14);
+      background: #fffafd;
+    }
+    input:disabled {
+      background: var(--surface-2);
+      color: var(--text-dim);
+      cursor: not-allowed;
+    }
+
+    /* ── Buttons ── */
+    .btn {
+      border: none;
+      border-radius: 12px;
+      padding: 9px 16px;
+      font-family: inherit;
+      font-weight: 700;
+      font-size: 12.5px;
+      cursor: pointer;
+      white-space: nowrap;
+      letter-spacing: 0.3px;
+      transition: all 0.22s cubic-bezier(0.34,1.56,0.64,1);
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .btn-main {
+      color: #fff;
+      background: var(--gradient);
+      box-shadow: 0 6px 18px rgba(255,110,180,0.32);
+    }
+    .btn-main:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 10px 24px rgba(255,110,180,0.42);
+    }
+    .btn-main:active { transform: translateY(0) scale(0.97); }
+    .btn-sub {
+      color: var(--text-dim);
+      background: var(--surface-2);
+      border: 1.5px solid var(--border);
+    }
+    .btn-sub:hover {
+      color: var(--accent-deep);
+      background: #fff;
+      border-color: var(--accent);
+      transform: translateY(-2px);
+      box-shadow: 0 6px 16px rgba(255,110,180,0.14);
+    }
+    .btn-sub:active { transform: translateY(0) scale(0.97); }
+    .btn-danger {
+      color: #fff;
+      background: #ef4444;
+      box-shadow: 0 6px 18px rgba(239,68,68,0.28);
+    }
+    .btn-danger:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 10px 24px rgba(239,68,68,0.36);
+    }
+    .btn-danger:active { transform: translateY(0) scale(0.97); }
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      transform: none !important;
+      box-shadow: none !important;
+    }
+
+    /* ── Table ── */
+    .table-wrap {
+      overflow: auto;
+      border: 1.5px solid var(--border);
+      border-radius: 14px;
+      background: #fff;
+      box-shadow: inset 0 0 0 1px rgba(252, 213, 229, 0.4);
+    }
+    .table-wrap::-webkit-scrollbar { height: 9px; width: 9px; }
+    .table-wrap::-webkit-scrollbar-track { background: var(--surface-2); }
+    .table-wrap::-webkit-scrollbar-thumb {
+      background: var(--border-strong);
+      border-radius: 999px;
+    }
+    .table-wrap::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+
+    table {
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 0;
+      min-width: 1120px;
+      background: #fff;
+    }
+    th, td {
+      border-bottom: 1px solid #f8deea;
+      text-align: left;
+      padding: 11px 12px;
+      vertical-align: middle;
+      font-size: 12.5px;
+    }
+    th {
+      background: #fef0f5;
+      color: var(--accent-deep);
+      font-weight: 800;
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      font-size: 11px;
+    }
+    th:first-child { border-top-left-radius: 12px; }
+    th:last-child  { border-top-right-radius: 12px; }
+    tbody tr { transition: background 0.18s ease; }
+    tbody tr:hover { background: rgba(254, 240, 245, 0.6); }
+    tbody tr:last-child td { border-bottom: none; }
+    tr.current-row {
+      background: rgba(255,239,247,0.95);
+    }
+    tr.current-row td:first-child {
+      box-shadow: inset 3px 0 0 var(--accent);
+    }
+    tr.current-row:hover {
+      background: rgba(255,233,245,1);
+    }
+
+    td input {
+      padding: 7px 10px;
+      font-size: 12.5px;
+      border-radius: 9px;
+    }
+
+    .token-cell {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 11.5px;
+      max-width: 280px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      color: var(--text-dim);
+      background: var(--surface-2);
+      border: 1.5px dashed var(--border);
+      border-radius: 8px;
+      padding: 5px 9px !important;
+      cursor: help;
+    }
+
+    .ops {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .ops .btn {
+      padding: 7px 11px;
+      font-size: 11.5px;
+      border-radius: 9px;
+    }
+
+    .empty {
+      padding: 28px 18px !important;
+      font-size: 13px;
+      color: var(--text-dim);
+      text-align: center !important;
+      font-weight: 600;
+    }
+
+    /* ── Notice toast ── */
+    .notice {
+      position: fixed;
+      right: 22px;
+      bottom: 22px;
+      z-index: 80;
+      background: rgba(61,31,47,0.96);
+      color: #fff;
+      padding: 11px 16px;
+      border-radius: 12px;
+      font-size: 12.5px;
+      font-weight: 600;
+      opacity: 0;
+      transform: translateY(10px) scale(0.96);
+      transition: all 0.22s cubic-bezier(0.34,1.56,0.64,1);
+      pointer-events: none;
+      max-width: 460px;
+      line-height: 1.45;
+      box-shadow: 0 12px 32px rgba(61,31,47,0.28);
+      border: 1px solid rgba(255,255,255,0.08);
+    }
+    .notice.show { opacity: 1; transform: translateY(0) scale(1); }
+
+    /* ── Modal ── */
+    .perm-modal-mask {
+      position: fixed;
+      inset: 0;
+      background: rgba(61,31,47,0.32);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 90;
+      padding: 18px;
+    }
+    .perm-modal-mask.show { display: flex; }
+    .perm-modal {
+      width: 100%;
+      max-width: 580px;
+      background: #fff;
+      border: 1.5px solid var(--border);
+      border-radius: 20px;
+      padding: 18px;
+      box-shadow: 0 24px 60px rgba(61,31,47,0.22);
+      animation: modalIn 0.28s cubic-bezier(0.34,1.56,0.64,1);
+    }
+    .perm-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+    .perm-title {
+      font-size: 15px;
+      font-weight: 800;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .perm-title::before {
+      content: "";
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: var(--gradient);
+      box-shadow: 0 0 0 3px rgba(255,110,180,0.18);
+    }
+    .perm-sub {
+      font-size: 12px;
+      color: var(--text-dim);
+      margin: 4px 0 14px;
+      word-break: break-all;
+      background: var(--surface-2);
+      border: 1.5px dashed var(--border);
+      border-radius: 10px;
+      padding: 8px 12px;
+      font-weight: 600;
+    }
+    .perm-list {
+      display: grid;
+      gap: 8px;
+      max-height: 340px;
+      overflow: auto;
+      padding-right: 4px;
+    }
+    .perm-list::-webkit-scrollbar { width: 7px; }
+    .perm-list::-webkit-scrollbar-track { background: transparent; }
+    .perm-list::-webkit-scrollbar-thumb {
+      background: var(--border-strong);
+      border-radius: 999px;
+    }
+    .perm-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border: 1.5px solid var(--border);
+      border-radius: 12px;
+      padding: 10px 14px;
+      background: var(--surface-2);
+      font-size: 12.5px;
+      color: var(--text-dim);
+      transition: all 0.18s ease;
+    }
+    .perm-item:hover {
+      border-color: var(--border-strong);
+      background: #fff;
+      transform: translateX(2px);
+    }
+    .perm-item:has(input[type="checkbox"]:checked) {
+      background: rgba(255,182,213,0.22);
+      border-color: var(--accent);
+      color: var(--accent-deep);
+    }
+    .perm-item label {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      cursor: pointer;
+      user-select: none;
+      width: 100%;
+      justify-content: space-between;
+      font-weight: 600;
+    }
+    .perm-item code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 11px;
+      color: #8a4f67;
+      background: rgba(255,255,255,0.55);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 1px 6px;
+      margin-left: 6px;
+    }
+    .perm-item input[type="checkbox"] {
+      appearance: none;
+      -webkit-appearance: none;
+      width: 18px; height: 18px;
+      border: 2px solid var(--border-strong);
+      border-radius: 6px;
+      background: #fff;
+      cursor: pointer;
+      position: relative;
+      transition: all 0.18s ease;
+      flex-shrink: 0;
+    }
+    .perm-item input[type="checkbox"]:hover { border-color: var(--accent); }
+    .perm-item input[type="checkbox"]:checked {
+      background: var(--gradient);
+      border-color: transparent;
+      box-shadow: 0 4px 10px rgba(255,110,180,0.36);
+    }
+    .perm-item input[type="checkbox"]:checked::after {
+      content: "";
+      position: absolute;
+      left: 4px; top: 1px;
+      width: 5px; height: 9px;
+      border: solid #fff;
+      border-width: 0 2.4px 2.4px 0;
+      transform: rotate(45deg);
+    }
+    .perm-actions {
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+      margin-top: 14px;
+      padding-top: 12px;
+      border-top: 1.5px dashed var(--border);
+    }
+
+    @media (max-width: 900px) {
+      .create-grid { grid-template-columns: 1fr; }
+      header { padding: 10px 14px; }
+      main { padding: 0 12px 24px; margin-top: 14px; }
+      .card { padding: 14px; border-radius: 16px; }
+      .deco { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+<span class="deco d1" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 2l2.4 6.6L21 11l-6.6 2.4L12 20l-2.4-6.6L3 11l6.6-2.4L12 2z"/></svg></span>
+<span class="deco d2" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9 12h6M12 9v6"/></svg></span>
+<span class="deco d3" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 21s-7-4.5-7-10a5 5 0 0 1 9-3 5 5 0 0 1 9 3c0 5.5-7 10-7 10"/></svg></span>
+<span class="deco d4" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg></span>
+
+<header>
+  <div class="brand">
+    <span class="brand-logo" aria-hidden="true">
+      <svg viewBox="0 0 24 24"><path d="M12 3l8 3v5c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6l8-3z"/><path d="M9.5 12l1.8 1.8L15 10"/></svg>
+    </span>
+    <span class="brand-name">用户管理面板</span>
+    <span class="badge">ADMIN</span>
+  </div>
+  <div class="actions">
+    <a class="top-btn" href="/" onclick="event.preventDefault(); location.href='/'">
+      <svg viewBox="0 0 24 24"><path d="M3 11l9-8 9 8"/><path d="M5 9v11h14V9"/></svg>
+      返回主页
+    </a>
+    <a class="top-btn" href="/app" onclick="event.preventDefault(); location.href='/app'">
+      <svg viewBox="0 0 24 24"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
+      进入聊天
+    </a>
+  </div>
+</header>
+
+<main>
+  <section class="card">
+    <h3>
+      <span class="h-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a8 8 0 0 1 16 0v1"/></svg>
+      </span>
+      当前账户
+    </h3>
+    <div id="currentInfo" class="status-line">加载中...</div>
+  </section>
+
+  <section class="card">
+    <h3>
+      <span class="h-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6M22 11h-6"/></svg>
+      </span>
+      创建账户
+    </h3>
+    <div class="create-grid">
+      <input id="createName" placeholder="用户名（唯一）" />
+      <button id="createPermBtn" class="btn btn-sub" type="button">
+        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        设置权限
+      </button>
+      <button id="createBtn" class="btn btn-main" type="button">
+        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+        创建（自动生成Token）
+      </button>
+    </div>
+    <div id="createPermPreview" class="status-line" style="margin-top:10px;">当前创建权限：NONE</div>
+  </section>
+
+  <section class="card">
+    <h3>
+      <span class="h-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+      </span>
+      账户列表
+    </h3>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th style="width:120px;">UID</th>
+            <th style="width:200px;">用户名</th>
+            <th style="width:240px;">权限</th>
+            <th style="width:280px;">Token</th>
+            <th style="width:340px;">操作</th>
+          </tr>
+        </thead>
+        <tbody id="usersTbody">
+          <tr><td class="empty" colspan="5">加载中...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<div id="notice" class="notice"></div>
+
+<div id="permMask" class="perm-modal-mask">
+  <div class="perm-modal">
+    <div class="perm-head">
+      <div class="perm-title" id="permTitle">权限设置</div>
+      <button id="permCloseBtn" class="btn btn-sub" type="button">关闭</button>
+    </div>
+    <div id="permSub" class="perm-sub">-</div>
+    <div id="permList" class="perm-list"></div>
+    <div class="perm-actions">
+      <button id="permAllOffBtn" class="btn btn-sub" type="button">全部关闭</button>
+      <button id="permAllOnBtn" class="btn btn-sub" type="button">全部开启</button>
+      <button id="permSaveBtn" class="btn btn-main" type="button">保存权限</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  const ui = {
+    currentInfo: document.getElementById("currentInfo"),
+    tbody: document.getElementById("usersTbody"),
+    createName: document.getElementById("createName"),
+    createPermBtn: document.getElementById("createPermBtn"),
+    createBtn: document.getElementById("createBtn"),
+    createPermPreview: document.getElementById("createPermPreview"),
+    notice: document.getElementById("notice"),
+    permMask: document.getElementById("permMask"),
+    permTitle: document.getElementById("permTitle"),
+    permSub: document.getElementById("permSub"),
+    permList: document.getElementById("permList"),
+    permCloseBtn: document.getElementById("permCloseBtn"),
+    permAllOffBtn: document.getElementById("permAllOffBtn"),
+    permAllOnBtn: document.getElementById("permAllOnBtn"),
+    permSaveBtn: document.getElementById("permSaveBtn"),
+  };
+
+  let currentUid = "";
+  let usersCache = [];
+  let permItems = [];
+  let createPermValue = 0;
+  let noticeTimer = 0;
+  const AUTH_TOKEN_KEY = "ta_auth_token";
+
+  const permModalState = {
+    mode: "create", // create | edit
+    targetUid: "",
+    workingPerm: 0,
+    saving: false,
+  };
+
+  function getAuthToken() {
+    return String(localStorage.getItem(AUTH_TOKEN_KEY) || "").trim();
+  }
+
+  function authHeaders(extra) {
+    const headers = Object.assign({}, extra || {});
+    const token = getAuthToken();
+    if (token) headers["X-User-Token"] = token;
+    return headers;
+  }
+
+  async function apiFetch(url, options = {}) {
+    const opts = Object.assign({}, options);
+    opts.headers = authHeaders(opts.headers || {});
+    return fetch(url, opts);
+  }
+
+  function showNotice(text) {
+    if (!ui.notice) return;
+    ui.notice.textContent = String(text || "");
+    ui.notice.classList.add("show");
+    if (noticeTimer) clearTimeout(noticeTimer);
+    noticeTimer = setTimeout(() => {
+      ui.notice.classList.remove("show");
+      noticeTimer = 0;
+    }, 2400);
+  }
+
+  function esc(s) {
+    return String(s || "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#39;");
+  }
+
+  function shortToken(token) {
+    const t = String(token || "");
+    if (t.length <= 28) return t;
+    return `${t.slice(0, 14)}...${t.slice(-8)}`;
+  }
+
+  function permLabelText(value) {
+    const n = Number(value || 0);
+    if (!Array.isArray(permItems) || permItems.length === 0) return String(n);
+    const names = permItems.filter((x) => ((n & Number(x.bit || 0)) === Number(x.bit || 0))).map((x) => String(x.key || ""));
+    return names.length ? names.join(" | ") : "NONE";
+  }
+
+  function setCreatePermPreview() {
+    if (!ui.createPermPreview) return;
+    ui.createPermPreview.textContent = `当前创建权限：${permLabelText(createPermValue)}`;
+  }
+
+  async function ensureAdminOrRedirect() {
+    const res = await apiFetch("/auth/status", { method: "GET" });
+    if (!res.ok) {
+      location.href = "/";
+      return false;
+    }
+    const data = await res.json();
+    if (!data?.logged_in || !data?.user) {
+      location.href = "/";
+      return false;
+    }
+    const permNum = Number(data.user.perm ?? 0);
+    const hasAdmin = (permNum & (1 << 7)) === (1 << 7); // SYSTEM_WRITE
+    if (!hasAdmin) {
+      showNotice("权限不足，已返回首页");
+      setTimeout(() => { location.href = "/"; }, 300);
+      return false;
+    }
+    currentUid = String(data.user.uid || "");
+    ui.currentInfo.textContent = `当前管理员：${data.user.name || "-"} (${currentUid}) · perm=${permNum} · ${data.user.perm_label || ""}`;
+    return true;
+  }
+
+  async function loadPermissionDefs() {
+    const res = await apiFetch("/admin/permissions", { method: "GET" });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data?.ok === false) {
+      throw new Error(String(data?.error || `HTTP ${res.status}`));
+    }
+    permItems = Array.isArray(data?.items) ? data.items : [];
+    setCreatePermPreview();
+  }
+
+  function rowHtml(u) {
+    const uid = String(u?.uid || "");
+    const isCurrent = Boolean(u?.is_current) || uid === currentUid;
+    const disabled = isCurrent ? "disabled" : "";
+    const rowClass = isCurrent ? "current-row" : "";
+    const currentTag = isCurrent ? "<span class=\"badge\">当前账户</span>" : "";
+
+    return `
+      <tr class="${rowClass}" data-uid="${esc(uid)}" data-perm="${Number(u?.perm ?? 0)}">
+        <td>${esc(uid)}</td>
+        <td>
+          <input data-field="name" value="${esc(u?.name || "")}" ${disabled} />
+          ${currentTag}
+        </td>
+        <td>
+          <button class="btn btn-sub" data-act="perm" ${disabled}>编辑权限</button>
+          <div style="margin-top:4px;color:#9b5f78;font-size:11px;line-height:1.3;word-break:break-word;">${esc(u?.perm_label || permLabelText(u?.perm || 0))}</div>
+        </td>
+        <td class="token-cell" title="${esc(u?.token || "")}">${esc(shortToken(u?.token || ""))}</td>
+        <td>
+          <div class="ops">
+            <button class="btn btn-sub" data-act="token" ${disabled}>重新生成Token</button>
+            <button class="btn btn-sub" data-act="save" ${disabled}>保存用户名</button>
+            <button class="btn btn-danger" data-act="del" ${disabled}>删除</button>
+          </div>
+        </td>
+      </tr>
+    `;
+  }
+
+  function renderTable() {
+    const rows = Array.isArray(usersCache) ? usersCache : [];
+    if (!rows.length) {
+      ui.tbody.innerHTML = '<tr><td class="empty" colspan="5">暂无可管理账户</td></tr>';
+      return;
+    }
+    ui.tbody.innerHTML = rows.map(rowHtml).join("");
+  }
+
+  async function loadUsers() {
+    const res = await apiFetch("/admin/users", { method: "GET" });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data?.ok === false) {
+      throw new Error(String(data?.error || `HTTP ${res.status}`));
+    }
+    usersCache = Array.isArray(data?.users) ? data.users : [];
+    currentUid = String(data?.current_uid || currentUid || "");
+    renderTable();
+  }
+
+  function openPermModalForCreate() {
+    permModalState.mode = "create";
+    permModalState.targetUid = "";
+    permModalState.workingPerm = Number(createPermValue || 0);
+    permModalState.saving = false;
+    ui.permTitle.textContent = "设置创建账户权限";
+    ui.permSub.textContent = `当前权限：${permLabelText(permModalState.workingPerm)}`;
+    renderPermList();
+    ui.permMask.classList.add("show");
+  }
+
+  function openPermModalForUser(rowEl) {
+    const uid = String(rowEl?.getAttribute("data-uid") || "").trim();
+    const perm = Number(rowEl?.getAttribute("data-perm") || 0);
+    if (!uid || uid === currentUid) return;
+    permModalState.mode = "edit";
+    permModalState.targetUid = uid;
+    permModalState.workingPerm = Number(perm || 0);
+    permModalState.saving = false;
+    ui.permTitle.textContent = "修改账户权限";
+    ui.permSub.textContent = `UID: ${uid} · 当前权限：${permLabelText(permModalState.workingPerm)}`;
+    renderPermList();
+    ui.permMask.classList.add("show");
+  }
+
+  function closePermModal(force = false) {
+    if (permModalState.saving && !force) return;
+    ui.permMask.classList.remove("show");
+  }
+
+  function renderPermList() {
+    if (!ui.permList) return;
+    const rows = permItems.map((item) => {
+      const bit = Number(item?.bit || 0);
+      const checked = (permModalState.workingPerm & bit) === bit ? "checked" : "";
+      const key = String(item?.key || "");
+      const label = String(item?.label || key);
+      return `
+        <div class="perm-item">
+          <label>
+            <span>${esc(label)} <code>${esc(key)} (${bit})</code></span>
+            <input type="checkbox" data-bit="${bit}" ${checked} />
+          </label>
+        </div>
+      `;
+    });
+    ui.permList.innerHTML = rows.join("");
+  }
+
+  function recalcModalPermFromInputs() {
+    if (!ui.permList) return;
+    const checks = Array.from(ui.permList.querySelectorAll('input[type="checkbox"][data-bit]'));
+    let sum = 0;
+    checks.forEach((el) => {
+      const bit = Number(el.getAttribute("data-bit") || 0);
+      if (el.checked) sum |= bit;
+    });
+    permModalState.workingPerm = sum;
+    const prefix = permModalState.mode === "edit" ? `UID: ${permModalState.targetUid} · ` : "";
+    ui.permSub.textContent = `${prefix}当前权限：${permLabelText(permModalState.workingPerm)}`;
+  }
+
+  async function savePermModal() {
+    if (permModalState.saving) return;
+    permModalState.saving = true;
+    ui.permSaveBtn.disabled = true;
+    try {
+      if (permModalState.mode === "create") {
+        createPermValue = Number(permModalState.workingPerm || 0);
+        setCreatePermPreview();
+        closePermModal(true);
+        showNotice("创建权限已更新");
+        return;
+      }
+      const uid = String(permModalState.targetUid || "").trim();
+      if (!uid) throw new Error("目标用户无效");
+      const res = await apiFetch(`/admin/users/${encodeURIComponent(uid)}/permissions`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ perm: Number(permModalState.workingPerm || 0) }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data?.ok === false) throw new Error(String(data?.error || `HTTP ${res.status}`));
+      closePermModal(true);
+      showNotice("权限更新成功");
+      await loadUsers();
+    } catch (e) {
+      showNotice(`权限更新失败：${String(e?.message || e)}`);
+    } finally {
+      permModalState.saving = false;
+      ui.permSaveBtn.disabled = false;
+    }
+  }
+
+  async function createUser() {
+    const name = String(ui.createName.value || "").trim();
+    if (!name) {
+      showNotice("请输入用户名");
+      return;
+    }
+
+    ui.createBtn.disabled = true;
+    try {
+      const res = await apiFetch("/admin/users", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, perm: Number(createPermValue || 0), token: null }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data?.ok === false) throw new Error(String(data?.error || `HTTP ${res.status}`));
+      ui.createName.value = "";
+      showNotice("创建成功（Token已自动生成）");
+      await loadUsers();
+    } catch (e) {
+      showNotice(`创建失败：${String(e?.message || e)}`);
+    } finally {
+      ui.createBtn.disabled = false;
+    }
+  }
+
+  async function saveNameRow(rowEl) {
+    const uid = String(rowEl?.getAttribute("data-uid") || "").trim();
+    if (!uid || uid === currentUid) return;
+    const nameEl = rowEl.querySelector('input[data-field="name"]');
+    const name = String(nameEl?.value || "").trim();
+    if (!name) {
+      showNotice("用户名不能为空");
+      return;
+    }
+
+    const saveBtn = rowEl.querySelector('button[data-act="save"]');
+    if (saveBtn) saveBtn.disabled = true;
+    try {
+      const res = await apiFetch(`/admin/users/${encodeURIComponent(uid)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data?.ok === false) throw new Error(String(data?.error || `HTTP ${res.status}`));
+      showNotice("用户名已保存");
+      await loadUsers();
+    } catch (e) {
+      showNotice(`保存失败：${String(e?.message || e)}`);
+      if (saveBtn) saveBtn.disabled = false;
+    }
+  }
+
+  async function resetTokenRow(rowEl) {
+    const uid = String(rowEl?.getAttribute("data-uid") || "").trim();
+    if (!uid || uid === currentUid) return;
+    const ok = window.confirm(`确定为 ${uid} 重新生成 Token 吗？`);
+    if (!ok) return;
+
+    const tokenBtn = rowEl.querySelector('button[data-act="token"]');
+    if (tokenBtn) tokenBtn.disabled = true;
+    try {
+      const res = await apiFetch(`/admin/users/${encodeURIComponent(uid)}/token/reset`, { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data?.ok === false) throw new Error(String(data?.error || `HTTP ${res.status}`));
+      showNotice("Token 已重新生成");
+      await loadUsers();
+    } catch (e) {
+      showNotice(`重置 Token 失败：${String(e?.message || e)}`);
+      if (tokenBtn) tokenBtn.disabled = false;
+    }
+  }
+
+  async function deleteRow(rowEl) {
+    const uid = String(rowEl?.getAttribute("data-uid") || "").trim();
+    if (!uid || uid === currentUid) return;
+    const ok = window.confirm(`确定删除账户 ${uid} 吗？此操作不可恢复。`);
+    if (!ok) return;
+
+    const delBtn = rowEl.querySelector('button[data-act="del"]');
+    if (delBtn) delBtn.disabled = true;
+    try {
+      const res = await apiFetch(`/admin/users/${encodeURIComponent(uid)}`, { method: "DELETE" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data?.ok === false) throw new Error(String(data?.error || `HTTP ${res.status}`));
+      showNotice("删除成功");
+      await loadUsers();
+    } catch (e) {
+      showNotice(`删除失败：${String(e?.message || e)}`);
+      if (delBtn) delBtn.disabled = false;
+    }
+  }
+
+  ui.createBtn?.addEventListener("click", createUser);
+  ui.createPermBtn?.addEventListener("click", openPermModalForCreate);
+  ui.permCloseBtn?.addEventListener("click", closePermModal);
+  ui.permMask?.addEventListener("click", (e) => {
+    if (e.target === ui.permMask) closePermModal();
+  });
+  ui.permList?.addEventListener("change", (e) => {
+    const target = e.target;
+    if (!(target instanceof HTMLInputElement)) return;
+    if (target.type !== "checkbox") return;
+    recalcModalPermFromInputs();
+  });
+  ui.permAllOffBtn?.addEventListener("click", () => {
+    permModalState.workingPerm = 0;
+    renderPermList();
+    recalcModalPermFromInputs();
+  });
+  ui.permAllOnBtn?.addEventListener("click", () => {
+    let all = 0;
+    permItems.forEach((x) => { all |= Number(x?.bit || 0); });
+    permModalState.workingPerm = all;
+    renderPermList();
+    recalcModalPermFromInputs();
+  });
+  ui.permSaveBtn?.addEventListener("click", savePermModal);
+
+  ui.tbody?.addEventListener("click", (e) => {
+    const target = e.target;
+    if (!(target instanceof HTMLElement)) return;
+    const act = target.getAttribute("data-act");
+    if (!act) return;
+    const rowEl = target.closest("tr");
+    if (!rowEl) return;
+    if (act === "perm") openPermModalForUser(rowEl);
+    if (act === "save") saveNameRow(rowEl);
+    if (act === "token") resetTokenRow(rowEl);
+    if (act === "del") deleteRow(rowEl);
+  });
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closePermModal();
+  });
+
+  (async () => {
+    try {
+      if (!getAuthToken()) {
+        location.href = "/";
+        return;
+      }
+      const ok = await ensureAdminOrRedirect();
+      if (!ok) return;
+      await loadPermissionDefs();
+      await loadUsers();
+    } catch (e) {
+      showNotice(`初始化失败：${String(e?.message || e)}`);
+    }
+  })();
+</script>
+</body>
+</html>

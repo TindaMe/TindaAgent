@@ -1,0 +1,2108 @@
+from __future__ import annotations
+
+import json
+import logging
+import re
+import threading
+import time
+import uuid
+from pathlib import Path
+
+from fastapi import FastAPI
+from fastapi import HTTPException
+from fastapi import Query
+from fastapi import Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from pydantic import BaseModel, Field
+
+from TindaAgent.Process.AI.agent import Agent
+from TindaAgent.Process.AI.client import LLMClient
+from TindaAgent.Process.Security import (
+    get_current_principal,
+    get_current_user as sec_get_current_user,
+    has_perm as sec_has_perm,
+    push_current_user,
+    reset_current_user,
+)
+from TindaAgent.Permission import perm_labels
+from TindaAgent.User import userdata
+from TindaAgent.Process.Architecture import perm
+from TindaAgent.Process.Architecture.versioning import get_app_version
+from TindaAgent.Process.Architecture.migration import bootstrap_storage
+from TindaAgent.Process.Architecture.paths import (
+    get_chat_records_root,
+    get_legacy_log_root,
+    get_log_root,
+    get_legacy_sessions_root,
+    get_sessions_root,
+)
+from TindaAgent.Process.Observability import audit_event
+from TindaAgent.Web.session_store import SessionStore, SessionStoreError, cleanup_legacy_chat_records
+from TindaAgent.Web.tool_runtime import ToolRuntimeManager
+
+app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+logger = logging.getLogger("tinda.web")
+_THIS_FILE = str(Path(__file__).resolve())
+
+
+def _infer_http_op_type(method: str, path: str) -> str:
+    m = str(method or "").upper()
+    p = str(path or "")
+    if "/tool" in p:
+        return "TOOL_EXECUTE"
+    if p.startswith("/admin") or p.startswith("/auth") or p.startswith("/user") or p.startswith("/users"):
+        return "SYSTEM_EXECUTE" if m != "GET" else "SYSTEM_READ"
+    if p.startswith("/chat") or p.startswith("/model"):
+        return "SYSTEM_EXECUTE" if m != "GET" else "SYSTEM_READ"
+    if m == "GET":
+        return "PUBLIC_READ"
+    return "PUBLIC_WRITE"
+
+_client = LLMClient()
+_title_client = LLMClient(model="deepseek-v4-flash")
+_compress_client = LLMClient(model="deepseek-v4-flash")
+
+_MIGRATION = bootstrap_storage()
+_SESSIONS_ROOT = get_sessions_root()
+_store = SessionStore(_SESSIONS_ROOT, legacy_root_dir=get_legacy_sessions_root())
+_tool_runtime = ToolRuntimeManager()
+
+_cleanup_flag_file = _SESSIONS_ROOT / ".legacy_cleaned"
+if not _cleanup_flag_file.exists():
+    cleanup_legacy_chat_records(get_chat_records_root())
+    _cleanup_flag_file.parent.mkdir(parents=True, exist_ok=True)
+    _cleanup_flag_file.write_text("ok\n", encoding="utf-8")
+
+_sessions: dict[str, Agent] = {}
+_session_last_access: dict[str, float] = {}
+_MAX_SESSIONS = 300
+_LLM_EXECUTE_PERM = int(perm.PUBLIC_EXECUTE)
+
+_MODEL_CHOICES: tuple[dict[str, str], ...] = (
+    {"id": "deepseek-chat", "label": "deepseek-chat"},
+    {"id": "deepseek-v4-pro", "label": "deepseek-pro"},
+    {"id": "deepseek-reasoner", "label": "deepseek-reasoner"},
+    {"id": "deepseek-v4-flash", "label": "deepseek-v4-flash"},
+)
+_MODEL_ALIAS: dict[str, str] = {
+    "deepseek-chat": "deepseek-chat",
+    "chat": "deepseek-chat",
+    "deepseek-v4-pro": "deepseek-v4-pro",
+    "deepseek-pro": "deepseek-v4-pro",
+    "pro": "deepseek-v4-pro",
+    "deepseek-reasoner": "deepseek-reasoner",
+    "reasoner": "deepseek-reasoner",
+    "deepseek-v4-flash": "deepseek-v4-flash",
+    "v4-flash": "deepseek-v4-flash",
+    "flash": "deepseek-v4-flash",
+}
+
+_APP_VERSION = get_app_version()
+
+_HTML_HOME = (Path(__file__).parent / "home.html").read_text(encoding="utf-8")
+_HTML_CHAT = (Path(__file__).parent / "chat.html").read_text(encoding="utf-8")
+_HTML_USER_ADMIN = (Path(__file__).parent / "user_admin.html").read_text(encoding="utf-8")
+_HTML_LOG_VIEW = (Path(__file__).parent / "logs.html").read_text(encoding="utf-8")
+_LOG_ROOT = get_log_root()
+_LOG_MAX_READ_BYTES = 2 * 1024 * 1024
+_AUTH_OPEN_PATHS = {
+    "/",
+    "/chat",
+    "/app",
+    "/logs",
+    "/system/version",
+    "/user-admin",
+    "/auth/users",
+    "/auth/status",
+    "/auth/select-user",
+}
+
+
+class ChatRequest(BaseModel):
+    message: str
+    session_id: str
+    meta_user_name: str | None = None
+    meta_user_id: str | None = None
+    meta_user_perm: str | None = None
+    meta_time_iso: str | None = None
+    meta_time_text: str | None = None
+
+
+class ModelSwitchRequest(BaseModel):
+    model: str
+
+
+class SessionCreateRequest(BaseModel):
+    title: str | None = "新对话"
+    current_session_id: str | None = None
+    reuse_if_current_empty: bool = False
+
+
+class SessionTitleRequest(BaseModel):
+    title: str
+
+
+class SessionCompressRequest(BaseModel):
+    session_id: str
+
+
+class SessionMessagesQuery(BaseModel):
+    include_hidden: bool = False
+
+
+class ToolJobCreateRequest(BaseModel):
+    session_id: str
+    command: str
+
+
+class SessionEventsRequest(BaseModel):
+    session_id: str
+    entries: list[dict] = Field(default_factory=list)
+
+
+class ResetRequest(BaseModel):
+    session_id: str | None = None
+
+
+class ToolLegacyRequest(BaseModel):
+    session_id: str
+
+
+class UserProfileResponse(BaseModel):
+    name: str
+    uid: str
+    perm: int
+    perm_label: str
+    token: str
+
+
+class UserSwitchRequest(BaseModel):
+    uid: str
+
+
+class UserCreateRequest(BaseModel):
+    name: str
+    perm: int
+    token: str | None = None
+
+
+class UserUpdateRequest(BaseModel):
+    name: str | None = None
+    perm: int | None = None
+    token: str | None = None
+
+
+class UserPermUpdateRequest(BaseModel):
+    perm: int
+
+
+def _now_iso() -> str:
+    from datetime import datetime
+
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def _normalize_model_choice(raw: str | None) -> str | None:
+    key = str(raw or "").strip().lower()
+    if not key:
+        return None
+    return _MODEL_ALIAS.get(key)
+
+
+def _sanitize_meta_value(value: str | None, max_len: int = 240) -> str:
+    text = str(value or "").strip().replace("\r", " ").replace("\n", " ")
+    if not text:
+        return "N/A"
+    return text[:max_len]
+
+
+def _build_user_message_with_meta(
+    raw_message: str,
+    *,
+    meta_user_name: str | None,
+    meta_user_id: str | None,
+    meta_user_perm: str | None,
+    meta_time_iso: str | None,
+    meta_time_text: str | None,
+) -> str:
+    message = str(raw_message or "")
+    if "[USER_META]" in message and "[/USER_META]" in message:
+        return message
+
+    block = (
+        "\n\n---\n"
+        "[USER_META]\n"
+        f"name: {_sanitize_meta_value(meta_user_name)}\n"
+        f"uid: {_sanitize_meta_value(meta_user_id)}\n"
+        f"perm: {_sanitize_meta_value(meta_user_perm)}\n"
+        f"time_iso: {_sanitize_meta_value(meta_time_iso)}\n"
+        f"time_text: {_sanitize_meta_value(meta_time_text)}\n"
+        "[/USER_META]"
+    )
+    return f"{message}{block}" if message else block.strip()
+
+
+def _strip_user_meta_block(content: str) -> str:
+    text = str(content or "")
+    marker_start = text.find("\n\n---\n[USER_META]")
+    if marker_start >= 0:
+        return text[:marker_start].rstrip()
+    return text
+
+
+def _perm_label(p: int) -> str:
+    labels = perm_labels(int(p))
+    return " | ".join(labels) if labels else ("NONE" if int(p) == 0 else str(p))
+
+
+_TOOL_EXEC_INTENT_PATTERNS: tuple[str, ...] = (
+    r"/tool\b",
+    r"/tools\b",
+    r"call_backend_tool",
+    r"list_available_tools",
+    r"(调用|执行|运行|测试|验证|遍历|重试).{0,6}工具",
+    r"工具.{0,6}(调用|执行|运行|测试|验证|遍历|重试)",
+    r"(run|call|invoke).{0,10}tool",
+    r"tool.{0,10}(run|call|invoke|test|verify)",
+)
+
+_TOOL_CLAIM_PATTERNS: tuple[str, ...] = (
+    r"--调用工具中--",
+    r"\[tool\]",
+    r"tool:\s*[a-z_][a-z0-9_]*",
+    r"10\s*/\s*10",
+    r"(全部|全都|所有).{0,8}(成功|通过|正常)",
+    r"工具链.{0,8}(稳定|正常|通过|无错误)",
+    r"可用工具列表",
+)
+
+_KNOWN_TOOL_NAMES: tuple[str, ...] = (
+    "echo",
+    "get_tinda_profile",
+    "get_current_time",
+    "summarize_text",
+    "extract_keywords",
+    "read_profile_snippet",
+    "read_memories",
+    "save_memory",
+    "delete_memory",
+    "admin_noop",
+    "list_available_tools",
+    "call_backend_tool",
+)
+
+_TERMINAL_DUMP_PATTERNS: tuple[str, ...] = (
+    r"(?im)^\s*\[tool\]\s+",
+    r"(?im)^\s*tool:\s*[a-z_][a-z0-9_]*(?:\s+#tc_\d+)?\s*$",
+    r"(?im)^\s*[-]{16,}\s*$",
+    r"(?m)^────────────────",
+)
+
+
+def _is_tool_execution_intent(text: str) -> bool:
+    raw = str(text or "")
+    if not raw.strip():
+        return False
+    for pattern in _TOOL_EXEC_INTENT_PATTERNS:
+        if re.search(pattern, raw, flags=re.IGNORECASE):
+            return True
+    return False
+
+
+def _looks_like_tool_execution_claim(text: str) -> bool:
+    raw = str(text or "")
+    if not raw.strip():
+        return False
+    hits = 0
+    for pattern in _TOOL_CLAIM_PATTERNS:
+        if re.search(pattern, raw, flags=re.IGNORECASE):
+            hits += 1
+    lower = raw.lower()
+    tool_name_hits = sum(1 for name in _KNOWN_TOOL_NAMES if name in lower)
+    if tool_name_hits >= 3:
+        hits += 1
+    return hits >= 2
+
+
+def _has_real_tool_execution(tool_steps: int, tool_trace: list[dict] | None) -> bool:
+    if int(tool_steps) > 0:
+        return True
+    return isinstance(tool_trace, list) and len(tool_trace) > 0
+
+
+def _looks_like_terminal_dump(text: str) -> bool:
+    raw = str(text or "")
+    if not raw.strip():
+        return False
+    score = 0
+    for pattern in _TERMINAL_DUMP_PATTERNS:
+        if re.search(pattern, raw):
+            score += 1
+    if raw.count("[tool]") >= 2:
+        score += 1
+    if raw.count("\n") >= 24 and len(raw) >= 1200:
+        score += 1
+    if raw.count("\"tool_name\"") >= 2:
+        score += 1
+    return score >= 3
+
+
+def _tool_execution_summary_reply(tool_steps: int, tool_trace: list[dict] | None) -> str:
+    trace = tool_trace if isinstance(tool_trace, list) else []
+    names: list[str] = []
+    for step in trace:
+        if not isinstance(step, dict):
+            continue
+        name = str(step.get("agent_tool", "")).strip()
+        if not name:
+            continue
+        if name not in names:
+            names.append(name)
+    count = len(trace)
+    if count <= 0 and int(tool_steps) > 0:
+        count = int(tool_steps)
+    if names:
+        preview = "、".join(names[:5]) + (" 等" if len(names) > 5 else "")
+        return f"本轮已执行 {count} 个工具（{preview}）。详细调用过程已写入终端。"
+    if count > 0:
+        return f"本轮已执行 {count} 个工具。详细调用过程已写入终端。"
+    return "工具调用明细已写入终端。"
+
+
+def _sanitize_terminal_dump_reply(
+    *,
+    reply_text: str,
+    tool_steps: int,
+    tool_trace: list[dict] | None,
+) -> str:
+    raw = str(reply_text or "")
+    if not raw.strip():
+        return raw
+    if not _looks_like_terminal_dump(raw):
+        return raw
+    return _tool_execution_summary_reply(tool_steps, tool_trace)
+
+
+def _build_tool_execution_guard_reply(tool_steps: int, tool_trace: list[dict] | None) -> str:
+    trace_count = len(tool_trace or [])
+    return (
+        "工具执行校验未通过：本轮未检测到真实工具调用。\n"
+        f"校验结果：tool_steps={int(tool_steps)}，tool_trace={int(trace_count)}。\n"
+        "当前“执行成功/全通过”内容属于模型文本，不是后端工具执行结果。\n"
+        "请改用 `/tool <工具名> ...`，或让我按结构化工具调用重新执行。"
+    )
+
+
+def _guard_fake_tool_claim(
+    *,
+    user_text: str,
+    reply_text: str,
+    tool_steps: int,
+    tool_trace: list[dict] | None,
+) -> str | None:
+    if _has_real_tool_execution(tool_steps, tool_trace):
+        return None
+    if not _is_tool_execution_intent(user_text):
+        return None
+    if not _looks_like_tool_execution_claim(reply_text):
+        return None
+    return _build_tool_execution_guard_reply(tool_steps, tool_trace)
+
+
+def _sanitize_tool_trace_for_user(trace: list[dict] | None) -> list[dict]:
+    if not isinstance(trace, list):
+        return []
+    out: list[dict] = []
+    for step in trace:
+        if not isinstance(step, dict):
+            continue
+        row = dict(step)
+        result = row.get("result")
+        if isinstance(result, dict):
+            err_code = str(result.get("error_code", "") or "")
+            if err_code == "permission_denied" and result.get("expose_to_user") is False:
+                safe = dict(result)
+                safe["error"] = str(result.get("user_message") or "该工具当前不可用，请尝试其它方式。")
+                safe.pop("llm_message", None)
+                safe.pop("missing_perm_labels", None)
+                safe.pop("required_perm_labels", None)
+                safe.pop("required_perm_bits", None)
+                safe.pop("user_perm", None)
+                safe.pop("user_perm_labels", None)
+                row["result"] = safe
+        out.append(row)
+    return out
+
+
+def _get_web_profile(user: userdata.UserManager | None = None) -> UserProfileResponse:
+    current = user or sec_get_current_user()
+    if current is None:
+        return UserProfileResponse(name="", uid="", perm=0, perm_label="NONE", token="")
+    info = userdata.export_public_user(current)
+    perm_value = int(info.get("perm", 0))
+    return UserProfileResponse(
+        name=str(info.get("name", "")),
+        uid=str(info.get("uid", "")),
+        perm=perm_value,
+        perm_label=_perm_label(perm_value),
+        token=str(info.get("token", "")),
+    )
+
+
+def _touch_session_cache(session_id: str) -> None:
+    _session_last_access[session_id] = time.time()
+
+
+def _audit_web(op_type: str, func: str, content: str, extra: dict | None = None) -> int:
+    return audit_event(
+        op_type=op_type,
+        subsystem="web",
+        func=func,
+        file_path=_THIS_FILE,
+        content=content,
+        extra=extra,
+    )
+
+
+def _resolve_user_from_token_header(request: Request) -> userdata.UserManager | None:
+    token = str(request.headers.get("X-User-Token", "")).strip()
+    if not token:
+        return None
+    user = userdata.get_user_from_token(token)
+    if user is None or userdata.is_system_user(user):
+        return None
+    return user
+
+
+@app.middleware("http")
+async def audit_http_requests(request: Request, call_next):
+    start_ms = int(time.time() * 1000)
+    method = str(request.method or "").upper()
+    path = str(request.url.path or "")
+    op_type = _infer_http_op_type(method, path)
+    endpoint_name = "unknown"
+    # 鉴权中间件（token -> SecurityContext），对公开入口放行；
+    # 若公开入口携带了有效 token，也注入上下文以统一后续逻辑与审计 uid。
+    path_only = path.split("?", 1)[0]
+    need_auth = not (
+        path_only in _AUTH_OPEN_PATHS
+        or path_only.startswith("/static/")
+        or path_only.startswith("/assets/")
+    )
+    ctx_tokens = None
+    try:
+        user = _resolve_user_from_token_header(request)
+        if need_auth:
+            if user is None:
+                _audit_web(
+                    "SYSTEM_READ",
+                    "auth_middleware",
+                    f"invalid or missing token for {method} {path}",
+                    {"ok": False, "path": path},
+                )
+                return JSONResponse({"detail": "not logged in"}, status_code=401)
+        if user is not None:
+            ctx_tokens = push_current_user(user)
+
+        response = await call_next(request)
+        endpoint = request.scope.get("endpoint")
+        if endpoint is not None:
+            endpoint_name = str(getattr(endpoint, "__name__", "unknown"))
+        principal = get_current_principal()
+        uid = str(principal.uid) if principal is not None else ""
+        _audit_web(
+            op_type,
+            f"http.{endpoint_name}",
+            f"{method} {path} -> {int(getattr(response, 'status_code', 0) or 0)}",
+            {
+                "method": method,
+                "path": path,
+                "status_code": int(getattr(response, "status_code", 0) or 0),
+                "duration_ms": max(0, int(time.time() * 1000) - start_ms),
+                "uid": uid,
+            },
+        )
+        return response
+    except Exception as e:
+        endpoint = request.scope.get("endpoint")
+        if endpoint is not None:
+            endpoint_name = str(getattr(endpoint, "__name__", "unknown"))
+        principal = get_current_principal()
+        uid = str(principal.uid) if principal is not None else ""
+        _audit_web(
+            op_type,
+            f"http.{endpoint_name}",
+            f"{method} {path} -> exception {e}",
+            {
+                "method": method,
+                "path": path,
+                "ok": False,
+                "error": str(e),
+                "duration_ms": max(0, int(time.time() * 1000) - start_ms),
+                "uid": uid,
+            },
+        )
+        raise
+    finally:
+        if ctx_tokens is not None:
+            reset_current_user(ctx_tokens)
+
+
+def _evict_if_needed() -> None:
+    if len(_sessions) < _MAX_SESSIONS:
+        return
+    oldest = min(_session_last_access.items(), key=lambda x: x[1])[0]
+    _sessions.pop(oldest, None)
+    _session_last_access.pop(oldest, None)
+
+
+def _is_tool_command_text(content: str) -> bool:
+    raw = str(content or "").strip().lower()
+    return raw.startswith("/tool") or raw.startswith("/tools") or raw.startswith("/help")
+
+
+def _store_to_agent_messages(rows: list[dict]) -> tuple[list[dict], dict[str, int]]:
+    out: list[dict] = []
+    stats = {
+        "input_rows": int(len(rows or [])),
+        "skipped_entry_type": 0,
+        "skipped_role": 0,
+        "skipped_empty": 0,
+        "skipped_tool_cmd": 0,
+        "included_chat": 0,
+        "included_notice": 0,
+    }
+    for item in rows:
+        entry_type = str(item.get("entry_type", "chat")).strip() or "chat"
+        # 严格过滤：仅 chat/notice 允许进入 LLM 上下文
+        if entry_type not in {"chat", "notice"}:
+            stats["skipped_entry_type"] += 1
+            continue
+        role = str(item.get("role", "")).strip()
+        if role not in {"user", "assistant", "system"}:
+            stats["skipped_role"] += 1
+            continue
+        content = str(item.get("content", ""))
+        if not content.strip():
+            stats["skipped_empty"] += 1
+            continue
+        # /tool 命令保留在会话与终端，但不参与后续 LLM 上下文
+        if role == "user" and entry_type == "chat" and _is_tool_command_text(content):
+            stats["skipped_tool_cmd"] += 1
+            continue
+        if role == "system":
+            # Agent 不接受上下文里额外 system 角色，降级为 assistant 上下文提示
+            out.append({"role": "assistant", "content": f"[系统摘要] {content}"})
+            stats["included_notice"] += 1
+        else:
+            out.append({"role": role, "content": content})
+            if entry_type == "notice":
+                stats["included_notice"] += 1
+            else:
+                stats["included_chat"] += 1
+    return out, stats
+
+
+def _is_logged_in() -> bool:
+    return sec_get_current_user() is not None
+
+
+def _require_login() -> userdata.UserManager:
+    current = sec_get_current_user()
+    if current is None:
+        audit_event(
+            op_type="SYSTEM_READ",
+            subsystem="web",
+            func="_require_login",
+            file_path=_THIS_FILE,
+            content="require_login_failed",
+            extra={"ok": False},
+        )
+        raise HTTPException(status_code=401, detail="not logged in")
+    audit_event(
+        op_type="SYSTEM_READ",
+        subsystem="web",
+        func="_require_login",
+        file_path=_THIS_FILE,
+        content=f"require_login_ok uid={current.get_uid()}",
+        extra={"ok": True, "uid": str(current.get_uid())},
+    )
+    return current
+
+
+def _has_perm(user: userdata.UserManager, needed: int) -> bool:
+    try:
+        return sec_has_perm(int(needed))
+    except Exception:
+        try:
+            user_perm = int(user.get_perm())
+        except Exception:
+            user_perm = 0
+        return (user_perm & int(needed)) == int(needed)
+
+
+def _require_admin_user() -> userdata.UserManager:
+    current = _require_login()
+    # 管理面板要求满权限账号（USER_ADMIN），避免半管理员账号进入高危用户管理操作。
+    if not _has_perm(current, perm.USER_ADMIN):
+        audit_event(
+            op_type="SYSTEM_READ",
+            subsystem="web",
+            func="_require_admin_user",
+            file_path=_THIS_FILE,
+            content=f"require_admin_failed uid={current.get_uid()}",
+            extra={"ok": False, "uid": str(current.get_uid()), "perm": int(current.get_perm())},
+        )
+        raise HTTPException(status_code=403, detail="permission denied")
+    audit_event(
+        op_type="SYSTEM_READ",
+        subsystem="web",
+        func="_require_admin_user",
+        file_path=_THIS_FILE,
+        content=f"require_admin_ok uid={current.get_uid()}",
+        extra={"ok": True, "uid": str(current.get_uid())},
+    )
+    return current
+
+
+def _has_llm_perm(user: userdata.UserManager) -> bool:
+    return _has_perm(user, _LLM_EXECUTE_PERM)
+
+
+def _require_public_read_user() -> userdata.UserManager:
+    current = _require_login()
+    if not _has_perm(current, perm.PUBLIC_READ):
+        audit_event(
+            op_type="PUBLIC_READ",
+            subsystem="web",
+            func="_require_public_read_user",
+            file_path=_THIS_FILE,
+            content=f"require_public_read_failed uid={current.get_uid()}",
+            extra={"ok": False, "uid": str(current.get_uid()), "perm": int(current.get_perm())},
+        )
+        raise HTTPException(status_code=403, detail="permission denied")
+    audit_event(
+        op_type="PUBLIC_READ",
+        subsystem="web",
+        func="_require_public_read_user",
+        file_path=_THIS_FILE,
+        content=f"require_public_read_ok uid={current.get_uid()}",
+        extra={"ok": True, "uid": str(current.get_uid())},
+    )
+    return current
+
+
+def _as_user_row(user: userdata.UserManager, *, current_uid: str = "") -> dict:
+    up = int(user.get_perm())
+    return {
+        "uid": str(user.get_uid()),
+        "name": str(user.get_name()),
+        "perm": up,
+        "perm_label": _perm_label(up),
+        "token": str(user.get_token()),
+        "is_current": bool(current_uid and str(user.get_uid()) == current_uid),
+    }
+
+
+def _perm_items() -> list[dict]:
+    return [
+        {"bit": int(perm.PUBLIC_READ), "key": "PUBLIC_READ", "label": "公共读取"},
+        {"bit": int(perm.PUBLIC_WRITE), "key": "PUBLIC_WRITE", "label": "公共写入"},
+        {"bit": int(perm.PUBLIC_EXECUTE), "key": "PUBLIC_EXECUTE", "label": "公共执行"},
+        {"bit": int(perm.TOOL_READ), "key": "TOOL_READ", "label": "工具读取"},
+        {"bit": int(perm.TOOL_WRITE), "key": "TOOL_WRITE", "label": "工具写入"},
+        {"bit": int(perm.TOOL_EXECUTE), "key": "TOOL_EXECUTE", "label": "工具执行"},
+        {"bit": int(perm.SYSTEM_READ), "key": "SYSTEM_READ", "label": "系统读取"},
+        {"bit": int(perm.SYSTEM_WRITE), "key": "SYSTEM_WRITE", "label": "系统写入"},
+        {"bit": int(perm.SYSTEM_EXECUTE), "key": "SYSTEM_EXECUTE", "label": "系统执行"},
+    ]
+
+
+def _get_agent(session_id: str):
+    sid = str(session_id)
+    current = _require_login()
+    current_perm = int(current.get_perm())
+    if sid not in _sessions:
+        _evict_if_needed()
+        agent = Agent(
+            f"web-bot-{sid}",
+            user_perm=current_perm,
+            client=_client,
+            model_name=_client.model,
+        )
+        _sessions[sid] = agent
+    else:
+        # 会话 Agent 需实时跟随当前登录用户权限，避免工具可见性与鉴权失真
+        agent = _sessions[sid]
+        if int(getattr(agent, "perm", 0)) != current_perm:
+            agent.perm = current_perm
+            try:
+                agent.user.change_perm(current_perm)
+            except Exception:
+                pass
+    _touch_session_cache(sid)
+
+    # 每次都基于 store 的“有效上下文”回灌，确保压缩边界生效
+    rows = _store.get_context_messages(sid)
+    agent_rows, filter_stats = _store_to_agent_messages(rows)
+    _sessions[sid].replace_conversation(agent_rows)
+    _audit_web(
+        "SYSTEM_EXECUTE",
+        "_get_agent",
+        f"agent_ready session_id={sid}",
+        {
+            "session_id": sid,
+            "context_rows": len(rows),
+            "agent_rows": len(agent_rows),
+            "context_filter": filter_stats,
+            "model": _client.model,
+        },
+    )
+    return _sessions[sid]
+
+
+def _stringify_trace_value(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    try:
+        return json.dumps(value, ensure_ascii=False, indent=2)
+    except Exception:
+        return str(value)
+
+
+def _tool_trace_to_terminal_items(tool_trace: list[dict] | None) -> list[dict]:
+    if not isinstance(tool_trace, list) or not tool_trace:
+        return []
+
+    items: list[dict] = []
+    for step in tool_trace:
+        if not isinstance(step, dict):
+            continue
+
+        name = str(step.get("agent_tool", "") or "unknown_tool")
+        args_text = _stringify_trace_value(step.get("arguments", {}))
+        result = step.get("result")
+        call_id = ""
+        if isinstance(result, dict):
+            call_id = str(result.get("call_id", "") or "").strip()
+        if not call_id:
+            call_id = str(step.get("call_id", "") or "").strip()
+        if not call_id:
+            call_id = str(step.get("tool_call_id", "") or "").strip()
+        call_suffix = f" #{call_id}" if call_id else ""
+        items.append(
+            {
+                "id": f"m_{uuid.uuid4().hex[:16]}",
+                "role": "assistant",
+                "content": f"[tool] {name}{call_suffix} {args_text}",
+                "entry_type": "terminal",
+                "terminal_kind": "cmd",
+                "created_at": _now_iso(),
+                "is_summary": False,
+            }
+        )
+
+        out_lines: list[str] = []
+        if isinstance(result, dict):
+            if result.get("ok") is False:
+                if (
+                    str(result.get("error_code", "") or "") == "permission_denied"
+                    and result.get("expose_to_user") is False
+                ):
+                    out_lines.append(
+                        f"[error] {str(result.get('user_message') or '该工具当前不可用，请尝试其它方式。')}"
+                    )
+                else:
+                    out_lines.append(f"[error] {str(result.get('error') or '工具执行失败')}")
+            else:
+                tool_name = str(result.get("tool_name", "") or "").strip()
+                if tool_name:
+                    out_lines.append(f"tool: {tool_name}{call_suffix}")
+                stdout_text = str(result.get("stdout", "") or "")
+                if stdout_text.strip():
+                    out_lines.extend(stdout_text.split("\n"))
+                if "result" in result:
+                    rendered = _stringify_trace_value(result.get("result"))
+                    if rendered:
+                        out_lines.extend(rendered.split("\n"))
+                tools_obj = result.get("tools")
+                if isinstance(tools_obj, dict):
+                    out_lines.append("可用工具列表：")
+                    for k, v in tools_obj.items():
+                        out_lines.append(f"- {k}: {v}")
+        else:
+            raw = _stringify_trace_value(step.get("raw_result"))
+            if raw:
+                out_lines.extend(raw.split("\n"))
+
+        for line in out_lines:
+            items.append(
+                {
+                    "id": f"m_{uuid.uuid4().hex[:16]}",
+                    "role": "assistant",
+                    "content": str(line),
+                    "entry_type": "terminal",
+                    "terminal_kind": "out",
+                    "created_at": _now_iso(),
+                    "is_summary": False,
+                }
+            )
+
+        items.append(
+            {
+                "id": f"m_{uuid.uuid4().hex[:16]}",
+                "role": "assistant",
+                "content": "─" * 36,
+                "entry_type": "terminal",
+                "terminal_kind": "sep",
+                "created_at": _now_iso(),
+                "is_summary": False,
+            }
+        )
+    return items
+
+
+def _save_chat_messages(
+    session_id: str,
+    user_text: str,
+    assistant_text: str,
+    *,
+    tool_marker: bool = False,
+    tool_trace: list[dict] | None = None,
+) -> None:
+    items = [
+        {
+            "id": f"m_{uuid.uuid4().hex[:16]}",
+            "role": "user",
+            "content": _strip_user_meta_block(user_text),
+            "entry_type": "chat",
+            "created_at": _now_iso(),
+            "is_summary": False,
+        },
+        {
+            "id": f"m_{uuid.uuid4().hex[:16]}",
+            "role": "assistant",
+            "content": assistant_text,
+            "entry_type": "chat",
+            "created_at": _now_iso(),
+            "is_summary": False,
+        },
+    ]
+    if tool_marker:
+        items.append(
+            {
+                "id": f"m_{uuid.uuid4().hex[:16]}",
+                "role": "assistant",
+                "content": "> --调用工具中--",
+                "entry_type": "tool_marker",
+                "created_at": _now_iso(),
+                "is_summary": False,
+            }
+        )
+    items.extend(_tool_trace_to_terminal_items(tool_trace))
+    _store.append_messages(session_id, items)
+    _audit_web(
+        "PUBLIC_WRITE",
+        "_save_chat_messages",
+        f"chat_messages_saved session_id={session_id}",
+        {
+            "session_id": session_id,
+            "items_count": len(items),
+            "tool_marker": bool(tool_marker),
+            "tool_trace_count": len(tool_trace or []),
+        },
+    )
+
+
+def _persist_terminal_events(session_id: str, events: list[dict]) -> None:
+    rows: list[dict] = []
+    for e in events:
+        if e.get("type") != "terminal":
+            continue
+        kind = str(e.get("kind", "out")).strip() or "out"
+        if kind not in {"cmd", "out", "sep"}:
+            kind = "out"
+        rows.append(
+            {
+                "id": f"m_{uuid.uuid4().hex[:16]}",
+                "role": "assistant",
+                "content": str(e.get("text", "")),
+                "entry_type": "terminal",
+                "terminal_kind": kind,
+                "created_at": str(e.get("ts", "")) or _now_iso(),
+                "is_summary": False,
+            }
+        )
+    if rows:
+        _store.append_messages(session_id, rows)
+    _audit_web(
+        "PUBLIC_WRITE",
+        "_persist_terminal_events",
+        f"terminal_events_persisted session_id={session_id}",
+        {"session_id": session_id, "incoming_events": len(events), "saved_rows": len(rows)},
+    )
+
+
+def _generate_title_from_first_round(session_id: str) -> None:
+    current = sec_get_current_user()
+    if current is None or not _has_llm_perm(current):
+        return
+
+    pair = _store.maybe_first_round_messages(session_id)
+    if not pair:
+        _audit_web(
+            "SYSTEM_EXECUTE",
+            "_generate_title_from_first_round",
+            f"skip_generate_title_no_pair session_id={session_id}",
+            {"session_id": session_id},
+        )
+        return
+
+    meta = _store.get_session(session_id) or {}
+    if str(meta.get("title", "")).strip() not in {"", "新对话"}:
+        _audit_web(
+            "SYSTEM_EXECUTE",
+            "_generate_title_from_first_round",
+            f"skip_generate_title_existing_title session_id={session_id}",
+            {"session_id": session_id, "title": str(meta.get("title", ""))},
+        )
+        return
+
+    user_msg, assistant_msg = pair
+
+    def run() -> None:
+        prompt = (
+            "请根据以下对话生成一个不超过 15 字的简洁标题，"
+            "直接返回标题文本，不要加引号或说明。\n\n"
+            f"用户：{user_msg}\n"
+            f"助手：{assistant_msg}"
+        )
+        try:
+            title = _title_client.chat(
+                [
+                    {"role": "system", "content": "你是对话标题生成助手。"},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.3,
+            )
+            clean = str(title or "").strip().strip('"\'')
+            if clean:
+                _store.set_session_title(session_id, clean[:15])
+                _audit_web(
+                    "PUBLIC_WRITE",
+                    "_generate_title_from_first_round.run",
+                    f"generate_title_done session_id={session_id}",
+                    {"session_id": session_id, "title": clean[:15]},
+                )
+        except Exception as e:
+            logger.warning("generate session title failed: session=%s err=%s", session_id, e)
+            _audit_web(
+                "SYSTEM_EXECUTE",
+                "_generate_title_from_first_round.run",
+                f"generate_title_failed session_id={session_id} err={e}",
+                {"session_id": session_id, "ok": False, "error": str(e)},
+            )
+
+    threading.Thread(target=run, daemon=True, name=f"title-gen-{session_id}").start()
+
+
+def _compress_messages_with_llm(rows: list[dict]) -> str:
+    parts: list[str] = []
+    for item in rows:
+        role = str(item.get("role", "")).strip() or "unknown"
+        content = str(item.get("content", "")).strip()
+        if not content:
+            continue
+        parts.append(f"{role}: {content}")
+    dialog = "\n".join(parts)
+    prompt = (
+        "你是对话摘要助手。请将以下多轮对话压缩为一段简洁摘要。"
+        "要求：保留关键信息（用户需求、重要决策、结论）；"
+        "保留技术细节（代码、配置、专有名词）；"
+        "使用第三人称陈述；压缩为原内容的 20% 到 30% 长度。"
+        "直接输出摘要内容，不要添加前缀或说明。\n\n"
+        f"对话内容：\n{dialog}"
+    )
+    text = _compress_client.chat(
+        [
+            {"role": "system", "content": "你是严谨的对话摘要助手。"},
+            {"role": "user", "content": prompt},
+        ],
+        temperature=0.3,
+    )
+    out = str(text or "").strip()
+    _audit_web(
+        "SYSTEM_EXECUTE",
+        "_compress_messages_with_llm",
+        "compress_messages_with_llm_done",
+        {"source_rows": len(rows), "summary_len": len(out)},
+    )
+    return out
+
+
+def _sse_event(name: str, data: dict) -> str:
+    payload = json.dumps(data, ensure_ascii=False)
+    return f"event: {name}\ndata: {payload}\n\n"
+
+
+def _safe_log_name(raw_name: str) -> str:
+    name = str(raw_name or "").strip()
+    if not name:
+        return ""
+    base = Path(name).name
+    if base != name:
+        return ""
+    if base.startswith("."):
+        return ""
+    return base
+
+
+def _read_log_tail(path: Path, *, max_lines: int, max_bytes: int) -> tuple[list[str], bool]:
+    size = int(path.stat().st_size)
+    read_bytes = min(max(1, int(max_bytes)), max(1, size))
+    seek_pos = max(0, size - read_bytes)
+    with path.open("rb") as fp:
+        if seek_pos > 0:
+            fp.seek(seek_pos)
+        data = fp.read(read_bytes)
+    text = data.decode("utf-8", errors="replace")
+    lines = text.splitlines()
+    if seek_pos > 0 and lines:
+        lines = lines[1:]
+    if len(lines) > max_lines:
+        lines = lines[-max_lines:]
+    truncated = seek_pos > 0
+    return lines, truncated
+
+
+def _resolve_log_file_path(safe_name: str) -> Path | None:
+    primary = _LOG_ROOT / safe_name
+    if primary.exists() and primary.is_file():
+        return primary
+    legacy = get_legacy_log_root() / safe_name
+    if legacy.exists() and legacy.is_file():
+        audit_event(
+            op_type="SYSTEM_READ",
+            subsystem="storage_migration",
+            func="_resolve_log_file_path",
+            file_path=_THIS_FILE,
+            content=f"legacy_fallback_read_log file={safe_name}",
+            extra={"legacy_file": str(legacy)},
+        )
+        return legacy
+    return None
+
+
+def _parse_event_id(raw: str | int | None) -> int | None:
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    text = text.lstrip("#")
+    if text.lower().startswith("tc_"):
+        text = text[3:]
+    if not re.fullmatch(r"\d{1,18}", text):
+        return None
+    try:
+        value = int(text)
+    except Exception:
+        return None
+    if value <= 0:
+        return None
+    return value
+
+
+def _resolve_total_jsonl_candidates() -> list[Path]:
+    rows: list[Path] = []
+    primary = _LOG_ROOT / "total.jsonl"
+    if primary.exists() and primary.is_file():
+        rows.append(primary)
+    legacy = get_legacy_log_root() / "total.jsonl"
+    if legacy.exists() and legacy.is_file():
+        try:
+            if legacy.resolve() != primary.resolve():
+                rows.append(legacy)
+        except Exception:
+            rows.append(legacy)
+    return rows
+
+
+def _find_audit_event_by_id(event_id: int) -> dict | None:
+    target = int(event_id)
+    for path in _resolve_total_jsonl_candidates():
+        try:
+            with path.open("r", encoding="utf-8") as fp:
+                for line_no, line in enumerate(fp, start=1):
+                    row_text = str(line).strip()
+                    if not row_text:
+                        continue
+                    try:
+                        row = json.loads(row_text)
+                    except Exception:
+                        continue
+                    try:
+                        rid = int(row.get("id", -1))
+                    except Exception:
+                        continue
+                    if rid != target:
+                        continue
+                    return {
+                        "event": row,
+                        "source_file": str(path.name),
+                        "source_path": str(path),
+                        "source_line": int(line_no),
+                    }
+        except Exception:
+            continue
+    return None
+
+
+@app.get("/", response_class=HTMLResponse)
+async def index():
+    return _HTML_HOME
+
+
+@app.get("/chat", response_class=HTMLResponse)
+async def chat_page_legacy():
+    return RedirectResponse(url="/", status_code=307)
+
+
+@app.get("/app", response_class=HTMLResponse)
+async def chat_page():
+    return _HTML_CHAT
+
+
+@app.get("/system/version")
+async def system_version():
+    return JSONResponse(
+        {
+            "ok": True,
+            "version": _APP_VERSION,
+            "display": f"v{_APP_VERSION}",
+        }
+    )
+
+
+@app.get("/logs", response_class=HTMLResponse)
+async def logs_page():
+    return _HTML_LOG_VIEW
+
+
+@app.get("/user-admin", response_class=HTMLResponse)
+async def user_admin_page():
+    return _HTML_USER_ADMIN
+
+
+@app.get("/auth/status")
+async def auth_status(request: Request):
+    # 公开接口：基于 header token 实时判断，不依赖全局状态。
+    current = sec_get_current_user() or _resolve_user_from_token_header(request)
+    if current is None:
+        return JSONResponse({"logged_in": False, "user": None})
+    p = _get_web_profile(current)
+    return JSONResponse(
+        {
+            "logged_in": True,
+            "user": {
+                "name": p.name,
+                "uid": p.uid,
+                "perm": p.perm,
+                "perm_label": p.perm_label,
+                "token": p.token,
+            },
+        }
+    )
+
+
+@app.post("/auth/select-user")
+async def auth_select_user(req: UserSwitchRequest, request: Request):
+    # 新模式下不再切服务端全局用户；前端切换后应携带目标 token 发起请求。
+    current = sec_get_current_user() or _resolve_user_from_token_header(request)
+    if current is None:
+        return JSONResponse(
+            {"ok": False, "logged_in": False, "user": None, "error": "not logged in"},
+            status_code=401,
+        )
+    p = _get_web_profile(current)
+    return JSONResponse(
+        {
+            "ok": True,
+            "logged_in": True,
+            "user": {
+                "name": p.name,
+                "uid": p.uid,
+                "perm": p.perm,
+                "perm_label": p.perm_label,
+                "token": p.token,
+            },
+        }
+    )
+
+
+@app.get("/auth/users")
+async def auth_users():
+    users = []
+    for u in userdata.iter_users():
+        if userdata.is_system_user(u):
+            continue
+        users.append(
+            {
+                "uid": str(u.get_uid()),
+                "name": str(u.get_name()),
+                "perm": int(u.get_perm()),
+                "perm_label": _perm_label(int(u.get_perm())),
+                "token": str(u.get_token()),
+            }
+        )
+    return JSONResponse({"users": users})
+
+
+@app.get("/user/profile")
+async def user_profile():
+    _require_login()
+    p = _get_web_profile()
+    return JSONResponse(
+        {
+            "name": p.name,
+            "uid": p.uid,
+            "perm": p.perm,
+            "perm_label": p.perm_label,
+            "token": p.token,
+        }
+    )
+
+
+@app.get("/users")
+async def list_users():
+    _require_login()
+    users = []
+    for u in userdata.iter_users():
+        if userdata.is_system_user(u):
+            continue
+        users.append(
+            {
+                "uid": str(u.get_uid()),
+                "name": str(u.get_name()),
+                "perm": int(u.get_perm()),
+                "perm_label": _perm_label(int(u.get_perm())),
+                "token": str(u.get_token()),
+            }
+        )
+    current = sec_get_current_user()
+    current_uid = str(current.get_uid()) if current is not None else ""
+    return JSONResponse({"users": users, "current_uid": current_uid})
+
+
+@app.get("/logs/files")
+async def list_log_files():
+    _require_public_read_user()
+    roots: list[Path] = []
+    if _LOG_ROOT.exists():
+        roots.append(_LOG_ROOT)
+    legacy = get_legacy_log_root()
+    if legacy.exists() and legacy.resolve() != _LOG_ROOT.resolve():
+        roots.append(legacy)
+    if not roots:
+        return JSONResponse({"ok": True, "files": []})
+
+    rows: list[dict] = []
+    seen: set[str] = set()
+    for root in roots:
+        for p in root.iterdir():
+            if not p.is_file():
+                continue
+            if p.name.startswith("."):
+                continue
+            if p.name in seen:
+                continue
+            try:
+                st = p.stat()
+            except Exception:
+                continue
+            from datetime import datetime
+
+            rows.append(
+                {
+                    "name": str(p.name),
+                    "size_bytes": int(st.st_size),
+                    "updated_at": datetime.fromtimestamp(st.st_mtime).astimezone().isoformat(timespec="seconds"),
+                }
+            )
+            seen.add(p.name)
+    rows.sort(key=lambda x: str(x.get("updated_at", "")), reverse=True)
+    return JSONResponse({"ok": True, "files": rows})
+
+
+@app.get("/logs/read")
+async def read_log_file(file: str = Query(...), lines: int = Query(300)):
+    _require_public_read_user()
+    safe_name = _safe_log_name(file)
+    if not safe_name:
+        return JSONResponse({"ok": False, "error": "invalid file name"}, status_code=400)
+
+    path = _resolve_log_file_path(safe_name)
+    if path is None:
+        return JSONResponse({"ok": False, "error": "file not found"}, status_code=404)
+
+    limit = max(20, min(int(lines), 2000))
+    try:
+        text_lines, truncated = _read_log_tail(
+            path,
+            max_lines=limit,
+            max_bytes=_LOG_MAX_READ_BYTES,
+        )
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": f"read failed: {e}"}, status_code=500)
+
+    return JSONResponse(
+        {
+            "ok": True,
+            "file": safe_name,
+            "line_count": len(text_lines),
+            "truncated": bool(truncated),
+            "lines": text_lines,
+        }
+    )
+
+
+@app.get("/logs/by-id")
+async def read_log_event_by_id(id: str = Query(...)):
+    _require_public_read_user()
+    parsed_id = _parse_event_id(id)
+    if parsed_id is None:
+        return JSONResponse({"ok": False, "error": "invalid id"}, status_code=400)
+    row = _find_audit_event_by_id(parsed_id)
+    if row is None:
+        return JSONResponse({"ok": False, "error": "id not found", "id": parsed_id}, status_code=404)
+    return JSONResponse(
+        {
+            "ok": True,
+            "id": parsed_id,
+            "event": row.get("event", {}),
+            "source_file": str(row.get("source_file", "")),
+            "source_path": str(row.get("source_path", "")),
+            "source_line": int(row.get("source_line", 0) or 0),
+        }
+    )
+
+
+@app.post("/user/switch")
+async def switch_user(req: UserSwitchRequest):
+    _require_login()
+    uid = str(req.uid or "").strip()  # 兼容旧前端入参，不再切换服务端全局状态。
+    if uid:
+        target = userdata.get_user_from_uid(uid)
+        if target is None or userdata.is_system_user(target):
+            return JSONResponse({"ok": False, "error": "user not found"}, status_code=404)
+    p = _get_web_profile()
+    return JSONResponse(
+        {
+            "ok": True,
+            "name": p.name,
+            "uid": p.uid,
+            "perm": p.perm,
+            "perm_label": p.perm_label,
+            "token": p.token,
+        }
+    )
+
+
+@app.get("/admin/users")
+async def admin_list_users():
+    current = _require_admin_user()
+    current_uid = str(current.get_uid())
+    rows = []
+    for u in userdata.iter_users():
+        if userdata.is_system_user(u):
+            continue
+        rows.append(_as_user_row(u, current_uid=current_uid))
+    return JSONResponse({"ok": True, "users": rows, "current_uid": current_uid})
+
+
+@app.get("/admin/permissions")
+async def admin_permissions():
+    _require_admin_user()
+    return JSONResponse({"ok": True, "items": _perm_items()})
+
+
+@app.post("/admin/users")
+async def admin_create_user(req: UserCreateRequest):
+    current = _require_admin_user()
+    try:
+        created = userdata.create_user(req.name, int(req.perm), req.token, actor=current)
+    except (ValueError, PermissionError) as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+    return JSONResponse({"ok": True, "user": _as_user_row(created)})
+
+
+@app.patch("/admin/users/{uid}")
+async def admin_update_user(uid: str, req: UserUpdateRequest):
+    current = _require_admin_user()
+    target = userdata.get_user_from_uid(uid)
+    if target is None or userdata.is_system_user(target):
+        return JSONResponse({"ok": False, "error": "user not found"}, status_code=404)
+    if str(target.get_uid()) == str(current.get_uid()):
+        return JSONResponse({"ok": False, "error": "cannot modify current user"}, status_code=400)
+    if req.name is None and req.perm is None and req.token is None:
+        return JSONResponse({"ok": False, "error": "no fields to update"}, status_code=400)
+    try:
+        updated = userdata.update_user(
+            uid,
+            name=req.name,
+            userperm=req.perm,
+            usertoken=req.token,
+            actor=current,
+        )
+    except (ValueError, PermissionError) as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+    if updated is None:
+        return JSONResponse({"ok": False, "error": "user not found"}, status_code=404)
+    return JSONResponse({"ok": True, "user": _as_user_row(updated, current_uid=str(current.get_uid()))})
+
+
+@app.patch("/admin/users/{uid}/permissions")
+async def admin_update_user_permissions(uid: str, req: UserPermUpdateRequest):
+    current = _require_admin_user()
+    target = userdata.get_user_from_uid(uid)
+    if target is None or userdata.is_system_user(target):
+        return JSONResponse({"ok": False, "error": "user not found"}, status_code=404)
+    if str(target.get_uid()) == str(current.get_uid()):
+        return JSONResponse({"ok": False, "error": "cannot modify current user"}, status_code=400)
+    try:
+        updated = userdata.update_user(uid, userperm=int(req.perm), actor=current)
+    except PermissionError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+    if updated is None:
+        return JSONResponse({"ok": False, "error": "user not found"}, status_code=404)
+    return JSONResponse({"ok": True, "user": _as_user_row(updated, current_uid=str(current.get_uid()))})
+
+
+@app.post("/admin/users/{uid}/token/reset")
+async def admin_reset_user_token(uid: str):
+    current = _require_admin_user()
+    target = userdata.get_user_from_uid(uid)
+    if target is None or userdata.is_system_user(target):
+        return JSONResponse({"ok": False, "error": "user not found"}, status_code=404)
+    if str(target.get_uid()) == str(current.get_uid()):
+        return JSONResponse({"ok": False, "error": "cannot modify current user"}, status_code=400)
+    try:
+        updated = userdata.update_user(
+            uid,
+            usertoken=uuid.uuid4().hex + uuid.uuid4().hex,
+            actor=current,
+        )
+    except PermissionError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+    if updated is None:
+        return JSONResponse({"ok": False, "error": "user not found"}, status_code=404)
+    return JSONResponse({"ok": True, "user": _as_user_row(updated, current_uid=str(current.get_uid()))})
+
+
+@app.delete("/admin/users/{uid}")
+async def admin_delete_user(uid: str):
+    current = _require_admin_user()
+    target = userdata.get_user_from_uid(uid)
+    if target is None or userdata.is_system_user(target):
+        return JSONResponse({"ok": False, "error": "user not found"}, status_code=404)
+    if str(target.get_uid()) == str(current.get_uid()):
+        return JSONResponse({"ok": False, "error": "cannot delete current user"}, status_code=400)
+    try:
+        ok = userdata.delete_user(uid, actor=current)
+    except PermissionError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+    if not ok:
+        return JSONResponse({"ok": False, "error": "user not found"}, status_code=404)
+    return JSONResponse({"ok": True, "uid": str(uid)})
+
+
+@app.get("/model")
+async def get_model():
+    _require_login()
+    return JSONResponse({"current_model": _client.model, "available_models": list(_MODEL_CHOICES)})
+
+
+@app.post("/model")
+async def switch_model(req: ModelSwitchRequest):
+    _require_admin_user()
+    target = _normalize_model_choice(req.model)
+    if not target:
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "unsupported model",
+                "available_models": list(_MODEL_CHOICES),
+            },
+            status_code=400,
+        )
+    _client.model = target
+    return JSONResponse(
+        {
+            "ok": True,
+            "current_model": _client.model,
+            "available_models": list(_MODEL_CHOICES),
+        }
+    )
+
+
+@app.post("/sessions")
+async def create_session(req: SessionCreateRequest):
+    _require_login()
+    if bool(req.reuse_if_current_empty):
+        current_id = str(req.current_session_id or "").strip()
+        if current_id:
+            meta = _store.get_session(current_id) or {}
+            try:
+                msg_count = int(meta.get("message_count", 0))
+            except Exception:
+                msg_count = 0
+            if msg_count <= 0 and str(meta.get("id", "")).strip():
+                return JSONResponse({"ok": True, "session": meta, "reused": True})
+    row = _store.create_session(title=str(req.title or "新对话"))
+    return JSONResponse({"ok": True, "session": row, "reused": False})
+
+
+@app.get("/sessions")
+async def list_sessions(limit: int = 100, offset: int = 0):
+    _require_login()
+    return JSONResponse(_store.list_sessions(limit=limit, offset=offset))
+
+
+@app.delete("/sessions/{session_id}")
+async def delete_session(session_id: str):
+    _require_login()
+    ok = _store.delete_session(session_id)
+    _sessions.pop(session_id, None)
+    _session_last_access.pop(session_id, None)
+    if not ok:
+        return JSONResponse({"ok": False, "error": "session not found"}, status_code=404)
+    return JSONResponse({"ok": True, "session_id": session_id})
+
+
+@app.get("/sessions/{session_id}/messages")
+async def get_session_messages(session_id: str):
+    _require_login()
+    _store.ensure_session(session_id)
+    rows = _store.load_messages(session_id)
+    return JSONResponse({"ok": True, "session_id": session_id, "entries": rows})
+
+
+@app.post("/sessions/{session_id}/title")
+async def update_session_title(session_id: str, req: SessionTitleRequest):
+    _require_login()
+    row = _store.set_session_title(session_id, req.title)
+    return JSONResponse({"ok": True, "session": row})
+
+
+@app.post("/sessions/{session_id}/compress")
+async def compress_session_context(session_id: str):
+    current = _require_login()
+    if not _has_llm_perm(current):
+        return JSONResponse({"ok": False, "error": "权限不足：当前账户不可执行上下文压缩"}, status_code=403)
+    rows = _store.get_context_messages(session_id)
+    # 只拿原始 chat 做摘要，不把终端/notice/tool_marker 混进去
+    raw_rows = [
+        x for x in rows
+        if not bool(x.get("is_summary", False))
+        and str(x.get("entry_type", "chat")) == "chat"
+        and str(x.get("role", "")) in {"user", "assistant"}
+    ]
+    if len(raw_rows) < 6:
+        return JSONResponse({"ok": False, "error": "消息数量不足，至少需要 6 条消息才能压缩"}, status_code=400)
+
+    summary_src = raw_rows[:-4]
+    if not summary_src:
+        return JSONResponse({"ok": False, "error": "消息数量不足，至少需要 6 条消息才能压缩"}, status_code=400)
+
+    try:
+        summary = _compress_messages_with_llm(summary_src)
+        if not summary:
+            raise ValueError("摘要为空")
+        result = _store.compress_context(session_id, summary)
+    except SessionStoreError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+    except Exception as e:
+        logger.warning("compress failed: session=%s err=%s", session_id, e)
+        return JSONResponse({"ok": False, "error": "压缩失败"}, status_code=500)
+
+    return JSONResponse({"ok": True, **result})
+
+
+@app.post("/chat")
+async def chat(req: ChatRequest):
+    current = _require_login()
+    if not _has_llm_perm(current):
+        return JSONResponse({"error": "权限不足：当前账户不可调用 LLM 对话"}, status_code=403)
+    sid = str(req.session_id or "").strip()
+    if not sid:
+        return JSONResponse({"error": "session_id required"}, status_code=400)
+
+    _store.ensure_session(sid)
+    agent = _get_agent(sid)
+    message = str(req.message or "").strip()
+    if not message:
+        return JSONResponse({"reply": "", "tool_trace": [], "tool_steps": 0})
+
+    if message.startswith("/"):
+        profile = _get_web_profile()
+        try:
+            job = _tool_runtime.submit_command(sid, message, profile.perm)
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+        # 工具命令也写入 chat 消息（用户气泡独立）
+        _store.append_messages(
+            sid,
+            [
+                {
+                    "id": f"m_{uuid.uuid4().hex[:16]}",
+                    "role": "user",
+                    "content": message,
+                    "entry_type": "chat",
+                    "is_summary": False,
+                    "created_at": _now_iso(),
+                },
+                {
+                    "id": f"m_{uuid.uuid4().hex[:16]}",
+                    "role": "assistant",
+                    "content": "> --调用工具中--",
+                    "entry_type": "tool_marker",
+                    "is_summary": False,
+                    "created_at": _now_iso(),
+                },
+            ],
+        )
+        return JSONResponse(
+            {
+                "reply": "> --调用工具中--",
+                "tool_trace": [],
+                "tool_steps": 0,
+                "tool_job": job,
+                "tool_async": True,
+            }
+        )
+
+    llm_message = _build_user_message_with_meta(
+        message,
+        meta_user_name=req.meta_user_name,
+        meta_user_id=req.meta_user_id,
+        meta_user_perm=req.meta_user_perm,
+        meta_time_iso=req.meta_time_iso,
+        meta_time_text=req.meta_time_text,
+    )
+
+    result = agent.chat_with_meta(llm_message)
+    tool_trace = _sanitize_tool_trace_for_user(result.get("tool_trace", []))
+    tool_steps = int(result.get("tool_steps", 0))
+    reply = str(result.get("reply", ""))
+
+    guard_reply = _guard_fake_tool_claim(
+        user_text=message,
+        reply_text=reply,
+        tool_steps=tool_steps,
+        tool_trace=tool_trace,
+    )
+    if guard_reply:
+        _audit_web(
+            "TOOL_EXECUTE",
+            "chat",
+            f"fake_tool_claim_blocked session_id={sid}",
+            {
+                "session_id": sid,
+                "tool_steps": tool_steps,
+                "tool_trace_count": len(tool_trace),
+                "reply_len": len(reply),
+            },
+        )
+        reply = guard_reply
+        tool_trace = []
+        tool_steps = 0
+
+    sanitized_reply = _sanitize_terminal_dump_reply(
+        reply_text=reply,
+        tool_steps=tool_steps,
+        tool_trace=tool_trace,
+    )
+    if sanitized_reply != reply:
+        _audit_web(
+            "TOOL_EXECUTE",
+            "chat",
+            f"terminal_dump_reply_sanitized session_id={sid}",
+            {
+                "session_id": sid,
+                "tool_steps": int(tool_steps),
+                "tool_trace_count": len(tool_trace or []),
+                "reply_len_before": len(reply),
+                "reply_len_after": len(sanitized_reply),
+            },
+        )
+        reply = sanitized_reply
+
+    _save_chat_messages(
+        sid,
+        llm_message,
+        reply,
+        tool_marker=bool(tool_steps > 0),
+        tool_trace=tool_trace,
+    )
+    _generate_title_from_first_round(sid)
+
+    return JSONResponse(
+        {
+            "reply": reply,
+            "tool_trace": tool_trace,
+            "tool_steps": tool_steps,
+        }
+    )
+
+
+@app.get("/chat/stream")
+async def chat_stream(
+    message: str,
+    session_id: str,
+    meta_user_name: str | None = None,
+    meta_user_id: str | None = None,
+    meta_user_perm: str | None = None,
+    meta_time_iso: str | None = None,
+    meta_time_text: str | None = None,
+):
+    current = _require_login()
+    if not _has_llm_perm(current):
+        chunks = [
+            _sse_event("error", {"message": "权限不足：当前账户不可调用 LLM 对话"}),
+            _sse_event("done", {"reply": "", "tool_trace": [], "tool_steps": 0}),
+        ]
+        return HTMLResponse("".join(chunks), media_type="text/event-stream")
+    sid = str(session_id or "").strip()
+    if not sid:
+        return JSONResponse({"error": "session_id required"}, status_code=400)
+
+    _store.ensure_session(sid)
+    agent = _get_agent(sid)
+
+    text = str(message or "").strip()
+    if text.startswith("/"):
+        profile = _get_web_profile()
+        try:
+            job = _tool_runtime.submit_command(sid, text, profile.perm)
+        except Exception as e:
+            chunks = [
+                _sse_event("error", {"message": str(e)}),
+                _sse_event("done", {"reply": "", "tool_trace": [], "tool_steps": 0}),
+            ]
+            return HTMLResponse("".join(chunks), media_type="text/event-stream")
+
+        _store.append_messages(
+            sid,
+            [
+                {
+                    "id": f"m_{uuid.uuid4().hex[:16]}",
+                    "role": "user",
+                    "content": text,
+                    "entry_type": "chat",
+                    "is_summary": False,
+                    "created_at": _now_iso(),
+                },
+                {
+                    "id": f"m_{uuid.uuid4().hex[:16]}",
+                    "role": "assistant",
+                    "content": "> --调用工具中--",
+                    "entry_type": "tool_marker",
+                    "is_summary": False,
+                    "created_at": _now_iso(),
+                },
+            ],
+        )
+
+        chunks = [
+            _sse_event("reset", {}),
+            _sse_event("delta", {"content": "> --调用工具中--"}),
+            _sse_event(
+                "done",
+                {
+                    "reply": "> --调用工具中--",
+                    "tool_trace": [],
+                    "tool_steps": 0,
+                    "tool_job": job,
+                    "tool_async": True,
+                },
+            ),
+        ]
+        return HTMLResponse("".join(chunks), media_type="text/event-stream")
+
+    llm_message = _build_user_message_with_meta(
+        text,
+        meta_user_name=meta_user_name,
+        meta_user_id=meta_user_id,
+        meta_user_perm=meta_user_perm,
+        meta_time_iso=meta_time_iso,
+        meta_time_text=meta_time_text,
+    )
+
+    def event_iter():
+        final_reply = ""
+        done_payload: dict | None = None
+        try:
+            for event in agent.stream_chat_events(llm_message):
+                et = event.get("type", "")
+                if et == "delta":
+                    final_reply += str(event.get("content", ""))
+                    yield _sse_event("delta", {"content": event.get("content", "")})
+                elif et == "reset":
+                    # 关键：把工具调用标记按流顺序写入持久化文本，确保刷新/导入后仍是 A-标记-B。
+                    final_reply += "\n\n> --调用工具中--\n"
+                    yield _sse_event("reset", {})
+                elif et == "tool_step":
+                    yield _sse_event("tool_step", {"trace": event.get("trace", [])})
+                elif et == "done":
+                    done_payload = {
+                        "reply": event.get("reply", ""),
+                        "tool_trace": _sanitize_tool_trace_for_user(event.get("tool_trace", [])),
+                        "tool_steps": int(event.get("tool_steps", 0)),
+                    }
+
+            if done_payload is None:
+                done_payload = {"reply": final_reply, "tool_trace": [], "tool_steps": 0}
+
+            safe_tool_trace = (
+                done_payload.get("tool_trace", [])
+                if isinstance(done_payload.get("tool_trace"), list)
+                else []
+            )
+            safe_tool_steps = int(done_payload.get("tool_steps", 0))
+            reply_before_guard = str(final_reply or done_payload.get("reply", ""))
+
+            guard_reply = _guard_fake_tool_claim(
+                user_text=text,
+                reply_text=reply_before_guard,
+                tool_steps=safe_tool_steps,
+                tool_trace=safe_tool_trace,
+            )
+
+            if guard_reply:
+                _audit_web(
+                    "TOOL_EXECUTE",
+                    "chat_stream",
+                    f"fake_tool_claim_blocked_stream session_id={sid}",
+                    {
+                        "session_id": sid,
+                        "tool_steps": safe_tool_steps,
+                        "tool_trace_count": len(safe_tool_trace),
+                        "reply_len": len(reply_before_guard),
+                    },
+                )
+                guard_delta = f"\n\n> [校验] 本轮未发生真实工具调用。\n\n{guard_reply}"
+                final_reply = f"{reply_before_guard}{guard_delta}"
+                yield _sse_event("delta", {"content": guard_delta})
+                done_payload = {"reply": final_reply, "tool_trace": [], "tool_steps": 0}
+            else:
+                done_payload = {
+                    "reply": reply_before_guard,
+                    "tool_trace": safe_tool_trace,
+                    "tool_steps": safe_tool_steps,
+                }
+
+            sanitized_reply = _sanitize_terminal_dump_reply(
+                reply_text=str(done_payload.get("reply", "")),
+                tool_steps=int(done_payload.get("tool_steps", 0)),
+                tool_trace=done_payload.get("tool_trace", []),
+            )
+            if sanitized_reply != str(done_payload.get("reply", "")):
+                _audit_web(
+                    "TOOL_EXECUTE",
+                    "chat_stream",
+                    f"terminal_dump_reply_sanitized_stream session_id={sid}",
+                    {
+                        "session_id": sid,
+                        "tool_steps": int(done_payload.get("tool_steps", 0)),
+                        "tool_trace_count": len(done_payload.get("tool_trace", []) or []),
+                        "reply_len_before": len(str(done_payload.get("reply", ""))),
+                        "reply_len_after": len(sanitized_reply),
+                    },
+                )
+                done_payload["reply"] = sanitized_reply
+                final_reply = sanitized_reply
+
+            yield _sse_event("done", done_payload)
+            # 优先持久化带 reset 标记的 final_reply；没有内容时再回退 done_payload.reply
+            reply = str(final_reply or done_payload.get("reply", ""))
+            _save_chat_messages(
+                sid,
+                llm_message,
+                reply,
+                # 流式已把标记内嵌到 assistant 文本，不再额外落一条 tool_marker，避免变成 A-B-标记
+                tool_marker=False,
+                tool_trace=done_payload.get("tool_trace", []),
+            )
+            _generate_title_from_first_round(sid)
+        except Exception as e:
+            yield _sse_event("error", {"message": str(e)})
+
+    from starlette.responses import StreamingResponse
+
+    return StreamingResponse(event_iter(), media_type="text/event-stream")
+
+
+@app.post("/reset")
+async def reset_chat(req: ResetRequest):
+    _require_login()
+    sid = str(req.session_id or "").strip()
+    if not sid:
+        return JSONResponse({"ok": False, "error": "session_id required"}, status_code=400)
+    _store.ensure_session(sid)
+    result = _store.mark_reset_anchor(sid)
+    _sessions.pop(sid, None)
+    _session_last_access.pop(sid, None)
+    return JSONResponse({"ok": True, **result})
+
+
+@app.post("/tools")
+async def tools_legacy(req: ToolLegacyRequest):
+    _require_login()
+    # 兼容旧前端：保留接口
+    profile = _get_web_profile()
+    from TindaAgent.Tool import tool as tool_registry
+
+    return JSONResponse({"tools": tool_registry.list_tools(profile.perm)})
+
+
+@app.post("/session/events")
+async def session_events(req: SessionEventsRequest):
+    _require_login()
+    # 兼容旧前端写入路径
+    sid = str(req.session_id or "").strip()
+    if not sid:
+        return JSONResponse({"ok": False, "error": "session_id required"}, status_code=400)
+
+    rows: list[dict] = []
+    for it in req.entries or []:
+        if not isinstance(it, dict):
+            continue
+        role = str(it.get("role", "assistant")).strip()
+        if role not in {"user", "assistant", "system"}:
+            role = "assistant"
+        rows.append(
+            {
+                "id": f"m_{uuid.uuid4().hex[:16]}",
+                "role": role,
+                "content": str(it.get("content", "")),
+                "entry_type": str(it.get("entry_type", "chat")),
+                "terminal_kind": str(it.get("terminal_kind", "")),
+                "is_summary": False,
+                "created_at": str(it.get("ts", "")) or _now_iso(),
+            }
+        )
+    try:
+        saved = _store.append_messages(sid, rows)
+    except SessionStoreError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+    return JSONResponse({"ok": True, "session_id": sid, "record": saved})
+
+
+@app.post("/sessions/{session_id}/tool-jobs")
+async def create_tool_job(session_id: str, req: ToolJobCreateRequest):
+    _require_login()
+    if str(req.session_id or "").strip() != str(session_id).strip():
+        return JSONResponse({"ok": False, "error": "session_id mismatch"}, status_code=400)
+    profile = _get_web_profile()
+    try:
+        job = _tool_runtime.submit_command(session_id, req.command, profile.perm)
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+    return JSONResponse({"ok": True, "job": job})
+
+
+@app.get("/sessions/{session_id}/tool-events")
+async def get_tool_events(session_id: str, after_seq: int = 0, limit: int = 200):
+    _require_login()
+    payload = _tool_runtime.get_events(session_id, after_seq=after_seq, limit=limit)
+    events = payload.get("events", [])
+    if events:
+        _persist_terminal_events(session_id, events)
+    return JSONResponse(payload)
+
+
+@app.get("/sessions/{session_id}/tool-jobs/{job_id}")
+async def get_tool_job(session_id: str, job_id: str):
+    _require_login()
+    row = _tool_runtime.get_job(session_id, job_id)
+    if row is None:
+        return JSONResponse({"ok": False, "error": "job not found"}, status_code=404)
+    return JSONResponse({"ok": True, "job": row})
+
+
+# 兼容旧记录面板接口：映射到新会话结构
+@app.get("/records")
+async def records_compat(limit: int = 50, offset: int = 0, q: str = ""):
+    rows = _store.list_sessions(limit=limit, offset=offset).get("sessions", [])
+    if q:
+        kw = q.lower().strip()
+        rows = [x for x in rows if kw in str(x.get("id", "")).lower() or kw in str(x.get("title", "")).lower()]
+    mapped = [
+        {
+            "record_id": str(x.get("id", "")),
+            "session_id": str(x.get("id", "")),
+            "created_at": x.get("created_at", ""),
+            "updated_at": x.get("updated_at", ""),
+            "message_count": x.get("message_count", 0),
+            "size_bytes": 0,
+            "has_md": True,
+            "has_txt": True,
+        }
+        for x in rows
+    ]
+    return JSONResponse({"records": mapped, "total": len(mapped), "limit": limit, "offset": offset})
+
+
+@app.get("/records/session")
+async def records_session_compat(session_id: str):
+    rows = _store.load_messages(session_id)
+    if not rows:
+        return JSONResponse({"found": False, "session_id": session_id})
+    meta = _store.get_session(session_id) or {}
+    return JSONResponse(
+        {
+            "found": True,
+            "session_id": session_id,
+            "record": {
+                "record_id": session_id,
+                "created_at": meta.get("created_at", ""),
+                "updated_at": meta.get("updated_at", ""),
+                "message_count": len(rows),
+            },
+            "entries": rows,
+        }
+    )
+
+
+class ImportRecordRequest(BaseModel):
+    session_id: str
+    record_id: str
+
+
+@app.post("/records/import")
+async def import_record_compat(req: ImportRecordRequest):
+    # 新架构不再导入旧 record，兼容返回当前会话
+    rows = _store.load_messages(req.record_id)
+    if not rows:
+        return JSONResponse({"ok": False, "error": "记录不存在或不再支持旧格式导入"}, status_code=400)
+    _store.delete_session(req.session_id)
+    _store.create_session(req.session_id, title="新对话")
+    _store.append_messages(req.session_id, rows)
+    return JSONResponse({"ok": True, "session_id": req.session_id, "entries": rows})
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run("TindaAgent.Web.server:app", host="0.0.0.0", port=8000, reload=True)
