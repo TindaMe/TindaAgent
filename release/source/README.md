@@ -1,6 +1,6 @@
 # TindaAgent
 
-当前版本：`1.6.5`
+当前版本：`1.6.6`
 
 TindaAgent 是一个本地化 Web Agent 系统，聚焦于以下能力：
 
@@ -59,7 +59,7 @@ TindaAgent 是一个本地化 Web Agent 系统，聚焦于以下能力：
 ## 启动（AnacondaAnaconda3）
 
 ```bash
-conda run -n base python /mnt/e/Python/TIndaAgent/run_web.py
+conda run -n base python /mnt/e/Python/TindaAgent/run_web.py
 ```
 
 默认访问：

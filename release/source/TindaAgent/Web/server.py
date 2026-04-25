@@ -300,6 +300,13 @@ _KNOWN_TOOL_NAMES: tuple[str, ...] = (
     "call_backend_tool",
 )
 
+_TERMINAL_DUMP_PATTERNS: tuple[str, ...] = (
+    r"(?im)^\s*\[tool\]\s+",
+    r"(?im)^\s*tool:\s*[a-z_][a-z0-9_]*(?:\s+#tc_\d+)?\s*$",
+    r"(?im)^\s*[-]{16,}\s*$",
+    r"(?m)^────────────────",
+)
+
 
 def _is_tool_execution_intent(text: str) -> bool:
     raw = str(text or "")
@@ -330,6 +337,59 @@ def _has_real_tool_execution(tool_steps: int, tool_trace: list[dict] | None) -> 
     if int(tool_steps) > 0:
         return True
     return isinstance(tool_trace, list) and len(tool_trace) > 0
+
+
+def _looks_like_terminal_dump(text: str) -> bool:
+    raw = str(text or "")
+    if not raw.strip():
+        return False
+    score = 0
+    for pattern in _TERMINAL_DUMP_PATTERNS:
+        if re.search(pattern, raw):
+            score += 1
+    if raw.count("[tool]") >= 2:
+        score += 1
+    if raw.count("\n") >= 24 and len(raw) >= 1200:
+        score += 1
+    if raw.count("\"tool_name\"") >= 2:
+        score += 1
+    return score >= 3
+
+
+def _tool_execution_summary_reply(tool_steps: int, tool_trace: list[dict] | None) -> str:
+    trace = tool_trace if isinstance(tool_trace, list) else []
+    names: list[str] = []
+    for step in trace:
+        if not isinstance(step, dict):
+            continue
+        name = str(step.get("agent_tool", "")).strip()
+        if not name:
+            continue
+        if name not in names:
+            names.append(name)
+    count = len(trace)
+    if count <= 0 and int(tool_steps) > 0:
+        count = int(tool_steps)
+    if names:
+        preview = "、".join(names[:5]) + (" 等" if len(names) > 5 else "")
+        return f"本轮已执行 {count} 个工具（{preview}）。详细调用过程已写入终端。"
+    if count > 0:
+        return f"本轮已执行 {count} 个工具。详细调用过程已写入终端。"
+    return "工具调用明细已写入终端。"
+
+
+def _sanitize_terminal_dump_reply(
+    *,
+    reply_text: str,
+    tool_steps: int,
+    tool_trace: list[dict] | None,
+) -> str:
+    raw = str(reply_text or "")
+    if not raw.strip():
+        return raw
+    if not _looks_like_terminal_dump(raw):
+        return raw
+    return _tool_execution_summary_reply(tool_steps, tool_trace)
 
 
 def _build_tool_execution_guard_reply(tool_steps: int, tool_trace: list[dict] | None) -> str:
@@ -505,21 +565,51 @@ def _evict_if_needed() -> None:
     _session_last_access.pop(oldest, None)
 
 
-def _store_to_agent_messages(rows: list[dict]) -> list[dict]:
+def _is_tool_command_text(content: str) -> bool:
+    raw = str(content or "").strip().lower()
+    return raw.startswith("/tool") or raw.startswith("/tools") or raw.startswith("/help")
+
+
+def _store_to_agent_messages(rows: list[dict]) -> tuple[list[dict], dict[str, int]]:
     out: list[dict] = []
+    stats = {
+        "input_rows": int(len(rows or [])),
+        "skipped_entry_type": 0,
+        "skipped_role": 0,
+        "skipped_empty": 0,
+        "skipped_tool_cmd": 0,
+        "included_chat": 0,
+        "included_notice": 0,
+    }
     for item in rows:
+        entry_type = str(item.get("entry_type", "chat")).strip() or "chat"
+        # 严格过滤：仅 chat/notice 允许进入 LLM 上下文
+        if entry_type not in {"chat", "notice"}:
+            stats["skipped_entry_type"] += 1
+            continue
         role = str(item.get("role", "")).strip()
         if role not in {"user", "assistant", "system"}:
+            stats["skipped_role"] += 1
             continue
         content = str(item.get("content", ""))
         if not content.strip():
+            stats["skipped_empty"] += 1
+            continue
+        # /tool 命令保留在会话与终端，但不参与后续 LLM 上下文
+        if role == "user" and entry_type == "chat" and _is_tool_command_text(content):
+            stats["skipped_tool_cmd"] += 1
             continue
         if role == "system":
             # Agent 不接受上下文里额外 system 角色，降级为 assistant 上下文提示
             out.append({"role": "assistant", "content": f"[系统摘要] {content}"})
+            stats["included_notice"] += 1
         else:
             out.append({"role": role, "content": content})
-    return out
+            if entry_type == "notice":
+                stats["included_notice"] += 1
+            else:
+                stats["included_chat"] += 1
+    return out, stats
 
 
 def _is_logged_in() -> bool:
@@ -663,12 +753,19 @@ def _get_agent(session_id: str):
 
     # 每次都基于 store 的“有效上下文”回灌，确保压缩边界生效
     rows = _store.get_context_messages(sid)
-    _sessions[sid].replace_conversation(_store_to_agent_messages(rows))
+    agent_rows, filter_stats = _store_to_agent_messages(rows)
+    _sessions[sid].replace_conversation(agent_rows)
     _audit_web(
         "SYSTEM_EXECUTE",
         "_get_agent",
         f"agent_ready session_id={sid}",
-        {"session_id": sid, "context_rows": len(rows), "model": _client.model},
+        {
+            "session_id": sid,
+            "context_rows": len(rows),
+            "agent_rows": len(agent_rows),
+            "context_filter": filter_stats,
+            "model": _client.model,
+        },
     )
     return _sessions[sid]
 
@@ -1631,6 +1728,26 @@ async def chat(req: ChatRequest):
         tool_trace = []
         tool_steps = 0
 
+    sanitized_reply = _sanitize_terminal_dump_reply(
+        reply_text=reply,
+        tool_steps=tool_steps,
+        tool_trace=tool_trace,
+    )
+    if sanitized_reply != reply:
+        _audit_web(
+            "TOOL_EXECUTE",
+            "chat",
+            f"terminal_dump_reply_sanitized session_id={sid}",
+            {
+                "session_id": sid,
+                "tool_steps": int(tool_steps),
+                "tool_trace_count": len(tool_trace or []),
+                "reply_len_before": len(reply),
+                "reply_len_after": len(sanitized_reply),
+            },
+        )
+        reply = sanitized_reply
+
     _save_chat_messages(
         sid,
         llm_message,
@@ -1794,6 +1911,27 @@ async def chat_stream(
                     "tool_trace": safe_tool_trace,
                     "tool_steps": safe_tool_steps,
                 }
+
+            sanitized_reply = _sanitize_terminal_dump_reply(
+                reply_text=str(done_payload.get("reply", "")),
+                tool_steps=int(done_payload.get("tool_steps", 0)),
+                tool_trace=done_payload.get("tool_trace", []),
+            )
+            if sanitized_reply != str(done_payload.get("reply", "")):
+                _audit_web(
+                    "TOOL_EXECUTE",
+                    "chat_stream",
+                    f"terminal_dump_reply_sanitized_stream session_id={sid}",
+                    {
+                        "session_id": sid,
+                        "tool_steps": int(done_payload.get("tool_steps", 0)),
+                        "tool_trace_count": len(done_payload.get("tool_trace", []) or []),
+                        "reply_len_before": len(str(done_payload.get("reply", ""))),
+                        "reply_len_after": len(sanitized_reply),
+                    },
+                )
+                done_payload["reply"] = sanitized_reply
+                final_reply = sanitized_reply
 
             yield _sse_event("done", done_payload)
             # 优先持久化带 reset 标记的 final_reply；没有内容时再回退 done_payload.reply
