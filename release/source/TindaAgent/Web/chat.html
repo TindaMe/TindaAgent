@@ -1075,83 +1075,155 @@
 
     /* ── Terminal panel (默认隐藏) ── */
     .term-panel {
-      width: 0; flex-shrink: 0;
-      display: flex; flex-direction: column;
-      background: #0d0810; overflow: hidden; min-width: 0;
+      width: 0;
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      min-width: 0;
       opacity: 0;
       will-change: width, opacity;
-      box-shadow: none;
+      border-left: 1.5px solid rgba(251, 113, 133, 0.35);
+      background: linear-gradient(180deg, #fff7fb 0%, #ffeef6 100%);
+      box-shadow: -14px 0 30px rgba(251, 113, 133, 0.12);
       transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1),
-                  opacity 0.38s ease 0.1s,
-                  box-shadow 0.5s ease;
+                  opacity 0.4s ease;
     }
     .term-panel.open {
-      box-shadow: -3px 0 20px rgba(0,0,0,0.22), -1px 0 0 var(--border);
+      box-shadow: -14px 0 30px rgba(251, 113, 133, 0.16), -1px 0 0 rgba(251, 113, 133, 0.25);
     }
 
-    /* 可爱的终端标题栏 */
     .term-head {
-      display: flex; align-items: center; gap: 8px;
-      padding: 9px 13px;
-      background: var(--gradient); flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 12px;
+      flex-shrink: 0;
+      border-bottom: 1px solid rgba(251, 113, 133, 0.22);
+      background: linear-gradient(90deg, rgba(255, 110, 180, 0.12), rgba(192, 132, 252, 0.10));
     }
-    .term-dots { display: flex; gap: 5px; align-items: center; flex-shrink: 0; }
+    .term-dots {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      flex-shrink: 0;
+    }
     .term-dot {
-      width: 11px; height: 11px; border-radius: 50%;
-      border: 1px solid rgba(0,0,0,0.12);
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      box-shadow: 0 1px 4px rgba(61, 31, 47, 0.15);
     }
-    .term-dot:nth-child(1) { background: #ff5f57; }
-    .term-dot:nth-child(2) { background: #ffbd2e; }
-    .term-dot:nth-child(3) { background: #28c940; }
+    .term-dot:nth-child(1) { background: #fb7185; }
+    .term-dot:nth-child(2) { background: #f59e0b; }
+    .term-dot:nth-child(3) { background: #34d399; }
     .term-title {
-      flex: 1; text-align: center;
-      font-size: 12px; font-weight: 700;
-      color: rgba(255,255,255,0.92); letter-spacing: 0.3px;
+      flex: 1;
+      text-align: center;
+      font-size: 12.5px;
+      font-weight: 700;
+      color: #9d174d;
+      letter-spacing: 0.2px;
     }
     .term-clear-btn {
-      background: rgba(255,255,255,0.18);
-      border: 1px solid rgba(255,255,255,0.55);
-      color: #fff;
-      border-radius: 8px;
-      padding: 5px 12px;
-      font-size: 11.5px;
+      margin-left: auto;
+      border: 1px solid rgba(251, 113, 133, 0.45);
+      background: #fff;
+      color: #be185d;
+      border-radius: 999px;
+      padding: 4px 11px;
+      font-size: 11px;
       font-family: inherit;
       font-weight: 700;
-      letter-spacing: 0.2px;
       cursor: pointer;
-      transition: background 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease;
+      transition: all 0.18s ease;
+      box-shadow: 0 2px 8px rgba(251, 113, 133, 0.12);
       flex-shrink: 0;
     }
     .term-clear-btn:hover {
-      background: rgba(255,255,255,0.32);
+      border-color: #ff6eb4;
+      background: #fff7fb;
       transform: translateY(-1px);
-      box-shadow: 0 4px 10px rgba(0,0,0,0.18);
     }
     .term-clear-btn:active { transform: translateY(0); }
 
-    /* 真实终端内部 */
     .term-body {
-      flex: 1; overflow-y: auto;
-      padding: 12px 14px 16px;
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px 10px 14px;
       font-family: "JetBrains Mono","Fira Code","SF Mono","Cascadia Code",Consolas,monospace;
-      font-size: 12.5px; line-height: 1.7;
+      font-size: 12.5px;
+      line-height: 1.65;
       font-weight: 500;
-      background: #0d0810; color: #d8d8d8;
+      color: #334155;
       font-variant-ligatures: contextual;
+      background:
+        radial-gradient(circle at 88% -12%, rgba(255, 110, 180, 0.14) 0%, rgba(255, 110, 180, 0) 55%),
+        radial-gradient(circle at -12% 0%, rgba(192, 132, 252, 0.16) 0%, rgba(192, 132, 252, 0) 58%),
+        #fff9fc;
     }
-    .term-body::-webkit-scrollbar { width: 5px; }
-    .term-body::-webkit-scrollbar-track { background: #1a0d18; }
-    .term-body::-webkit-scrollbar-thumb { background: #3d1f2f; border-radius: 3px; }
-    .term-body::-webkit-scrollbar-thumb:hover { background: #5a2d40; }
+    .term-body::-webkit-scrollbar { width: 6px; }
+    .term-body::-webkit-scrollbar-track { background: transparent; }
+    .term-body::-webkit-scrollbar-thumb {
+      background: rgba(251, 113, 133, 0.38);
+      border-radius: 999px;
+    }
+    .term-body::-webkit-scrollbar-thumb:hover { background: rgba(251, 113, 133, 0.56); }
 
-    .term-line { white-space: pre-wrap; word-break: break-all; min-height: 1em; }
-    .term-prompt { color: #ff6eb4; user-select: none; }
-    .term-cmd    { color: #e2e8f0; }
-    .term-out    { color: #a3e635; }
-    .term-out.err  { color: #f87171; }
-    .term-out.info { color: #60a5fa; font-style: italic; }
-    .term-out.dim  { color: #4b3a45; }
-    .term-sep      { color: #2a1520; user-select: none; }
+    .term-line {
+      white-space: pre-wrap;
+      word-break: break-word;
+      min-height: 1em;
+      margin: 4px 0;
+      padding: 6px 8px;
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.85);
+      border: 1px solid rgba(251, 113, 133, 0.14);
+      box-shadow: 0 1px 3px rgba(251, 113, 133, 0.06);
+    }
+    .term-line.term-out-group {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .term-line.term-call-group {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      background: rgba(255, 255, 255, 0.88);
+      border-color: rgba(251, 113, 133, 0.22);
+    }
+    .term-call-row { display: block; }
+    .term-call-row.sep {
+      color: rgba(190, 24, 93, 0.45);
+      text-align: center;
+      user-select: none;
+      letter-spacing: 0.5px;
+      padding-top: 2px;
+    }
+    .term-out-row { display: block; }
+    .term-out-row .term-out { display: block; }
+    .term-prompt {
+      color: #db2777;
+      user-select: none;
+      font-weight: 700;
+    }
+    .term-cmd { color: #7c2d12; font-weight: 600; }
+    .term-out { color: #166534; }
+    .term-out.err { color: #dc2626; font-weight: 600; }
+    .term-out.info { color: #2563eb; font-weight: 600; }
+    .term-out.dim { color: #94a3b8; }
+    .term-sep {
+      color: rgba(190, 24, 93, 0.45);
+      text-align: center;
+      user-select: none;
+      letter-spacing: 0.5px;
+      background: transparent;
+      border: none;
+      box-shadow: none;
+      padding: 3px 0;
+      margin: 2px 0 4px;
+    }
 
     .records-mask {
       position: fixed;
@@ -1317,7 +1389,7 @@
   <div class="brand">
     <div class="brand-logo" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"></circle><path d="M12 2.8v4.2M12 17v4.2M2.8 12h4.2M17 12h4.2M5.3 5.3l3 3M15.7 15.7l3 3M18.7 5.3l-3 3M8.3 15.7l-3 3"></path></svg></div>
     <span class="brand-name">TindaAgent</span>
-    <button id="versionBadgeBtn" class="version-badge version-btn" onclick="showVersionTip()" title="版本信息">v1.7.3</button>
+    <button id="versionBadgeBtn" class="version-badge version-btn" onclick="showVersionTip()" title="版本信息">v1.7.4</button>
   </div>
   <div class="header-center">
     <span id="statusPill" class="status-pill">
@@ -1533,7 +1605,7 @@
   };
   const USER_ADMIN_PERM = 511;
   const AUTH_TOKEN_KEY = "ta_auth_token";
-  const VERSION_FALLBACK = "v1.7.3";
+  const VERSION_FALLBACK = "v1.7.4";
 
   function getAuthToken() {
     return String(localStorage.getItem(AUTH_TOKEN_KEY) || "").trim();
@@ -1590,6 +1662,11 @@
   let appVersionVerified = false;
   let toolEventsFetchErrorStreak = 0;
   let toolEventsLastErrorAt = 0;
+  const TERM_MAX_LINES = 500;
+  const TERM_FLUSH_BATCH = 120;
+  let termPersistBuffer = [];
+  let termPersistTimer = 0;
+  let termRequestGroup = null;
 
   // --- Toast ---
   let toastTimer = 0;
@@ -1614,6 +1691,25 @@
     const prefix = source ? `[error/${source}]` : "[error]";
     showTerm();
     addTermLine("out", `${prefix} ${text}`, "err", { sessionId, persist });
+  }
+
+  function normalizeTerminalClass(raw) {
+    const v = String(raw || "").trim().toLowerCase();
+    return ["err", "info", "dim"].includes(v) ? v : "";
+  }
+
+  function inferTerminalClass(text, rawClass = "") {
+    const normalized = normalizeTerminalClass(rawClass);
+    if (normalized) return normalized;
+    const line = String(text || "").trim();
+    if (!line) return "";
+    if (/^\[error(?:\/[^\]]+)?\]/i.test(line)) return "err";
+    if (/(请求失败|执行失败|命令解析失败|未知命令|权限不足|exception|traceback|permission denied)/i.test(line)) {
+      return "err";
+    }
+    if (/^(tool:\s*|可用工具)/i.test(line)) return "info";
+    if (/^\(已跳过重复工具轨迹渲染\)/.test(line)) return "dim";
+    return "";
   }
 
   function getVersionBadgeText() {
@@ -1666,54 +1762,149 @@
     if (badgeEl) badgeEl.textContent = getVersionBadgeText();
   }
 
-  // --- Terminal ---
-  function addTermLine(type, text, cls = "", { persist = true, sessionId = getSessionId() } = {}) {
-    const line = document.createElement("div");
-    line.className = "term-line";
-    if (type === "cmd") {
-      line.innerHTML = `<span class="term-prompt">tinda@agent ~ % </span><span class="term-cmd">${escapeHtml(text)}</span>`;
-    } else {
-      const span = document.createElement("span");
-      span.className = "term-out" + (cls ? " " + cls : "");
-      span.textContent = text;
-      line.appendChild(span);
+  function trimTerminalLines() {
+    const children = termBodyEl?.children;
+    if (!children) return;
+    const overflow = children.length - TERM_MAX_LINES;
+    if (overflow <= 0) return;
+    for (let i = 0; i < overflow; i++) {
+      if (!termBodyEl.firstElementChild) break;
+      termBodyEl.removeChild(termBodyEl.firstElementChild);
     }
-    termBodyEl.appendChild(line);
-    termBodyEl.scrollTop = termBodyEl.scrollHeight;
+  }
+
+  function enqueueTermPersist(entry, sessionId) {
+    if (!entry) return;
+    termPersistBuffer.push({ entry, sessionId: String(sessionId || getSessionId()).trim() });
+    if (termPersistBuffer.length >= TERM_FLUSH_BATCH) {
+      flushTermPersistBuffer();
+      return;
+    }
+    if (termPersistTimer) return;
+    termPersistTimer = setTimeout(() => {
+      termPersistTimer = 0;
+      flushTermPersistBuffer();
+    }, 160);
+  }
+
+  function flushTermPersistBuffer() {
+    if (termPersistTimer) {
+      clearTimeout(termPersistTimer);
+      termPersistTimer = 0;
+    }
+    if (!Array.isArray(termPersistBuffer) || termPersistBuffer.length === 0) return;
+    const batch = termPersistBuffer.splice(0, termPersistBuffer.length);
+    const groups = new Map();
+    batch.forEach((item) => {
+      const sid = String(item?.sessionId || getSessionId()).trim();
+      if (!sid || !item?.entry) return;
+      if (!groups.has(sid)) groups.set(sid, []);
+      groups.get(sid).push(item.entry);
+    });
+    groups.forEach((entries, sid) => {
+      enqueueSessionEntries(entries, { sessionId: sid });
+    });
+  }
+
+  function createTermRequestGroup() {
+    const group = document.createElement("div");
+    group.className = "term-line term-call-group";
+    group.dataset.termKind = "call-group";
+    termBodyEl.appendChild(group);
+    trimTerminalLines();
+    termRequestGroup = group;
+    return group;
+  }
+
+  function ensureTermRequestGroup() {
+    if (termRequestGroup && termRequestGroup.isConnected) return termRequestGroup;
+    return createTermRequestGroup();
+  }
+
+  // --- Terminal ---
+  function addTermLine(type, text, cls = "", { persist = true, sessionId = getSessionId(), noScroll = false } = {}) {
+    let line = null;
+    let appendedNewLine = false;
+    if (type === "cmd") {
+      termRequestGroup = null;
+      const group = ensureTermRequestGroup();
+      const row = document.createElement("div");
+      row.className = "term-call-row cmd";
+      row.innerHTML = `<span class="term-prompt">tinda@agent ~ % </span><span class="term-cmd">${escapeHtml(text)}</span>`;
+      group.appendChild(row);
+    } else {
+      const normalizedCls = inferTerminalClass(text, cls);
+      if (termRequestGroup && termRequestGroup.isConnected) {
+        line = termRequestGroup;
+      } else {
+        const last = termBodyEl.lastElementChild;
+        if (
+          last
+          && last.classList
+          && last.classList.contains("term-line")
+          && String(last.dataset?.termKind || "") === "out-group"
+        ) {
+          line = last;
+        } else {
+          line = document.createElement("div");
+          line.className = "term-line term-out-group";
+          line.dataset.termKind = "out-group";
+          termBodyEl.appendChild(line);
+          appendedNewLine = true;
+        }
+      }
+      const row = document.createElement("div");
+      row.className = termRequestGroup && termRequestGroup.isConnected ? "term-call-row out" : "term-out-row";
+      const span = document.createElement("span");
+      span.className = "term-out" + (normalizedCls ? " " + normalizedCls : "");
+      span.textContent = text;
+      row.appendChild(span);
+      line.appendChild(row);
+    }
+    if (appendedNewLine) trimTerminalLines();
+    if (!noScroll) termBodyEl.scrollTop = termBodyEl.scrollHeight;
     if (persist) {
-      enqueueSessionEntries(
-        [
-          {
-            role: "assistant",
-            entry_type: "terminal",
-            terminal_kind: type === "cmd" ? "cmd" : "out",
-            content: String(text ?? ""),
-            ts: toIsoWithOffset(new Date()),
-          },
-        ],
-        { sessionId },
+      enqueueTermPersist(
+        {
+          role: "assistant",
+          entry_type: "terminal",
+          terminal_kind: type === "cmd" ? "cmd" : "out",
+          terminal_class: type === "cmd" ? "" : inferTerminalClass(text, cls),
+          content: String(text ?? ""),
+          ts: toIsoWithOffset(new Date()),
+        },
+        sessionId,
       );
     }
   }
 
-  function addTermSep({ persist = true, sessionId = getSessionId() } = {}) {
+  function addTermSep({ persist = true, sessionId = getSessionId(), noScroll = false } = {}) {
     const lineText = "─".repeat(36);
-    const el = document.createElement("div");
-    el.className = "term-line term-sep";
-    el.textContent = lineText;
-    termBodyEl.appendChild(el);
+    if (termRequestGroup && termRequestGroup.isConnected) {
+      const row = document.createElement("div");
+      row.className = "term-call-row sep";
+      row.textContent = lineText;
+      termRequestGroup.appendChild(row);
+      termRequestGroup = null;
+    } else {
+      const el = document.createElement("div");
+      el.className = "term-line term-sep";
+      el.dataset.termKind = "sep";
+      el.textContent = lineText;
+      termBodyEl.appendChild(el);
+      trimTerminalLines();
+    }
+    if (!noScroll) termBodyEl.scrollTop = termBodyEl.scrollHeight;
     if (persist) {
-      enqueueSessionEntries(
-        [
-          {
-            role: "assistant",
-            entry_type: "terminal",
-            terminal_kind: "sep",
-            content: lineText,
-            ts: toIsoWithOffset(new Date()),
-          },
-        ],
-        { sessionId },
+      enqueueTermPersist(
+        {
+          role: "assistant",
+          entry_type: "terminal",
+          terminal_kind: "sep",
+          content: lineText,
+          ts: toIsoWithOffset(new Date()),
+        },
+        sessionId,
       );
     }
   }
@@ -1780,6 +1971,8 @@
   }
 
   function clearTerm() {
+    flushTermPersistBuffer();
+    termRequestGroup = null;
     termBodyEl.innerHTML = "";
     termInitialized = false;
     initTermContent();
@@ -1956,6 +2149,8 @@
       safeType === "terminal" && ["cmd", "out", "sep"].includes(terminalKindRaw)
         ? terminalKindRaw
         : "";
+    const terminalClassRaw = String(raw.terminal_class ?? raw.class ?? "").trim();
+    const safeTerminalClass = safeType === "terminal" ? normalizeTerminalClass(terminalClassRaw) : "";
 
     const content = String(raw.content ?? "");
     if (!content.trim()) return null;
@@ -1963,6 +2158,7 @@
       role,
       entry_type: safeType,
       terminal_kind: safeTerminalKind,
+      terminal_class: safeTerminalClass,
       content,
       ts: String(raw.ts || toIsoWithOffset(new Date())),
     };
@@ -2285,6 +2481,7 @@
   }
 
   function resetTerminalForReplay() {
+    termRequestGroup = null;
     termBodyEl.innerHTML = "";
     termInitialized = false;
     initTermContent();
@@ -2302,7 +2499,7 @@
       addTermSep({ persist: false });
       return true;
     }
-    addTermLine("out", content, "", { persist: false });
+    addTermLine("out", content, inferTerminalClass(content, String(entry?.terminal_class ?? entry?.class ?? "")), { persist: false });
     return true;
   }
 
@@ -3178,6 +3375,8 @@
       toolEventsLastErrorAt = 0;
       if (!events.length) return;
       showTerm();
+      const frag = document.createDocumentFragment();
+      let activeGroup = null;
       events.forEach((ev) => {
         const seq = Number(ev?.seq || 0);
         if (seq > 0) {
@@ -3187,10 +3386,66 @@
         if (ev?.type !== "terminal") return;
         const kind = String(ev?.kind || "out");
         const text = String(ev?.text || "");
-        if (kind === "cmd") addTermLine("cmd", text, "", { persist: false, sessionId: sid });
-        else if (kind === "sep") addTermSep({ persist: false, sessionId: sid });
-        else addTermLine("out", text, String(ev?.class || ""), { persist: false, sessionId: sid });
+        if (kind === "cmd") {
+          activeGroup = document.createElement("div");
+          activeGroup.className = "term-line term-call-group";
+          activeGroup.dataset.termKind = "call-group";
+          const row = document.createElement("div");
+          row.className = "term-call-row cmd";
+          row.innerHTML = `<span class="term-prompt">tinda@agent ~ % </span><span class="term-cmd">${escapeHtml(text)}</span>`;
+          activeGroup.appendChild(row);
+          frag.appendChild(activeGroup);
+        } else if (kind === "sep") {
+          if (activeGroup) {
+            const row = document.createElement("div");
+            row.className = "term-call-row sep";
+            row.textContent = "─".repeat(36);
+            activeGroup.appendChild(row);
+            activeGroup = null;
+          } else {
+            const row = document.createElement("div");
+            row.className = "term-line term-sep";
+            row.dataset.termKind = "sep";
+            row.textContent = "─".repeat(36);
+            frag.appendChild(row);
+          }
+        } else {
+          if (activeGroup) {
+            const row = document.createElement("div");
+            row.className = "term-call-row out";
+            const span = document.createElement("span");
+            const cls = inferTerminalClass(text, String(ev?.class || ""));
+            span.className = "term-out" + (cls ? " " + cls : "");
+            span.textContent = text;
+            row.appendChild(span);
+            activeGroup.appendChild(row);
+          } else {
+            let group = frag.lastElementChild;
+            if (
+              !group
+              || !group.classList
+              || !group.classList.contains("term-line")
+              || String(group.dataset?.termKind || "") !== "out-group"
+            ) {
+              group = document.createElement("div");
+              group.className = "term-line term-out-group";
+              group.dataset.termKind = "out-group";
+              frag.appendChild(group);
+            }
+            const outRow = document.createElement("div");
+            outRow.className = "term-out-row";
+            const span = document.createElement("span");
+            const cls = inferTerminalClass(text, String(ev?.class || ""));
+            span.className = "term-out" + (cls ? " " + cls : "");
+            span.textContent = text;
+            outRow.appendChild(span);
+            group.appendChild(outRow);
+          }
+        }
       });
+      termBodyEl.appendChild(frag);
+      trimTerminalLines();
+      termBodyEl.scrollTop = termBodyEl.scrollHeight;
     } catch (e) {
       // 网络抖动/切页瞬断时不每秒刷红错误；仅在持续失败时节流提示
       toolEventsFetchErrorStreak += 1;
@@ -3213,6 +3468,7 @@
       clearInterval(toolPollTimer);
       toolPollTimer = 0;
     }
+    flushTermPersistBuffer();
     toolEventsFetchErrorStreak = 0;
     toolEventsLastErrorAt = 0;
   }
@@ -3224,7 +3480,7 @@
     pollToolEventsOnce(sid);
     toolPollTimer = setInterval(() => {
       pollToolEventsOnce(sid);
-    }, 1000);
+    }, 1400);
   }
 
   async function compressCurrentContext() {

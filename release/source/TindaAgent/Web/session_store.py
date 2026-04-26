@@ -20,6 +20,7 @@ class SessionStoreError(ValueError):
 ROLE_SET = {"user", "assistant", "system"}
 ENTRY_TYPES = {"chat", "notice", "tool_marker", "terminal"}
 TERMINAL_KINDS = {"", "cmd", "out", "sep"}
+TERMINAL_CLASSES = {"", "err", "info", "dim"}
 MAX_MSG_CHARS = 64000
 MAX_TITLE_LEN = 15
 _THIS_FILE = str(Path(__file__).resolve())
@@ -356,6 +357,9 @@ class SessionStore:
         terminal_kind = str(raw.get("terminal_kind", "")).strip()
         if terminal_kind not in TERMINAL_KINDS:
             terminal_kind = ""
+        terminal_class = str(raw.get("terminal_class", raw.get("class", ""))).strip().lower()
+        if terminal_class not in TERMINAL_CLASSES:
+            terminal_class = ""
         is_summary = bool(raw.get("is_summary", False))
         created_at = str(raw.get("created_at", "")).strip() or _now_iso()
         return {
@@ -364,6 +368,7 @@ class SessionStore:
             "content": _truncate_text(content, MAX_MSG_CHARS),
             "entry_type": entry_type,
             "terminal_kind": terminal_kind,
+            "terminal_class": terminal_class,
             "is_summary": is_summary,
             "created_at": created_at,
         }

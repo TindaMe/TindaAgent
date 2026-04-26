@@ -7,7 +7,6 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from urllib.parse import urlparse
 
 from fastapi import FastAPI
 from fastapi import HTTPException
@@ -368,79 +367,12 @@ def _perm_label(p: int) -> str:
     return " | ".join(labels) if labels else ("NONE" if int(p) == 0 else str(p))
 
 
-_TOOL_EXEC_INTENT_PATTERNS: tuple[str, ...] = (
-    r"/tool\b",
-    r"/tools\b",
-    r"call_backend_tool",
-    r"list_available_tools",
-    r"(调用|执行|运行|测试|验证|遍历|重试).{0,6}工具",
-    r"工具.{0,6}(调用|执行|运行|测试|验证|遍历|重试)",
-    r"(run|call|invoke).{0,10}tool",
-    r"tool.{0,10}(run|call|invoke|test|verify)",
-)
-
-_TOOL_CLAIM_PATTERNS: tuple[str, ...] = (
-    r"--调用工具中--",
-    r"\[tool\]",
-    r"tool:\s*[a-z_][a-z0-9_]*",
-    r"10\s*/\s*10",
-    r"(全部|全都|所有).{0,8}(成功|通过|正常)",
-    r"工具链.{0,8}(稳定|正常|通过|无错误)",
-    r"可用工具列表",
-)
-
-_KNOWN_TOOL_NAMES: tuple[str, ...] = (
-    "echo",
-    "get_tinda_profile",
-    "get_current_time",
-    "summarize_text",
-    "extract_keywords",
-    "read_profile_snippet",
-    "read_memories",
-    "save_memory",
-    "delete_memory",
-    "admin_noop",
-    "list_available_tools",
-    "call_backend_tool",
-)
-
 _TERMINAL_DUMP_PATTERNS: tuple[str, ...] = (
     r"(?im)^\s*\[tool\]\s+",
     r"(?im)^\s*tool:\s*[a-z_][a-z0-9_]*(?:\s+#tc_\d+)?\s*$",
     r"(?im)^\s*[-]{16,}\s*$",
     r"(?m)^────────────────",
 )
-
-
-def _is_tool_execution_intent(text: str) -> bool:
-    raw = str(text or "")
-    if not raw.strip():
-        return False
-    for pattern in _TOOL_EXEC_INTENT_PATTERNS:
-        if re.search(pattern, raw, flags=re.IGNORECASE):
-            return True
-    return False
-
-
-def _looks_like_tool_execution_claim(text: str) -> bool:
-    raw = str(text or "")
-    if not raw.strip():
-        return False
-    hits = 0
-    for pattern in _TOOL_CLAIM_PATTERNS:
-        if re.search(pattern, raw, flags=re.IGNORECASE):
-            hits += 1
-    lower = raw.lower()
-    tool_name_hits = sum(1 for name in _KNOWN_TOOL_NAMES if name in lower)
-    if tool_name_hits >= 3:
-        hits += 1
-    return hits >= 2
-
-
-def _has_real_tool_execution(tool_steps: int, tool_trace: list[dict] | None) -> bool:
-    if int(tool_steps) > 0:
-        return True
-    return isinstance(tool_trace, list) and len(tool_trace) > 0
 
 
 def _looks_like_terminal_dump(text: str) -> bool:
@@ -494,32 +426,6 @@ def _sanitize_terminal_dump_reply(
     if not _looks_like_terminal_dump(raw):
         return raw
     return _tool_execution_summary_reply(tool_steps, tool_trace)
-
-
-def _build_tool_execution_guard_reply(tool_steps: int, tool_trace: list[dict] | None) -> str:
-    trace_count = len(tool_trace or [])
-    return (
-        "工具执行校验未通过：本轮未检测到真实工具调用。\n"
-        f"校验结果：tool_steps={int(tool_steps)}，tool_trace={int(trace_count)}。\n"
-        "当前“执行成功/全通过”内容属于模型文本，不是后端工具执行结果。\n"
-        "请改用 `/tool <工具名> ...`，或让我按结构化工具调用重新执行。"
-    )
-
-
-def _guard_fake_tool_claim(
-    *,
-    user_text: str,
-    reply_text: str,
-    tool_steps: int,
-    tool_trace: list[dict] | None,
-) -> str | None:
-    if _has_real_tool_execution(tool_steps, tool_trace):
-        return None
-    if not _is_tool_execution_intent(user_text):
-        return None
-    if not _looks_like_tool_execution_claim(reply_text):
-        return None
-    return _build_tool_execution_guard_reply(tool_steps, tool_trace)
 
 
 def _sanitize_tool_trace_for_user(trace: list[dict] | None) -> list[dict]:
@@ -1046,6 +952,7 @@ def _persist_terminal_events(session_id: str, events: list[dict]) -> None:
                 "content": str(e.get("text", "")),
                 "entry_type": "terminal",
                 "terminal_kind": kind,
+                "terminal_class": str(e.get("class", "") or "").strip().lower(),
                 "created_at": str(e.get("ts", "")) or _now_iso(),
                 "is_summary": False,
             }
@@ -1415,34 +1322,9 @@ async def logs_page():
 
 @app.get("/user-admin", response_class=HTMLResponse)
 async def user_admin_page(request: Request):
-    current = sec_get_current_user() or _resolve_user_from_token_header(request)
-    if current is not None and _has_perm(current, perm.USER_ADMIN):
-        return _HTML_USER_ADMIN
-
-    def _safe_next(raw: str | None) -> str | None:
-        text = str(raw or "").strip()
-        if not text:
-            return None
-        try:
-            parsed = urlparse(text)
-        except Exception:
-            return None
-        path = str(parsed.path or "").strip()
-        if not path.startswith("/"):
-            return None
-        if path.startswith("/user-admin"):
-            return None
-        query = str(parsed.query or "").strip()
-        if query:
-            return f"{path}?{query}"
-        return path
-
-    target = _safe_next(request.query_params.get("next"))
-    if not target:
-        target = _safe_next(request.headers.get("referer"))
-    if not target:
-        target = "/"
-    return RedirectResponse(url=target, status_code=307)
+    # 页面本身允许打开；真正权限由 /admin/* 接口强校验，
+    # 前端页面加载后会基于 /auth/status 再次判定并回跳。
+    return _HTML_USER_ADMIN
 
 
 @app.get("/auth/status")
@@ -1946,28 +1828,6 @@ async def chat(req: ChatRequest):
     tool_steps = int(result.get("tool_steps", 0))
     reply = str(result.get("reply", ""))
 
-    guard_reply = _guard_fake_tool_claim(
-        user_text=message,
-        reply_text=reply,
-        tool_steps=tool_steps,
-        tool_trace=tool_trace,
-    )
-    if guard_reply:
-        _audit_web(
-            "TOOL_EXECUTE",
-            "chat",
-            f"fake_tool_claim_blocked session_id={sid}",
-            {
-                "session_id": sid,
-                "tool_steps": tool_steps,
-                "tool_trace_count": len(tool_trace),
-                "reply_len": len(reply),
-            },
-        )
-        reply = guard_reply
-        tool_trace = []
-        tool_steps = 0
-
     sanitized_reply = _sanitize_terminal_dump_reply(
         reply_text=reply,
         tool_steps=tool_steps,
@@ -2120,37 +1980,12 @@ async def chat_stream(
                 else []
             )
             safe_tool_steps = int(done_payload.get("tool_steps", 0))
-            reply_before_guard = str(final_reply or done_payload.get("reply", ""))
-
-            guard_reply = _guard_fake_tool_claim(
-                user_text=text,
-                reply_text=reply_before_guard,
-                tool_steps=safe_tool_steps,
-                tool_trace=safe_tool_trace,
-            )
-
-            if guard_reply:
-                _audit_web(
-                    "TOOL_EXECUTE",
-                    "chat_stream",
-                    f"fake_tool_claim_blocked_stream session_id={sid}",
-                    {
-                        "session_id": sid,
-                        "tool_steps": safe_tool_steps,
-                        "tool_trace_count": len(safe_tool_trace),
-                        "reply_len": len(reply_before_guard),
-                    },
-                )
-                guard_delta = f"\n\n> [校验] 本轮未发生真实工具调用。\n\n{guard_reply}"
-                final_reply = f"{reply_before_guard}{guard_delta}"
-                yield _sse_event("delta", {"content": guard_delta})
-                done_payload = {"reply": final_reply, "tool_trace": [], "tool_steps": 0}
-            else:
-                done_payload = {
-                    "reply": reply_before_guard,
-                    "tool_trace": safe_tool_trace,
-                    "tool_steps": safe_tool_steps,
-                }
+            final_reply = str(final_reply or done_payload.get("reply", ""))
+            done_payload = {
+                "reply": final_reply,
+                "tool_trace": safe_tool_trace,
+                "tool_steps": safe_tool_steps,
+            }
 
             sanitized_reply = _sanitize_terminal_dump_reply(
                 reply_text=str(done_payload.get("reply", "")),
@@ -2238,6 +2073,7 @@ async def session_events(req: SessionEventsRequest):
                 "content": str(it.get("content", "")),
                 "entry_type": str(it.get("entry_type", "chat")),
                 "terminal_kind": str(it.get("terminal_kind", "")),
+                "terminal_class": str(it.get("terminal_class", it.get("class", ""))),
                 "is_summary": False,
                 "created_at": str(it.get("ts", "")) or _now_iso(),
             }

@@ -297,19 +297,71 @@ def get_audit_engine() -> GlobalAuditEngine:
 
 
 def audit_event(
-    *,
-    op_type: str,
-    subsystem: str,
-    func: str,
-    file_path: str,
-    content: str,
+    *args: Any,
+    op_type: str | None = None,
+    subsystem: str | None = None,
+    func: str | None = None,
+    file_path: str | None = None,
+    content: str | None = None,
     extra: dict[str, Any] | None = None,
 ) -> int:
+    """
+    兼容两种调用方式：
+    1) 新写法（推荐）：audit_event(op_type=..., subsystem=..., ...)
+    2) 旧写法：audit_event(op_type, subsystem, func, file_path, content[, extra])
+    """
+    if args:
+        if len(args) > 6:
+            raise TypeError(
+                f"audit_event() takes at most 6 positional arguments but {len(args)} were given"
+            )
+        names = ("op_type", "subsystem", "func", "file_path", "content", "extra")
+        for idx, value in enumerate(args):
+            name = names[idx]
+            if name == "op_type":
+                if op_type is not None:
+                    raise TypeError("audit_event() got multiple values for argument 'op_type'")
+                op_type = str(value)
+            elif name == "subsystem":
+                if subsystem is not None:
+                    raise TypeError("audit_event() got multiple values for argument 'subsystem'")
+                subsystem = str(value)
+            elif name == "func":
+                if func is not None:
+                    raise TypeError("audit_event() got multiple values for argument 'func'")
+                func = str(value)
+            elif name == "file_path":
+                if file_path is not None:
+                    raise TypeError("audit_event() got multiple values for argument 'file_path'")
+                file_path = str(value)
+            elif name == "content":
+                if content is not None:
+                    raise TypeError("audit_event() got multiple values for argument 'content'")
+                content = str(value)
+            elif name == "extra":
+                if extra is not None:
+                    raise TypeError("audit_event() got multiple values for argument 'extra'")
+                extra = value if isinstance(value, dict) else {"raw_extra": str(value)}
+
+    missing = [
+        name
+        for name, value in (
+            ("op_type", op_type),
+            ("subsystem", subsystem),
+            ("func", func),
+            ("file_path", file_path),
+            ("content", content),
+        )
+        if value is None
+    ]
+    if missing:
+        raise TypeError(f"audit_event() missing required arguments: {', '.join(missing)}")
+
     return get_audit_engine().event(
-        op_type=op_type,
-        subsystem=subsystem,
-        func=func,
-        file_path=file_path,
-        content=content,
+        op_type=str(op_type),
+        subsystem=str(subsystem),
+        func=str(func),
+        file_path=str(file_path),
+        content=str(content),
         extra=extra,
     )
