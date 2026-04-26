@@ -1,6 +1,6 @@
 # TindaAgent
 
-当前版本：`1.6.8`
+当前版本：`1.7.1`
 
 TindaAgent 是一个本地化 Web Agent 系统，聚焦于以下能力：
 
@@ -58,6 +58,17 @@ TindaAgent 是一个本地化 Web Agent 系统，聚焦于以下能力：
 
 ## 启动（AnacondaAnaconda3）
 
+运行时目录由子系统 `TindaAgent/Process/Architecture/paths.py` 统一决策：
+
+- 默认基于系统环境变量 `HOME`/`USER`（Windows 兼容 `USERNAME`），相对生成 `$HOME/.tinda/agent`
+- 不使用盘符或挂载路径硬编码推断
+
+可通过环境变量 `TINDA_HOME` 显式覆盖，例如：
+
+```bash
+export TINDA_HOME=/mnt/e/.tinda/agent
+```
+
 ```bash
 cd /mnt/e/Python/release/source
 cp .env.example TindaAgent/.env
@@ -77,6 +88,18 @@ cd /mnt/e/Python/release/source
 - `http://127.0.0.1:8000/`
 - 聊天页：`/app`
 - 日志页：`/logs`
+
+版本切换说明：
+
+1. 在版本面板执行“切换”后，会更新 `current.json` 的“已选版本”。
+2. 重启服务后，`run_web.py` 会按 `current.json.app_path` 自动从目标版本目录启动。
+3. 首页会同时显示“运行版本”和“已选版本”，避免误判为“切换失败”。
+
+本地发版包约定（强制）：
+
+1. 每次代码版本更新后，立即为该版本创建同名快照包（目录名必须与 `pyproject.toml` 版本一致）。
+2. 后端会校验快照版本与源码版本一致，不一致直接拒绝，避免“目录名和内容版本错位”。
+3. 可通过接口快速执行：`POST /system/version/snapshot/current`（管理员权限）。
 
 ## 版本策略
 

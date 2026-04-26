@@ -11,11 +11,29 @@ def get_project_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
+def _get_env_home_dir() -> Path:
+    raw_home = str(os.getenv("HOME", "")).strip()
+    raw_user = str(os.getenv("USER", "")).strip() or str(os.getenv("USERNAME", "")).strip()
+    if raw_home:
+        home = Path(raw_home).expanduser()
+        # 兼容部分环境仅给出父目录的场景，按用户名补全一层。
+        if raw_user and str(home.name).lower() != raw_user.lower():
+            return home / raw_user
+        return home
+    return Path.home()
+
+
+def _get_default_runtime_root() -> Path:
+    # 默认策略：使用系统环境中的 HOME/USER，不做路径硬编码推断。
+    home_dir = _get_env_home_dir().resolve()
+    return home_dir / _DEFAULT_HOME_PARTS[0] / _DEFAULT_HOME_PARTS[1]
+
+
 def get_runtime_root() -> Path:
     raw = str(os.getenv(_TINDA_HOME_ENV, "")).strip()
     if raw:
         return Path(raw).expanduser().resolve()
-    return (Path.home() / _DEFAULT_HOME_PARTS[0] / _DEFAULT_HOME_PARTS[1]).resolve()
+    return _get_default_runtime_root()
 
 
 def get_data_root() -> Path:

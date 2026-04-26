@@ -136,13 +136,33 @@ def _normalize_version_text(value: object) -> str:
     return text
 
 
+def _detect_app_version_from_path(app_path: str) -> str:
+    raw = str(app_path or "").strip()
+    if not raw:
+        return ""
+    root = Path(raw)
+    candidates = [root / "pyproject.toml", root.parent / "pyproject.toml"]
+    version_re = re.compile(r'^\s*version\s*=\s*"([^"]+)"', re.MULTILINE)
+    for cand in candidates:
+        try:
+            if not cand.exists():
+                continue
+            text = cand.read_text(encoding="utf-8")
+            m = version_re.search(text)
+            if m:
+                return _normalize_version_text(m.group(1))
+        except Exception:
+            continue
+    return ""
+
+
 def _build_runtime_version_state() -> dict[str, object]:
     # 以当前运行代码版本为准，避免被历史 current.json 指针污染前端显示。
     current = _version_mgr.get_current()
     source = str(current.get("source", "local"))
     verified = bool(current.get("verified", False))
     selected_version = _normalize_version_text(current.get("version", ""))
-    runtime_version = _normalize_version_text(_APP_VERSION) or selected_version
+    runtime_version = _detect_app_version_from_path(str(current.get("app_path", ""))) or _normalize_version_text(_APP_VERSION) or selected_version
     if source in {"local", "local_snapshot"}:
         verify_label = "本地开发版（未签名）" if source == "local" else "本地快照版（未签名）"
     else:
@@ -255,6 +275,10 @@ class VersionSwitchRequest(BaseModel):
 
 class VersionSnapshotRequest(BaseModel):
     version: str
+
+
+class VersionSnapshotCurrentRequest(BaseModel):
+    force: bool = False
 
 
 def _now_iso() -> str:
@@ -1301,6 +1325,15 @@ async def switch_system_version(req: VersionSwitchRequest):
 async def create_system_version_snapshot(req: VersionSnapshotRequest):
     _require_admin_user()
     result = _version_mgr.create_local_snapshot(str(req.version or "").strip())
+    if not bool(result.get("ok", False)):
+        return JSONResponse(result, status_code=400)
+    return JSONResponse(result)
+
+
+@app.post("/system/version/snapshot/current")
+async def create_system_version_snapshot_current(req: VersionSnapshotCurrentRequest):
+    _require_admin_user()
+    result = _version_mgr.create_snapshot_from_current_code()
     if not bool(result.get("ok", False)):
         return JSONResponse(result, status_code=400)
     return JSONResponse(result)

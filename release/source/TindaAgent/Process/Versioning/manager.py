@@ -88,6 +88,20 @@ def _copytree_filtered(src: Path, dst: Path, skip_names: set[str] | None = None)
             shutil.copy2(item, target)
 
 
+def _read_version_from_pyproject(project_root: Path) -> str:
+    pyproject = project_root / "pyproject.toml"
+    try:
+        if not pyproject.exists():
+            return ""
+        text = pyproject.read_text(encoding="utf-8")
+        m = re.search(r'^\s*version\s*=\s*"([^"]+)"', text, re.MULTILINE)
+        if not m:
+            return ""
+        return _normalize_version_text(m.group(1))
+    except Exception:
+        return ""
+
+
 def _read_json(path: Path, default: Any) -> Any:
     try:
         if not path.exists():
@@ -305,7 +319,10 @@ class VersionManager:
         version_dir.mkdir(parents=True, exist_ok=True)
         app_dir.mkdir(parents=True, exist_ok=True)
 
-        src_project = Path(__file__).resolve().parents[2]
+        src_project = Path(__file__).resolve().parents[3]
+        src_project_version = _read_version_from_pyproject(src_project)
+        if src_project_version and src_project_version != target:
+            return {"ok": False, "error": f"snapshot version mismatch: target={target}, source={src_project_version}"}
         try:
             _copytree_filtered(src_project, app_dir, skip_names={"__pycache__", ".git", ".pytest_cache", ".mypy_cache"})
             shared_data = self.shared_root / "data"
@@ -367,6 +384,16 @@ class VersionManager:
             "source": "local_snapshot",
             "app_path": str(app_dir),
         }
+
+    def create_snapshot_from_current_code(self) -> dict[str, Any]:
+        src_project = Path(__file__).resolve().parents[3]
+        src_version = _read_version_from_pyproject(src_project)
+        if not src_version:
+            return {"ok": False, "error": "cannot detect project version from pyproject.toml"}
+        version_dir = self._version_dir(src_version)
+        if version_dir.exists():
+            return {"ok": False, "error": f"version already exists: {src_version}"}
+        return self.create_local_snapshot(src_version)
 
     def _extract_release_assets(self, release_item: dict[str, Any]) -> dict[str, str]:
         assets = release_item.get("assets", []) if isinstance(release_item, dict) else []
@@ -626,6 +653,10 @@ class VersionManager:
 
         if not version_dir.exists() or not manifest_path.exists() or not sig_path.exists() or not meta_path.exists():
             return {"ok": False, "error": f"version not installed: {target}"}
+        server_entry = app_dir / "TindaAgent" / "Web" / "server.py"
+        legacy_server_entry = app_dir / "Web" / "server.py"
+        if not server_entry.exists() and not legacy_server_entry.exists():
+            return {"ok": False, "error": f"version package incomplete: missing {server_entry} or {legacy_server_entry}"}
 
         manifest = _read_json(manifest_path, {})
         if not isinstance(manifest, dict):
