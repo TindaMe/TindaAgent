@@ -59,7 +59,17 @@ TindaAgent 是一个本地化 Web Agent 系统，聚焦于以下能力：
 ## 启动（AnacondaAnaconda3）
 
 ```bash
-conda run -n base python /mnt/e/Python/TindaAgent/run_web.py
+cd /mnt/e/Python/release/source
+cp .env.example TindaAgent/.env
+# 编辑 TindaAgent/.env，填入 DEEPSEEK_API_KEY
+conda run -n base python run_web.py
+```
+
+等价启动命令（你常用的方式）：
+
+```bash
+cd /mnt/e/Python/release/source
+/mnt/e/AnacondaAnaconda3/python.exe run_web.py
 ```
 
 默认访问：

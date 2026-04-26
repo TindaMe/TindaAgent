@@ -1067,7 +1067,7 @@
 
     const localRows = Array.isArray(payload?.local_versions) ? payload.local_versions : [];
     const remoteRows = Array.isArray(payload?.remote_versions) ? payload.remote_versions : [];
-    const currentVersion = normalizeVersion(payload?.current?.version);
+    const currentVersion = normalizeVersion(payload?.current?.selected_version || payload?.current?.version);
     const installedSet = new Set(localRows.map((x) => normalizeVersion(x?.version)).filter(Boolean));
 
     if (!localRows.length) {

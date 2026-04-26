@@ -129,6 +129,44 @@ _AUTH_OPEN_PATHS = {
 }
 
 
+def _normalize_version_text(value: object) -> str:
+    text = str(value or "").strip()
+    if text.lower().startswith("v"):
+        return text[1:]
+    return text
+
+
+def _build_runtime_version_state() -> dict[str, object]:
+    # 以当前运行代码版本为准，避免被历史 current.json 指针污染前端显示。
+    current = _version_mgr.get_current()
+    source = str(current.get("source", "local"))
+    verified = bool(current.get("verified", False))
+    selected_version = _normalize_version_text(current.get("version", ""))
+    runtime_version = _normalize_version_text(_APP_VERSION) or selected_version
+    if source in {"local", "local_snapshot"}:
+        verify_label = "本地开发版（未签名）" if source == "local" else "本地快照版（未签名）"
+    else:
+        verify_label = "已签名验证" if verified else "签名未验证"
+    source_label = {
+        "local": "本地源码",
+        "local_snapshot": "本地快照",
+        "github_releases": "GitHub Release",
+    }.get(source, source)
+    return {
+        "version": runtime_version,
+        "display": f"v{runtime_version}" if runtime_version else "",
+        "app_version": _APP_VERSION,
+        "selected_version": selected_version,
+        "signature_id": str(current.get("signature_id", "")),
+        "verified": verified,
+        "verify_label": verify_label,
+        "source": source,
+        "source_label": source_label,
+        "current_path": str(current.get("app_path", "")),
+        "switched_at": str(current.get("switched_at", "")),
+    }
+
+
 class ChatRequest(BaseModel):
     message: str
     session_id: str
@@ -1200,32 +1238,21 @@ async def chat_page():
 
 @app.get("/system/version")
 async def system_version():
-    current = _version_mgr.get_current()
-    current_version = str(current.get("version", "")).strip() or _APP_VERSION
-    source = str(current.get("source", "local"))
-    verified = bool(current.get("verified", False))
-    if source in {"local", "local_snapshot"}:
-        verify_label = "本地开发版（未签名）" if source == "local" else "本地快照版（未签名）"
-    else:
-        verify_label = "已签名验证" if verified else "签名未验证"
-    source_label = {
-        "local": "本地源码",
-        "local_snapshot": "本地快照",
-        "github_releases": "GitHub Release",
-    }.get(source, source)
+    state = _build_runtime_version_state()
     return JSONResponse(
         {
             "ok": True,
-            "version": current_version,
-            "display": f"v{current_version}",
-            "app_version": _APP_VERSION,
-            "signature_id": str(current.get("signature_id", "")),
-            "verified": verified,
-            "verify_label": verify_label,
-            "source": source,
-            "source_label": source_label,
-            "current_path": str(current.get("app_path", "")),
-            "switched_at": str(current.get("switched_at", "")),
+            "version": state.get("version", ""),
+            "display": state.get("display", ""),
+            "app_version": state.get("app_version", _APP_VERSION),
+            "selected_version": state.get("selected_version", ""),
+            "signature_id": state.get("signature_id", ""),
+            "verified": state.get("verified", False),
+            "verify_label": state.get("verify_label", ""),
+            "source": state.get("source", ""),
+            "source_label": state.get("source_label", ""),
+            "current_path": state.get("current_path", ""),
+            "switched_at": state.get("switched_at", ""),
         }
     )
 
@@ -1235,13 +1262,14 @@ async def list_system_versions():
     _require_public_read_user()
     local_rows = _version_mgr.list_local_versions()
     remote_payload = _version_mgr.list_remote_releases()
+    runtime_state = _build_runtime_version_state()
     remote_ok = bool(remote_payload.get("ok", True))
     return JSONResponse(
         {
             "ok": True,
             "source": "github_releases",
             "repo": str(remote_payload.get("repo", "TindaMe/TindaAgent")),
-            "current": _version_mgr.get_current(),
+            "current": runtime_state,
             "local_versions": local_rows,
             "remote_versions": remote_payload.get("releases", []),
             "latest_verified": remote_payload.get("latest_verified"),
