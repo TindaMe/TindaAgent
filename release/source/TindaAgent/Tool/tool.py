@@ -824,6 +824,8 @@ def _parse_event_id(raw: str | int | None) -> int | None:
     text = str(raw or "").strip()
     if not text:
         return None
+    # 兼容日志页常见前缀写法：log#123 / log-123 / log:123
+    text = re.sub(r"^\s*log[\s:_-]*#?\s*", "", text, flags=re.IGNORECASE)
     text = text.lstrip("#")
     if text.lower().startswith("tc_"):
         text = text[3:]

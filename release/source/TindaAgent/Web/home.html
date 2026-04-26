@@ -706,7 +706,7 @@
       <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"></circle><path d="M12 2.8v4.2M12 17v4.2M2.8 12h4.2M17 12h4.2M5.3 5.3l3 3M15.7 15.7l3 3M18.7 5.3l-3 3M8.3 15.7l-3 3"></path></svg>
     </div>
     <span class="brand-name">TindaAgent</span>
-    <button id="versionBadge" type="button" class="version-badge version-badge-btn" title="点击选择版本">v1.7.2</button>
+    <button id="versionBadge" type="button" class="version-badge version-badge-btn" title="点击选择版本">v1.7.3</button>
   </div>
   <span class="header-decos" aria-hidden="true"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span>
 </header>
@@ -874,7 +874,7 @@
     versionRemoteList: document.getElementById("versionRemoteList"),
     versionSnapshotBtn: document.getElementById("versionSnapshotBtn"),
   };
-  const SYSTEM_WRITE_BIT = 1 << 7;
+  const USER_ADMIN_PERM = 511;
   let authState = { logged_in: false, user: null };
   let versionModalBusy = false;
   const AUTH_TOKEN_KEY = "ta_auth_token";
@@ -970,9 +970,9 @@
 
   function renderVersionCurrentInfo(current) {
     if (!ui.versionCurrentInfo) return;
-    const runtimeVersionText = withV(current?.running_version || current?.version || current?.display);
-    const selectedVersionText = withV(current?.selected_version || current?.version || current?.display);
-    const selectedVersionRawText = withV(current?.selected_version_raw || current?.selected_version || current?.version || current?.display);
+    const effectiveVersionText = withV(current?.effective_version || current?.running_version || current?.version || current?.display);
+    const selectedVersionText = withV(current?.selected_version || current?.effective_version || current?.running_version || current?.version || current?.display);
+    const selectedVersionRawText = withV(current?.selected_version_raw || current?.selected_version || current?.effective_version || current?.running_version || current?.version || current?.display);
     const consistent = Boolean(current?.version_consistent !== false);
     const verified = Boolean(current?.verified);
     const sigRaw = String(current?.signature_id || "").trim();
@@ -982,7 +982,7 @@
     const switchedAt = asDateTime(current?.switched_at) || "-";
     const mismatchLine = consistent ? "" : `\n版本一致性: 异常（原始已选 ${selectedVersionRawText}）`;
     ui.versionCurrentInfo.textContent =
-      `运行版本: ${runtimeVersionText}\n已选版本: ${selectedVersionText}${mismatchLine}\n签名状态: ${verifyLabel}\n签名ID: ${sig}\n来源: ${source}\n切换时间: ${switchedAt}`;
+      `运行版本: ${effectiveVersionText}\n已选版本: ${selectedVersionText}${mismatchLine}\n签名状态: ${verifyLabel}\n签名ID: ${sig}\n来源: ${source}\n切换时间: ${switchedAt}`;
   }
 
   function createVersionItem(row, mode, context = {}) {
@@ -1214,7 +1214,7 @@
 
   function isAdminUser(user) {
     const p = Number(user?.perm ?? 0);
-    return Number.isFinite(p) && ((p & SYSTEM_WRITE_BIT) === SYSTEM_WRITE_BIT);
+    return Number.isFinite(p) && ((p & USER_ADMIN_PERM) === USER_ADMIN_PERM);
   }
 
   function updateAuthUI() {

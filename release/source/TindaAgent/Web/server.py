@@ -7,6 +7,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
+from urllib.parse import urlparse
 
 from fastapi import FastAPI
 from fastapi import HTTPException
@@ -165,8 +166,23 @@ def _build_runtime_version_state() -> dict[str, object]:
     verified = bool(current.get("verified", False))
     selected_version_raw = _normalize_version_text(current.get("version", ""))
     runtime_version = _detect_app_version_from_path(str(current.get("app_path", ""))) or _normalize_version_text(_APP_VERSION) or selected_version_raw
-    selected_version = selected_version_raw or runtime_version
+    runtime_app_path = str(Path(__file__).resolve().parents[2])
     version_consistent = not (runtime_version and selected_version_raw and runtime_version != selected_version_raw)
+
+    # 产品策略：切换禁用时，不保留“已选版本”历史错位；检测到错位自动对齐 current.json。
+    if not version_consistent:
+        try:
+            aligned = _version_mgr.align_current_to_runtime(runtime_version, runtime_app_path, keep_switched_at=True)
+            current = aligned if isinstance(aligned, dict) else _version_mgr.get_current()
+            source = str(current.get("source", "local"))
+            verified = bool(current.get("verified", False))
+            selected_version_raw = _normalize_version_text(current.get("version", ""))
+            version_consistent = True
+        except Exception:
+            # 对齐失败不影响接口可用性，仍以运行时版本继续返回。
+            pass
+
+    selected_version = runtime_version
     if source in {"local", "local_snapshot"}:
         verify_label = "本地开发版（未签名）" if source == "local" else "本地快照版（未签名）"
     else:
@@ -181,6 +197,8 @@ def _build_runtime_version_state() -> dict[str, object]:
         "running_display": f"v{runtime_version}" if runtime_version else "",
         "version": runtime_version,
         "display": f"v{runtime_version}" if runtime_version else "",
+        "effective_version": runtime_version,
+        "effective_display": f"v{runtime_version}" if runtime_version else "",
         "app_version": _APP_VERSION,
         "selected_version": selected_version,
         "selected_display": f"v{selected_version}" if selected_version else "",
@@ -191,8 +209,9 @@ def _build_runtime_version_state() -> dict[str, object]:
         "verify_label": verify_label,
         "source": source,
         "source_label": source_label,
-        "current_path": str(current.get("app_path", "")),
+        "current_path": runtime_app_path,
         "switched_at": str(current.get("switched_at", "")),
+        "switch_enabled": False,
     }
 
 
@@ -1289,6 +1308,8 @@ async def system_version():
             "display": state.get("display", ""),
             "running_version": state.get("running_version", ""),
             "running_display": state.get("running_display", ""),
+            "effective_version": state.get("effective_version", state.get("running_version", "")),
+            "effective_display": state.get("effective_display", state.get("running_display", "")),
             "app_version": state.get("app_version", _APP_VERSION),
             "selected_version": state.get("selected_version", ""),
             "selected_display": state.get("selected_display", ""),
@@ -1301,6 +1322,7 @@ async def system_version():
             "source_label": state.get("source_label", ""),
             "current_path": state.get("current_path", ""),
             "switched_at": state.get("switched_at", ""),
+            "switch_enabled": state.get("switch_enabled", False),
         }
     )
 
@@ -1392,8 +1414,35 @@ async def logs_page():
 
 
 @app.get("/user-admin", response_class=HTMLResponse)
-async def user_admin_page():
-    return _HTML_USER_ADMIN
+async def user_admin_page(request: Request):
+    current = sec_get_current_user() or _resolve_user_from_token_header(request)
+    if current is not None and _has_perm(current, perm.USER_ADMIN):
+        return _HTML_USER_ADMIN
+
+    def _safe_next(raw: str | None) -> str | None:
+        text = str(raw or "").strip()
+        if not text:
+            return None
+        try:
+            parsed = urlparse(text)
+        except Exception:
+            return None
+        path = str(parsed.path or "").strip()
+        if not path.startswith("/"):
+            return None
+        if path.startswith("/user-admin"):
+            return None
+        query = str(parsed.query or "").strip()
+        if query:
+            return f"{path}?{query}"
+        return path
+
+    target = _safe_next(request.query_params.get("next"))
+    if not target:
+        target = _safe_next(request.headers.get("referer"))
+    if not target:
+        target = "/"
+    return RedirectResponse(url=target, status_code=307)
 
 
 @app.get("/auth/status")

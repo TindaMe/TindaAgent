@@ -228,6 +228,32 @@ class VersionManager:
         row.setdefault("switched_at", "")
         return row
 
+    def align_current_to_runtime(self, runtime_version: str, runtime_app_path: str, *, keep_switched_at: bool = True) -> dict[str, Any]:
+        """
+        当运行代码版本与 current.json 历史指针不一致时，按当前运行时状态对齐 current.json。
+        """
+        target_version = _normalize_version_text(runtime_version) or _normalize_version_text(get_app_version())
+        target_app_path = str(runtime_app_path or "").strip()
+        row = self.get_current()
+        row["version"] = target_version
+        row["app_path"] = target_app_path
+        row["source"] = "local"
+        row["verified"] = False
+        row["signature_id"] = ""
+        row["manifest_sha256"] = ""
+        if (not keep_switched_at) or (not str(row.get("switched_at", "")).strip()):
+            row["switched_at"] = _now_iso()
+        _write_json_atomic(self.current_path, row)
+        audit_event(
+            op_type="SYSTEM_WRITE",
+            subsystem="versioning",
+            func="VersionManager.align_current_to_runtime",
+            file_path=_THIS_FILE,
+            content=f"align_current_to_runtime version={target_version}",
+            extra={"version": target_version, "app_path": target_app_path},
+        )
+        return row
+
     def _load_enabled_pubkeys(self) -> list[tuple[str, Ed25519PublicKey]]:
         data = _read_json(self.pubkeys_file, {})
         rows = data.get("keys", []) if isinstance(data, dict) else []
