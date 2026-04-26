@@ -706,7 +706,7 @@
       <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"></circle><path d="M12 2.8v4.2M12 17v4.2M2.8 12h4.2M17 12h4.2M5.3 5.3l3 3M15.7 15.7l3 3M18.7 5.3l-3 3M8.3 15.7l-3 3"></path></svg>
     </div>
     <span class="brand-name">TindaAgent</span>
-    <button id="versionBadge" type="button" class="version-badge version-badge-btn" title="点击选择版本">v1.7.1</button>
+    <button id="versionBadge" type="button" class="version-badge version-badge-btn" title="点击选择版本">v1.7.2</button>
   </div>
   <span class="header-decos" aria-hidden="true"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span>
 </header>
@@ -824,7 +824,7 @@
     </button>
     <div class="version-modal-head">
       <div class="version-modal-title">版本管理</div>
-      <div class="version-modal-subtitle">点击可安装或切换版本</div>
+      <div class="version-modal-subtitle">查看版本与安装可用版本</div>
     </div>
     <div class="version-top-actions">
       <button type="button" class="version-btn secondary" id="versionSnapshotBtn">创建本地快照</button>
@@ -970,16 +970,19 @@
 
   function renderVersionCurrentInfo(current) {
     if (!ui.versionCurrentInfo) return;
-    const runtimeVersionText = withV(current?.version || current?.display);
+    const runtimeVersionText = withV(current?.running_version || current?.version || current?.display);
     const selectedVersionText = withV(current?.selected_version || current?.version || current?.display);
+    const selectedVersionRawText = withV(current?.selected_version_raw || current?.selected_version || current?.version || current?.display);
+    const consistent = Boolean(current?.version_consistent !== false);
     const verified = Boolean(current?.verified);
     const sigRaw = String(current?.signature_id || "").trim();
     const sig = sigRaw || "N/A";
     const source = String(current?.source_label || current?.source || "local");
     const verifyLabel = String(current?.verify_label || (verified ? "已验证" : "未验证"));
     const switchedAt = asDateTime(current?.switched_at) || "-";
+    const mismatchLine = consistent ? "" : `\n版本一致性: 异常（原始已选 ${selectedVersionRawText}）`;
     ui.versionCurrentInfo.textContent =
-      `运行版本: ${runtimeVersionText}\n已选版本: ${selectedVersionText}\n签名状态: ${verifyLabel}\n签名ID: ${sig}\n来源: ${source}\n切换时间: ${switchedAt}`;
+      `运行版本: ${runtimeVersionText}\n已选版本: ${selectedVersionText}${mismatchLine}\n签名状态: ${verifyLabel}\n签名ID: ${sig}\n来源: ${source}\n切换时间: ${switchedAt}`;
   }
 
   function createVersionItem(row, mode, context = {}) {
@@ -1038,22 +1041,13 @@
         actions.appendChild(installBtn);
       }
 
-      if ((mode === "local" || isInstalled) && !isCurrent) {
-        const switchBtn = document.createElement("button");
-        switchBtn.className = "version-btn";
-        switchBtn.type = "button";
-        switchBtn.dataset.action = "switch";
-        switchBtn.dataset.version = verNorm;
-        switchBtn.textContent = "切换";
-        switchBtn.disabled = versionModalBusy || !verNorm;
-        actions.appendChild(switchBtn);
-      }
+      // 按产品策略：前端不提供“切换版本”按钮，仅保留安装入口。
     }
 
     if (!actions.childNodes.length) {
       const hint = document.createElement("div");
       hint.className = "version-item-meta";
-      hint.textContent = canAdmin ? "无可执行操作" : "仅管理员可安装/切换";
+      hint.textContent = canAdmin ? "无可执行操作" : "仅管理员可安装";
       actions.appendChild(hint);
     }
 
@@ -1135,7 +1129,7 @@
       if (data?.remote_ok === false || data?.error) {
         setVersionModalMessage(`已加载本地列表，远端获取异常：${String(data.error)}`, "error");
       } else {
-        setVersionModalMessage(isAdminLoggedIn() ? "可选择版本安装或切换。" : "当前账户可查看版本，安装与切换需管理员权限。");
+        setVersionModalMessage(isAdminLoggedIn() ? "可选择版本安装。" : "当前账户可查看版本，安装需管理员权限。");
       }
     } catch (e) {
       setVersionModalMessage(`加载异常：${String(e?.message || e)}`, "error");
@@ -1146,6 +1140,10 @@
   async function performVersionAction(action, version) {
     const ver = normalizeVersion(version);
     if (!ver || versionModalBusy) return;
+    if (String(action || "") === "switch") {
+      setVersionModalMessage("版本切换已禁用。", "error");
+      return;
+    }
     if (!isAdminLoggedIn()) {
       setVersionModalMessage("当前账户没有管理员权限。", "error");
       return;

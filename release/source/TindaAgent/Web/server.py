@@ -13,7 +13,7 @@ from fastapi import HTTPException
 from fastapi import Query
 from fastapi import Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
 
 from TindaAgent.Process.AI.agent import Agent
@@ -118,9 +118,11 @@ _LOG_ROOT = get_log_root()
 _LOG_MAX_READ_BYTES = 2 * 1024 * 1024
 _AUTH_OPEN_PATHS = {
     "/",
+    "/home",
     "/chat",
     "/app",
     "/logs",
+    "/favicon.ico",
     "/system/version",
     "/user-admin",
     "/auth/users",
@@ -161,8 +163,10 @@ def _build_runtime_version_state() -> dict[str, object]:
     current = _version_mgr.get_current()
     source = str(current.get("source", "local"))
     verified = bool(current.get("verified", False))
-    selected_version = _normalize_version_text(current.get("version", ""))
-    runtime_version = _detect_app_version_from_path(str(current.get("app_path", ""))) or _normalize_version_text(_APP_VERSION) or selected_version
+    selected_version_raw = _normalize_version_text(current.get("version", ""))
+    runtime_version = _detect_app_version_from_path(str(current.get("app_path", ""))) or _normalize_version_text(_APP_VERSION) or selected_version_raw
+    selected_version = selected_version_raw or runtime_version
+    version_consistent = not (runtime_version and selected_version_raw and runtime_version != selected_version_raw)
     if source in {"local", "local_snapshot"}:
         verify_label = "本地开发版（未签名）" if source == "local" else "本地快照版（未签名）"
     else:
@@ -173,10 +177,15 @@ def _build_runtime_version_state() -> dict[str, object]:
         "github_releases": "GitHub Release",
     }.get(source, source)
     return {
+        "running_version": runtime_version,
+        "running_display": f"v{runtime_version}" if runtime_version else "",
         "version": runtime_version,
         "display": f"v{runtime_version}" if runtime_version else "",
         "app_version": _APP_VERSION,
         "selected_version": selected_version,
+        "selected_display": f"v{selected_version}" if selected_version else "",
+        "selected_version_raw": selected_version_raw,
+        "version_consistent": version_consistent,
         "signature_id": str(current.get("signature_id", "")),
         "verified": verified,
         "verify_label": verify_label,
@@ -1250,6 +1259,16 @@ async def index():
     return _HTML_HOME
 
 
+@app.get("/home", response_class=HTMLResponse)
+async def home_alias():
+    return RedirectResponse(url="/", status_code=307)
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    return Response(status_code=204)
+
+
 @app.get("/chat", response_class=HTMLResponse)
 async def chat_page_legacy():
     return RedirectResponse(url="/", status_code=307)
@@ -1268,8 +1287,13 @@ async def system_version():
             "ok": True,
             "version": state.get("version", ""),
             "display": state.get("display", ""),
+            "running_version": state.get("running_version", ""),
+            "running_display": state.get("running_display", ""),
             "app_version": state.get("app_version", _APP_VERSION),
             "selected_version": state.get("selected_version", ""),
+            "selected_display": state.get("selected_display", ""),
+            "selected_version_raw": state.get("selected_version_raw", ""),
+            "version_consistent": state.get("version_consistent", True),
             "signature_id": state.get("signature_id", ""),
             "verified": state.get("verified", False),
             "verify_label": state.get("verify_label", ""),
@@ -1315,10 +1339,10 @@ async def install_system_version(req: VersionInstallRequest):
 @app.post("/system/version/switch")
 async def switch_system_version(req: VersionSwitchRequest):
     _require_admin_user()
-    result = _version_mgr.switch_version(str(req.version or "").strip())
-    if not bool(result.get("ok", False)):
-        return JSONResponse(result, status_code=400)
-    return JSONResponse(result)
+    return JSONResponse(
+        {"ok": False, "error": "version switch is disabled by policy"},
+        status_code=410,
+    )
 
 
 @app.post("/system/version/snapshot")
