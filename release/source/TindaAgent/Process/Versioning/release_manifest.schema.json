@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tinda.local/schemas/release-manifest.v1.json",
+  "title": "TindaAgent Release Manifest v1",
+  "type": "object",
+  "required": [
+    "app",
+    "version",
+    "commit",
+    "build_time",
+    "archive_sha256",
+    "data_schema_version",
+    "min_compatible_schema",
+    "max_compatible_schema",
+    "release_channel"
+  ],
+  "properties": {
+    "app": { "type": "string", "const": "TindaAgent" },
+    "version": { "type": "string" },
+    "commit": { "type": "string" },
+    "build_time": { "type": "string" },
+    "archive_sha256": { "type": "string" },
+    "data_schema_version": { "type": "integer", "minimum": 1 },
+    "min_compatible_schema": { "type": "integer", "minimum": 1 },
+    "max_compatible_schema": { "type": "integer", "minimum": 1 },
+    "release_channel": { "type": "string", "enum": ["stable", "prerelease"] }
+  },
+  "additionalProperties": true
+}

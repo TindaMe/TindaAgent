@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 
 from TindaAgent.Process.AI.agent import Agent
 from TindaAgent.Process.AI.client import LLMClient
+from TindaAgent.Process.Versioning import get_version_manager
 from TindaAgent.Process.Security import (
     get_current_principal,
     get_current_user as sec_get_current_user,
@@ -70,6 +71,7 @@ def _infer_http_op_type(method: str, path: str) -> str:
 _client = LLMClient()
 _title_client = LLMClient(model="deepseek-v4-flash")
 _compress_client = LLMClient(model="deepseek-v4-flash")
+_version_mgr = get_version_manager()
 
 _MIGRATION = bootstrap_storage()
 _SESSIONS_ROOT = get_sessions_root()
@@ -203,6 +205,18 @@ class UserUpdateRequest(BaseModel):
 
 class UserPermUpdateRequest(BaseModel):
     perm: int
+
+
+class VersionInstallRequest(BaseModel):
+    version: str
+
+
+class VersionSwitchRequest(BaseModel):
+    version: str
+
+
+class VersionSnapshotRequest(BaseModel):
+    version: str
 
 
 def _now_iso() -> str:
@@ -1186,13 +1200,105 @@ async def chat_page():
 
 @app.get("/system/version")
 async def system_version():
+    current = _version_mgr.get_current()
+    current_version = str(current.get("version", "")).strip() or _APP_VERSION
+    source = str(current.get("source", "local"))
+    verified = bool(current.get("verified", False))
+    if source in {"local", "local_snapshot"}:
+        verify_label = "本地开发版（未签名）" if source == "local" else "本地快照版（未签名）"
+    else:
+        verify_label = "已签名验证" if verified else "签名未验证"
+    source_label = {
+        "local": "本地源码",
+        "local_snapshot": "本地快照",
+        "github_releases": "GitHub Release",
+    }.get(source, source)
     return JSONResponse(
         {
             "ok": True,
-            "version": _APP_VERSION,
-            "display": f"v{_APP_VERSION}",
+            "version": current_version,
+            "display": f"v{current_version}",
+            "app_version": _APP_VERSION,
+            "signature_id": str(current.get("signature_id", "")),
+            "verified": verified,
+            "verify_label": verify_label,
+            "source": source,
+            "source_label": source_label,
+            "current_path": str(current.get("app_path", "")),
+            "switched_at": str(current.get("switched_at", "")),
         }
     )
+
+
+@app.get("/system/versions")
+async def list_system_versions():
+    _require_public_read_user()
+    local_rows = _version_mgr.list_local_versions()
+    remote_payload = _version_mgr.list_remote_releases()
+    remote_ok = bool(remote_payload.get("ok", True))
+    return JSONResponse(
+        {
+            "ok": True,
+            "source": "github_releases",
+            "repo": str(remote_payload.get("repo", "TindaMe/TindaAgent")),
+            "current": _version_mgr.get_current(),
+            "local_versions": local_rows,
+            "remote_versions": remote_payload.get("releases", []),
+            "latest_verified": remote_payload.get("latest_verified"),
+            "remote_ok": remote_ok,
+            "error": str(remote_payload.get("error", "")),
+        }
+    )
+
+
+@app.post("/system/version/install")
+async def install_system_version(req: VersionInstallRequest):
+    _require_admin_user()
+    result = _version_mgr.install_from_release(str(req.version or "").strip())
+    if not bool(result.get("ok", False)):
+        return JSONResponse(result, status_code=400)
+    return JSONResponse(result)
+
+
+@app.post("/system/version/switch")
+async def switch_system_version(req: VersionSwitchRequest):
+    _require_admin_user()
+    result = _version_mgr.switch_version(str(req.version or "").strip())
+    if not bool(result.get("ok", False)):
+        return JSONResponse(result, status_code=400)
+    return JSONResponse(result)
+
+
+@app.post("/system/version/snapshot")
+async def create_system_version_snapshot(req: VersionSnapshotRequest):
+    _require_admin_user()
+    result = _version_mgr.create_local_snapshot(str(req.version or "").strip())
+    if not bool(result.get("ok", False)):
+        return JSONResponse(result, status_code=400)
+    return JSONResponse(result)
+
+
+@app.get("/system/version/compat")
+async def system_version_compat(target: str = Query(...)):
+    _require_public_read_user()
+    version = str(target or "").strip()
+    if not version:
+        return JSONResponse({"ok": False, "error": "target required"}, status_code=400)
+    remote = _version_mgr.list_remote_releases()
+    manifest = None
+    if bool(remote.get("ok", False)):
+        for item in remote.get("releases", []):
+            if str(item.get("version", "")).strip().lstrip("v") == version.lstrip("v"):
+                # compat 先按远端元数据粗判，详细以实际切换时 manifest 为准
+                manifest = {
+                    "data_schema_version": item.get("data_schema_version", 1),
+                    "min_compatible_schema": item.get("min_compatible_schema", 1),
+                    "max_compatible_schema": item.get("max_compatible_schema", 1),
+                }
+                break
+    result = _version_mgr.check_target_compat(version, manifest if isinstance(manifest, dict) else None)
+    code = 200 if bool(result.get("ok", False)) else 400
+    return JSONResponse(result, status_code=code)
 
 
 @app.get("/logs", response_class=HTMLResponse)

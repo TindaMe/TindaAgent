@@ -46,24 +46,6 @@
     body { display: flex; flex-direction: column; position: relative;
            animation: pageIn 0.42s cubic-bezier(0.4, 0, 0.2, 1) both; }
 
-    /* ── 背景光晕 ── */
-    body::before {
-      content: "";
-      position: fixed;
-      top: -15%; right: -10%;
-      width: 560px; height: 560px;
-      background: rgba(255,110,180,0.08);
-      pointer-events: none; z-index: 0;
-    }
-    body::after {
-      content: "";
-      position: fixed;
-      bottom: -20%; left: -10%;
-      width: 500px; height: 500px;
-      background: rgba(167,139,250,0.06);
-      pointer-events: none; z-index: 0;
-    }
-
     /* ── 浮动装饰 ── */
     .deco {
       position: fixed; pointer-events: none;
@@ -133,6 +115,29 @@
       background: var(--surface-2);
       padding: 2px 9px; border-radius: 999px;
       border: 1.5px solid var(--border); font-weight: 700;
+      display: inline-flex;
+      align-items: center;
+      white-space: nowrap;
+      word-break: normal;
+      line-break: auto;
+      flex-shrink: 0;
+    }
+    .version-badge-btn {
+      border: 1.5px solid var(--border);
+      cursor: pointer;
+      font-family: inherit;
+      line-height: 1.35;
+      transition: all 0.18s ease;
+    }
+    .version-badge-btn:hover {
+      border-color: var(--accent-2);
+      color: var(--accent-deep);
+      background: var(--surface);
+      transform: translateY(-1px);
+    }
+    .version-badge-btn:focus-visible {
+      outline: none;
+      box-shadow: 0 0 0 3px rgba(255, 110, 180, 0.2);
     }
 
     .header-decos {
@@ -517,25 +522,183 @@
       min-height: 18px;
     }
 
+    #versionModalOverlay { z-index: 120; }
+    .version-modal-card {
+      max-width: 760px;
+      max-height: min(82vh, 760px);
+      padding: 22px 20px 16px;
+      gap: 10px;
+    }
+    .version-modal-head {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      padding-right: 32px;
+    }
+    .version-modal-title {
+      font-size: 18px;
+      font-weight: 800;
+      color: var(--text);
+    }
+    .version-modal-subtitle {
+      font-size: 12px;
+      color: var(--text-dim);
+    }
+    .version-top-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+    .version-current {
+      border: 1.5px solid var(--border);
+      background: var(--surface-2);
+      border-radius: 12px;
+      padding: 9px 10px;
+      font-size: 12px;
+      color: var(--text-dim);
+      line-height: 1.55;
+      white-space: pre-line;
+    }
+    .version-msg {
+      min-height: 20px;
+      border-radius: 10px;
+      padding: 6px 8px;
+      font-size: 12px;
+      color: var(--text-dim);
+      border: 1px solid transparent;
+      background: transparent;
+    }
+    .version-msg[data-kind="error"] {
+      color: #b42318;
+      border-color: #fecaca;
+      background: #fff1f2;
+    }
+    .version-msg[data-kind="success"] {
+      color: #065f46;
+      border-color: #a7f3d0;
+      background: #ecfdf5;
+    }
+    .version-sections {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      overflow: auto;
+      padding-right: 2px;
+    }
+    .version-section {
+      border: 1.5px solid var(--border);
+      border-radius: 14px;
+      background: var(--surface);
+      display: flex;
+      flex-direction: column;
+    }
+    .version-section-title {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+      font-size: 12px;
+      font-weight: 800;
+      color: var(--text-dim);
+    }
+    .version-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      padding: 10px;
+      overflow: auto;
+    }
+    .version-item {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--surface-2);
+      padding: 8px 9px;
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+      min-height: 84px;
+      max-width: 100%;
+    }
+    .version-item-main {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 3px;
+      width: 100%;
+      max-width: 100%;
+    }
+    .version-item-title {
+      font-size: 13px;
+      font-weight: 800;
+      color: var(--text);
+      white-space: nowrap;
+      flex-shrink: 0;
+      word-break: normal;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .version-item-meta {
+      font-size: 11px;
+      color: var(--text-dim);
+      line-height: 1.4;
+      white-space: normal;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+      min-width: 0;
+      text-align: left;
+      max-width: 100%;
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+      overflow: hidden;
+    }
+    .version-item-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 7px;
+    }
+    .version-btn {
+      border: none;
+      border-radius: 8px;
+      padding: 5px 9px;
+      font-size: 11px;
+      font-weight: 800;
+      color: #fff;
+      background: var(--gradient);
+      cursor: pointer;
+      font-family: inherit;
+      transition: opacity 0.18s ease;
+    }
+    .version-btn:hover { opacity: 0.9; }
+    .version-btn.secondary {
+      background: var(--surface);
+      border: 1.5px solid var(--border);
+      color: var(--text-dim);
+    }
+    .version-btn:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
+    .version-empty {
+      border: 1px dashed var(--border);
+      border-radius: 10px;
+      padding: 10px;
+      text-align: center;
+      color: var(--text-dim);
+      font-size: 12px;
+      background: var(--surface-2);
+    }
+
     @media (max-width: 640px) {
       .hero { gap: 13px; }
       .hero-title { font-size: 24px; }
       .btn-chat { width: 240px; font-size: 15px; }
       .header-decos { display: none; }
+      .version-sections { grid-template-columns: 1fr; max-height: 44vh; }
+      .version-modal-card { padding: 18px 14px 12px; }
     }
   </style>
 </head>
 <body>
-
-<!-- 浮动装饰 -->
-<span class="deco" style="top:7%;left:4%;font-size:20px;animation-duration:4.4s;color:#f472b6;" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"></circle><path d="M12 2.8v4.2M12 17v4.2M2.8 12h4.2M17 12h4.2M5.3 5.3l3 3M15.7 15.7l3 3M18.7 5.3l-3 3M8.3 15.7l-3 3"></path></svg></span>
-<span class="deco" style="top:16%;right:5%;font-size:13px;animation-duration:5.6s;animation-delay:-1.2s;color:#fb7185;" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3.5l2.4 4.9 5.4.8-3.9 3.8.9 5.4L12 16l-4.8 2.4.9-5.4-3.9-3.8 5.4-.8z"></path></svg></span>
-<span class="deco" style="top:52%;left:2.5%;font-size:14px;animation-duration:4.9s;animation-delay:-2.1s;color:#ec4899;" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 20c-4.5-3.1-7-5.6-7-8.8a4.2 4.2 0 0 1 7-3.1 4.2 4.2 0 0 1 7 3.1c0 3.2-2.5 5.7-7 8.8z"></path></svg></span>
-<span class="deco" style="top:72%;right:5%;font-size:17px;animation-duration:6.1s;animation-delay:-0.6s;color:#f59e0b;" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 2.8v4M12 17.2v4M2.8 12h4M17.2 12h4M5.2 5.2l2.9 2.9M15.9 15.9l2.9 2.9M18.8 5.2l-2.9 2.9M8.1 15.9l-2.9 2.9"></path><circle cx="12" cy="12" r="3"></circle></svg></span>
-<span class="deco" style="top:38%;right:3%;font-size:11px;animation-duration:5.2s;animation-delay:-1.7s;color:#a78bfa;" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 4v16M4 12h16M6.3 6.3l11.4 11.4M17.7 6.3 6.3 17.7"></path></svg></span>
-<span class="deco" style="top:85%;left:7%;font-size:12px;animation-duration:5.8s;animation-delay:-3s;color:#fb7185;" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 7h14M7 17h10M7 7v10M17 7v10M9 11h6M9 14h6"></path></svg></span>
-<span class="deco" style="top:30%;left:8%;font-size:10px;animation-duration:6.3s;animation-delay:-0.9s;color:#c084fc;" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3v7M12 14v7M3 12h7M14 12h7"></path></svg></span>
-<span class="deco" style="top:65%;right:8%;font-size:11px;animation-duration:4.7s;animation-delay:-2.4s;color:#f472b6;" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"></circle><path d="M12 4.5a7.5 7.5 0 0 1 0 15M4.5 12a7.5 7.5 0 0 1 15 0"></path></svg></span>
 
 <header>
   <div class="brand">
@@ -543,7 +706,7 @@
       <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"></circle><path d="M12 2.8v4.2M12 17v4.2M2.8 12h4.2M17 12h4.2M5.3 5.3l3 3M15.7 15.7l3 3M18.7 5.3l-3 3M8.3 15.7l-3 3"></path></svg>
     </div>
     <span class="brand-name">TindaAgent</span>
-    <span id="versionBadge" class="version-badge">v1.6.6</span>
+    <button id="versionBadge" type="button" class="version-badge version-badge-btn" title="点击选择版本">v1.6.8</button>
   </div>
   <span class="header-decos" aria-hidden="true"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span>
 </header>
@@ -653,6 +816,34 @@
   </div>
 </div>
 
+<!-- 版本管理弹窗 -->
+<div class="modal-overlay" id="versionModalOverlay" onclick="closeVersionModalOnBackdrop(event)">
+  <div class="modal-card version-modal-card">
+    <button class="modal-close" onclick="closeVersionModal()" aria-label="关闭">
+      <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"></path></svg>
+    </button>
+    <div class="version-modal-head">
+      <div class="version-modal-title">版本管理</div>
+      <div class="version-modal-subtitle">点击可安装或切换版本</div>
+    </div>
+    <div class="version-top-actions">
+      <button type="button" class="version-btn secondary" id="versionSnapshotBtn">创建本地快照</button>
+    </div>
+    <div class="version-current" id="versionCurrentInfo">加载中...</div>
+    <div class="version-msg" id="versionModalMsg"></div>
+    <div class="version-sections">
+      <section class="version-section">
+        <div class="version-section-title">已安装版本</div>
+        <div class="version-list" id="versionLocalList"></div>
+      </section>
+      <section class="version-section">
+        <div class="version-section-title">远端版本</div>
+        <div class="version-list" id="versionRemoteList"></div>
+      </section>
+    </div>
+  </div>
+</div>
+
 <script>
   function smoothNavigate(url) {
     document.body.style.animation  = "none";
@@ -676,10 +867,50 @@
     authMsg: document.getElementById("authMsg"),
     modalOverlay: document.getElementById("modalOverlay"),
     versionBadge: document.getElementById("versionBadge"),
+    versionModalOverlay: document.getElementById("versionModalOverlay"),
+    versionCurrentInfo: document.getElementById("versionCurrentInfo"),
+    versionModalMsg: document.getElementById("versionModalMsg"),
+    versionLocalList: document.getElementById("versionLocalList"),
+    versionRemoteList: document.getElementById("versionRemoteList"),
+    versionSnapshotBtn: document.getElementById("versionSnapshotBtn"),
   };
   const SYSTEM_WRITE_BIT = 1 << 7;
   let authState = { logged_in: false, user: null };
+  let versionModalBusy = false;
   const AUTH_TOKEN_KEY = "ta_auth_token";
+
+  function normalizeVersion(v) {
+    const raw = String(v || "").trim();
+    if (!raw) return "";
+    return raw.replace(/^v/i, "");
+  }
+
+  function withV(v) {
+    const n = normalizeVersion(v);
+    return n ? `v${n}` : "-";
+  }
+
+  function isAdminLoggedIn() {
+    return Boolean(authState?.logged_in && authState?.user && isAdminUser(authState.user));
+  }
+
+  function asDateTime(isoText) {
+    const txt = String(isoText || "").trim();
+    if (!txt) return "";
+    try {
+      const d = new Date(txt);
+      if (!Number.isNaN(d.getTime())) return d.toLocaleString();
+    } catch {}
+    return txt;
+  }
+
+  async function readJsonSafe(res) {
+    try {
+      return await res.json();
+    } catch {
+      return {};
+    }
+  }
 
   function getAuthToken() {
     return String(localStorage.getItem(AUTH_TOKEN_KEY) || "").trim();
@@ -713,8 +944,262 @@
       const res = await fetch("/system/version", { method: "GET" });
       const data = res.ok ? await res.json() : {};
       const display = String(data?.display || "").trim();
-      if (display) ui.versionBadge.textContent = display;
+      const sig = String(data?.signature_id || "").trim();
+      const verified = Boolean(data?.verified);
+      if (display) {
+        if (sig) {
+          ui.versionBadge.textContent = `${display} ${verified ? "signed" : "unsigned"}`;
+          ui.versionBadge.title = `当前 ${display} (${verified ? "已签名验证" : "未验证签名"})`;
+        } else {
+          ui.versionBadge.textContent = display;
+          ui.versionBadge.title = `当前 ${display}`;
+        }
+      }
     } catch {}
+  }
+
+  function setVersionModalMessage(text, kind = "") {
+    if (!ui.versionModalMsg) return;
+    ui.versionModalMsg.textContent = String(text || "");
+    if (kind) {
+      ui.versionModalMsg.dataset.kind = kind;
+    } else {
+      delete ui.versionModalMsg.dataset.kind;
+    }
+  }
+
+  function renderVersionCurrentInfo(current) {
+    if (!ui.versionCurrentInfo) return;
+    const versionText = withV(current?.version || current?.display);
+    const verified = Boolean(current?.verified);
+    const sigRaw = String(current?.signature_id || "").trim();
+    const sig = sigRaw || "N/A";
+    const source = String(current?.source_label || current?.source || "local");
+    const verifyLabel = String(current?.verify_label || (verified ? "已验证" : "未验证"));
+    const switchedAt = asDateTime(current?.switched_at) || "-";
+    ui.versionCurrentInfo.textContent =
+      `当前版本: ${versionText}\n签名状态: ${verifyLabel}\n签名ID: ${sig}\n来源: ${source}\n切换时间: ${switchedAt}`;
+  }
+
+  function createVersionItem(row, mode, context = {}) {
+    const item = document.createElement("div");
+    item.className = "version-item";
+
+    const verNorm = normalizeVersion(row?.version);
+    const verText = withV(row?.version);
+    const isCurrent = Boolean(row?.is_current) || verNorm === normalizeVersion(context?.currentVersion);
+    const isInstalled = Boolean(row?.installed) || Boolean(context?.installedSet?.has(verNorm));
+    const verified = Boolean(row?.verified);
+    const sig = String(row?.signature_id || "").trim();
+    const source = String(row?.source || "local");
+    const localUnsigned = source === "local" || source === "local_snapshot";
+    const canAdmin = isAdminLoggedIn();
+
+    const main = document.createElement("div");
+    main.className = "version-item-main";
+
+    const title = document.createElement("div");
+    title.className = "version-item-title";
+    title.textContent = verText;
+
+    const meta = document.createElement("div");
+    meta.className = "version-item-meta";
+    const metaParts = [];
+    if (isCurrent) metaParts.push("当前");
+    if (isInstalled && !isCurrent) metaParts.push("已安装");
+    if (mode === "remote") metaParts.push(verified ? "signed" : "unsigned");
+    if (mode === "local") {
+      if (source === "local_snapshot") metaParts.push("本地快照");
+      else if (source === "local") metaParts.push("本地源码");
+      else metaParts.push(source);
+      metaParts.push(verified ? "已验证" : (localUnsigned ? "未签名" : "未验证"));
+    }
+    if (sig) metaParts.push(`sig:${sig.slice(0, 10)}...`);
+    if (mode === "remote" && row?.published_at) metaParts.push(asDateTime(row.published_at));
+    if (row?.verify_error && !verified) metaParts.push(`校验: ${String(row.verify_error)}`);
+    meta.textContent = metaParts.join(" | ") || "-";
+
+    main.appendChild(title);
+    main.appendChild(meta);
+    item.appendChild(main);
+
+    const actions = document.createElement("div");
+    actions.className = "version-item-actions";
+    if (canAdmin) {
+      if (mode === "remote" && !isInstalled) {
+        const installBtn = document.createElement("button");
+        installBtn.className = "version-btn secondary";
+        installBtn.type = "button";
+        installBtn.dataset.action = "install";
+        installBtn.dataset.version = verNorm;
+        installBtn.textContent = verified ? "安装" : "不可安装";
+        installBtn.disabled = versionModalBusy || !verified || !verNorm;
+        actions.appendChild(installBtn);
+      }
+
+      if ((mode === "local" || isInstalled) && !isCurrent) {
+        const switchBtn = document.createElement("button");
+        switchBtn.className = "version-btn";
+        switchBtn.type = "button";
+        switchBtn.dataset.action = "switch";
+        switchBtn.dataset.version = verNorm;
+        switchBtn.textContent = "切换";
+        switchBtn.disabled = versionModalBusy || !verNorm;
+        actions.appendChild(switchBtn);
+      }
+    }
+
+    if (!actions.childNodes.length) {
+      const hint = document.createElement("div");
+      hint.className = "version-item-meta";
+      hint.textContent = canAdmin ? "无可执行操作" : "仅管理员可安装/切换";
+      actions.appendChild(hint);
+    }
+
+    item.appendChild(actions);
+    return item;
+  }
+
+  function renderVersionLists(payload) {
+    if (!ui.versionLocalList || !ui.versionRemoteList) return;
+    ui.versionLocalList.innerHTML = "";
+    ui.versionRemoteList.innerHTML = "";
+
+    const localRows = Array.isArray(payload?.local_versions) ? payload.local_versions : [];
+    const remoteRows = Array.isArray(payload?.remote_versions) ? payload.remote_versions : [];
+    const currentVersion = normalizeVersion(payload?.current?.version);
+    const installedSet = new Set(localRows.map((x) => normalizeVersion(x?.version)).filter(Boolean));
+
+    if (!localRows.length) {
+      const empty = document.createElement("div");
+      empty.className = "version-empty";
+      empty.textContent = "暂无已安装版本";
+      ui.versionLocalList.appendChild(empty);
+    } else {
+      localRows.forEach((row) => {
+        ui.versionLocalList.appendChild(
+          createVersionItem(row, "local", {
+            currentVersion,
+            installedSet,
+          })
+        );
+      });
+    }
+
+    if (!remoteRows.length) {
+      const empty = document.createElement("div");
+      empty.className = "version-empty";
+      empty.textContent = "暂无远端版本";
+      ui.versionRemoteList.appendChild(empty);
+    } else {
+      remoteRows.forEach((row) => {
+        ui.versionRemoteList.appendChild(
+          createVersionItem(row, "remote", {
+            currentVersion,
+            installedSet,
+          })
+        );
+      });
+    }
+  }
+
+  async function loadVersionModalData() {
+    renderVersionCurrentInfo({});
+    if (ui.versionLocalList) ui.versionLocalList.innerHTML = `<div class="version-empty">加载中...</div>`;
+    if (ui.versionRemoteList) ui.versionRemoteList.innerHTML = `<div class="version-empty">加载中...</div>`;
+
+    try {
+      const currentRes = await fetch("/system/version", { method: "GET" });
+      const current = currentRes.ok ? await readJsonSafe(currentRes) : {};
+      renderVersionCurrentInfo(current);
+      await syncVersionBadge();
+    } catch {
+      renderVersionCurrentInfo({});
+    }
+
+    try {
+      const res = await apiFetch("/system/versions", { method: "GET" });
+      const data = await readJsonSafe(res);
+      if (!res.ok) {
+        if (res.status === 401) {
+          setVersionModalMessage("请先登录后再查看版本列表。", "error");
+        } else {
+          setVersionModalMessage(`加载失败：${String(data?.error || `HTTP ${res.status}`)}`, "error");
+        }
+        renderVersionLists({});
+        return;
+      }
+      renderVersionCurrentInfo(data?.current || {});
+      renderVersionLists(data);
+      if (data?.remote_ok === false || data?.error) {
+        setVersionModalMessage(`已加载本地列表，远端获取异常：${String(data.error)}`, "error");
+      } else {
+        setVersionModalMessage(isAdminLoggedIn() ? "可选择版本安装或切换。" : "当前账户可查看版本，安装与切换需管理员权限。");
+      }
+    } catch (e) {
+      setVersionModalMessage(`加载异常：${String(e?.message || e)}`, "error");
+      renderVersionLists({});
+    }
+  }
+
+  async function performVersionAction(action, version) {
+    const ver = normalizeVersion(version);
+    if (!ver || versionModalBusy) return;
+    if (!isAdminLoggedIn()) {
+      setVersionModalMessage("当前账户没有管理员权限。", "error");
+      return;
+    }
+    versionModalBusy = true;
+    const actionLabel = action === "install" ? "安装" : "切换";
+    setVersionModalMessage(`${actionLabel} ${withV(ver)} 中...`);
+    try {
+      const endpoint = action === "install" ? "/system/version/install" : "/system/version/switch";
+      const res = await apiFetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ version: ver }),
+      });
+      const data = await readJsonSafe(res);
+      if (!res.ok || data?.ok === false) {
+        throw new Error(String(data?.error || `HTTP ${res.status}`));
+      }
+      const restartHint = action === "switch" && data?.requires_restart ? "，请重启服务生效。" : "";
+      setVersionModalMessage(`${actionLabel}成功: ${withV(ver)}${restartHint}`, "success");
+    } catch (e) {
+      setVersionModalMessage(`${actionLabel}失败：${String(e?.message || e)}`, "error");
+    } finally {
+      versionModalBusy = false;
+      await loadVersionModalData();
+    }
+  }
+
+  async function createVersionSnapshot() {
+    if (versionModalBusy) return;
+    if (!isAdminLoggedIn()) {
+      setVersionModalMessage("当前账户没有管理员权限。", "error");
+      return;
+    }
+    const seed = normalizeVersion(prompt("输入本地快照版本号（例如 1.6.6-local1）", ""));
+    if (!seed) return;
+    versionModalBusy = true;
+    setVersionModalMessage(`创建本地快照 ${withV(seed)} 中...`);
+    try {
+      const res = await apiFetch("/system/version/snapshot", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ version: seed }),
+      });
+      const data = await readJsonSafe(res);
+      if (!res.ok || data?.ok === false) {
+        throw new Error(String(data?.error || `HTTP ${res.status}`));
+      }
+      setVersionModalMessage(`本地快照创建成功: ${withV(seed)}`, "success");
+    } catch (e) {
+      setVersionModalMessage(`本地快照创建失败：${String(e?.message || e)}`, "error");
+    } finally {
+      versionModalBusy = false;
+      await loadVersionModalData();
+    }
   }
 
   function maskToken(token) {
@@ -889,8 +1374,41 @@
     if (e.target === document.getElementById("modalOverlay")) closeModal();
   }
 
+  function openVersionModal() {
+    if (!ui.versionModalOverlay) return;
+    ui.versionModalOverlay.classList.add("open");
+    setVersionModalMessage("");
+    loadVersionModalData();
+  }
+
+  function closeVersionModal() {
+    if (!ui.versionModalOverlay) return;
+    ui.versionModalOverlay.classList.remove("open");
+  }
+
+  function closeVersionModalOnBackdrop(e) {
+    if (e.target === ui.versionModalOverlay) closeVersionModal();
+  }
+
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") closeModal();
+    if (e.key !== "Escape") return;
+    if (ui.versionModalOverlay?.classList.contains("open")) {
+      closeVersionModal();
+      return;
+    }
+    closeModal();
+  });
+  ui.versionBadge?.addEventListener("click", openVersionModal);
+  ui.versionSnapshotBtn?.addEventListener("click", createVersionSnapshot);
+  ui.versionLocalList?.addEventListener("click", (e) => {
+    const btn = e.target?.closest?.("button[data-action][data-version]");
+    if (!btn) return;
+    performVersionAction(String(btn.dataset.action || ""), String(btn.dataset.version || ""));
+  });
+  ui.versionRemoteList?.addEventListener("click", (e) => {
+    const btn = e.target?.closest?.("button[data-action][data-version]");
+    if (!btn) return;
+    performVersionAction(String(btn.dataset.action || ""), String(btn.dataset.version || ""));
   });
   ui.chatBtn?.addEventListener("click", (e) => {
     if (!authState.logged_in) {

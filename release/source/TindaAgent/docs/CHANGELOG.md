@@ -2,6 +2,20 @@
 
 本文档用于补录 TindaAgent 的版本演进历史，后续按版本持续维护。
 
+## v1.6.8 - 2026-04-26
+
+1. 修复版本接口语义：`/system/version` 返回当前切换指针版本（`current.json`），不再错误显示静态包版本。
+2. 修复版本列表降级：`/system/versions` 在远端 GitHub 超时时仍返回本地版本列表，前端保持可浏览本地版本。
+3. 优化版本管理弹窗渲染：版本号强制单行显示，说明信息下移到版本号下方，并统一版本项高度层级。
+
+## v1.6.7 - 2026-04-26
+
+1. 新增版本管理引擎：支持 GitHub Releases 检测、版本安装、版本切换、兼容检查。
+2. 新增版本签名链路：采用 `manifest.json + manifest.sig`（Ed25519）验签，生成 `signature_id`。
+3. 新增运行时多版本目录机制：`~/.tinda/agent/versions/<version>` 与 `current.json` 指针切换。
+4. 新增数据兼容框架：共享数据目录 + 自动迁移 + 失败回滚骨架。
+5. 补齐发布目录缺失核心模块（paths/migration/observability/security/permission/session/tool runtime），恢复 `release/source` 主线可运行性。
+
 ## v1.6.6 - 2026-04-26
 
 1. 修复对话上下文污染：新增历史构建过滤规则，`terminal/tool_marker` 及手动工具命令不再回注到 LLM 上下文。

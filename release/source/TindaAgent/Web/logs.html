@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>日志查看 · TindaAgent</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #fff5f9;
+      --surface: #ffffff;
+      --surface-2: #fef0f5;
+      --border: #fcd5e5;
+      --text: #3d1f2f;
+      --text-dim: #9b5f78;
+      --accent: #ff6eb4;
+      --accent-2: #ff9fd3;
+      --gradient: #ff6eb4;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      width: 100%; height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Nunito', -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+      overflow: hidden;
+    }
+    body { display: grid; grid-template-rows: auto 1fr; }
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 16px;
+      border-bottom: 1.5px solid var(--border);
+      background: rgba(255,255,255,0.82);
+      backdrop-filter: blur(16px);
+    }
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 800;
+      color: var(--text);
+    }
+    .brand-dot {
+      width: 10px; height: 10px; border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 0 4px rgba(255,110,180,0.18);
+    }
+    .actions { display: inline-flex; gap: 8px; align-items: center; }
+    .btn {
+      border: 1.5px solid var(--border);
+      background: var(--surface);
+      color: var(--text-dim);
+      border-radius: 999px;
+      padding: 6px 11px;
+      font-size: 12px;
+      font-weight: 700;
+      font-family: inherit;
+      cursor: pointer;
+      text-decoration: none;
+    }
+    .btn:hover {
+      border-color: var(--accent-2);
+      color: var(--text);
+      background: var(--surface-2);
+    }
+    .btn.primary {
+      color: #fff;
+      border-color: transparent;
+      background: var(--gradient);
+    }
+    .wrap {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: 300px 1fr;
+      gap: 12px;
+      padding: 12px;
+    }
+    .panel {
+      min-height: 0;
+      background: var(--surface);
+      border: 1.5px solid var(--border);
+      border-radius: 14px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+    .panel-head {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+      font-size: 12px;
+      color: var(--text-dim);
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .files {
+      min-height: 0;
+      overflow: auto;
+      padding: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .file-item {
+      border: 1.5px solid var(--border);
+      background: #fff;
+      border-radius: 10px;
+      padding: 8px 9px;
+      font-size: 12px;
+      cursor: pointer;
+      line-height: 1.4;
+    }
+    .file-item:hover { border-color: var(--accent-2); }
+    .file-item.active {
+      border-color: var(--accent-2);
+      background: rgba(255,110,180,0.06);
+    }
+    .file-name {
+      font-weight: 800;
+      color: var(--text);
+      word-break: break-all;
+    }
+    .file-meta {
+      margin-top: 3px;
+      color: var(--text-dim);
+      font-size: 11px;
+    }
+    .viewer {
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+    }
+    .toolbar {
+      padding: 9px 10px;
+      border-bottom: 1px solid var(--border);
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .toolbar input {
+      width: 96px;
+      border: 1.5px solid var(--border);
+      border-radius: 8px;
+      padding: 5px 8px;
+      font-size: 12px;
+      outline: none;
+      font-family: inherit;
+      color: var(--text);
+      background: #fff;
+    }
+    .toolbar input:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(255,110,180,0.11);
+    }
+    #status {
+      margin-left: auto;
+      color: var(--text-dim);
+      font-size: 11px;
+      font-weight: 700;
+    }
+    pre {
+      margin: 0;
+      min-height: 0;
+      flex: 1;
+      overflow: auto;
+      padding: 10px 12px;
+      background: #0d0810;
+      color: #d8d8d8;
+      font-family: "JetBrains Mono", Consolas, monospace;
+      font-size: 12px;
+      line-height: 1.56;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .empty {
+      color: var(--text-dim);
+      font-size: 12px;
+      text-align: center;
+      padding: 16px;
+    }
+    @media (max-width: 920px) {
+      .wrap { grid-template-columns: 1fr; }
+      .panel.files-panel { min-height: 180px; max-height: 240px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <span class="brand-dot"></span>
+      <span>日志查看</span>
+    </div>
+    <div class="actions">
+      <a class="btn" href="/" onclick="event.preventDefault(); location.href='/'">主页</a>
+      <a class="btn" href="/app" onclick="event.preventDefault(); location.href='/app'">聊天</a>
+      <button id="refreshFilesBtn" class="btn primary" type="button">刷新列表</button>
+    </div>
+  </header>
+  <div class="wrap">
+    <section class="panel files-panel">
+      <div class="panel-head">
+        <span>日志文件</span>
+      </div>
+      <div id="filesBox" class="files">
+        <div class="empty">加载中...</div>
+      </div>
+    </section>
+    <section class="panel viewer">
+      <div class="panel-head">
+        <span id="title">未选择文件</span>
+      </div>
+      <div class="toolbar">
+        <span style="font-size:12px;color:var(--text-dim);font-weight:700;">显示行数</span>
+        <input id="lineLimitInput" type="number" min="20" max="2000" step="10" value="300" />
+        <button id="reloadBtn" class="btn" type="button">重新读取</button>
+        <span style="font-size:12px;color:var(--text-dim);font-weight:700;">审计ID</span>
+        <input id="eventIdInput" type="text" placeholder="例如 tc_0000002458 或 2458" style="width:260px;" />
+        <button id="findByIdBtn" class="btn" type="button">按ID查询</button>
+        <span id="status"></span>
+      </div>
+      <pre id="logText">请选择左侧日志文件。</pre>
+    </section>
+  </div>
+<script>
+  const AUTH_TOKEN_KEY = "ta_auth_token";
+  const filesBox = document.getElementById("filesBox");
+  const refreshFilesBtn = document.getElementById("refreshFilesBtn");
+  const reloadBtn = document.getElementById("reloadBtn");
+  const lineLimitInput = document.getElementById("lineLimitInput");
+  const eventIdInput = document.getElementById("eventIdInput");
+  const findByIdBtn = document.getElementById("findByIdBtn");
+  const titleEl = document.getElementById("title");
+  const statusEl = document.getElementById("status");
+  const logTextEl = document.getElementById("logText");
+  let filesCache = [];
+  let activeFile = "";
+
+  function getAuthToken() {
+    return String(localStorage.getItem(AUTH_TOKEN_KEY) || "").trim();
+  }
+
+  function authHeaders(extra) {
+    const headers = Object.assign({}, extra || {});
+    const token = getAuthToken();
+    if (token) headers["X-User-Token"] = token;
+    return headers;
+  }
+
+  async function apiFetch(url, options = {}) {
+    const opts = Object.assign({}, options);
+    opts.headers = authHeaders(opts.headers || {});
+    return fetch(url, opts);
+  }
+
+  function fmtBytes(n) {
+    const num = Number(n || 0);
+    if (!Number.isFinite(num) || num < 1024) return `${Math.max(0, Math.floor(num))} B`;
+    if (num < 1024 * 1024) return `${(num / 1024).toFixed(1)} KB`;
+    return `${(num / (1024 * 1024)).toFixed(2)} MB`;
+  }
+
+  function renderFiles(rows) {
+    filesBox.innerHTML = "";
+    if (!Array.isArray(rows) || rows.length === 0) {
+      filesBox.innerHTML = `<div class="empty">暂无日志文件</div>`;
+      return;
+    }
+    rows.forEach((f) => {
+      const name = String(f?.name || "");
+      if (!name) return;
+      const el = document.createElement("button");
+      el.type = "button";
+      el.className = "file-item" + (name === activeFile ? " active" : "");
+      el.innerHTML = `
+        <div class="file-name">${name}</div>
+        <div class="file-meta">大小: ${fmtBytes(f?.size_bytes)} · 更新时间: ${String(f?.updated_at || "")}</div>
+      `;
+      el.addEventListener("click", () => {
+        activeFile = name;
+        renderFiles(filesCache);
+        readActiveFile();
+      });
+      filesBox.appendChild(el);
+    });
+  }
+
+  async function ensureLoggedIn() {
+    const token = getAuthToken();
+    if (!token) {
+      location.href = "/";
+      return false;
+    }
+    try {
+      const res = await apiFetch("/auth/status");
+      if (!res.ok) {
+        location.href = "/";
+        return false;
+      }
+      const data = await res.json();
+      if (!data?.logged_in) {
+        location.href = "/";
+        return false;
+      }
+      return true;
+    } catch {
+      location.href = "/";
+      return false;
+    }
+  }
+
+  async function loadFiles() {
+    statusEl.textContent = "读取日志列表...";
+    try {
+      const res = await apiFetch("/logs/files");
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data?.ok === false) throw new Error(String(data?.error || `HTTP ${res.status}`));
+      filesCache = Array.isArray(data?.files) ? data.files : [];
+      if (!activeFile || !filesCache.some((x) => String(x?.name || "") === activeFile)) {
+        activeFile = String(filesCache[0]?.name || "");
+      }
+      renderFiles(filesCache);
+      statusEl.textContent = `日志文件 ${filesCache.length} 个`;
+      if (activeFile) await readActiveFile();
+      else {
+        titleEl.textContent = "未选择文件";
+        logTextEl.textContent = "请选择左侧日志文件。";
+      }
+    } catch (e) {
+      filesCache = [];
+      renderFiles([]);
+      statusEl.textContent = `读取失败: ${String(e?.message || e)}`;
+      logTextEl.textContent = "读取日志列表失败。";
+    }
+  }
+
+  async function readActiveFile() {
+    if (!activeFile) return;
+    const lines = Math.max(20, Math.min(2000, Number(lineLimitInput.value || 300)));
+    lineLimitInput.value = String(lines);
+    statusEl.textContent = `读取 ${activeFile} ...`;
+    titleEl.textContent = activeFile;
+    try {
+      const params = new URLSearchParams({ file: activeFile, lines: String(lines) });
+      const res = await apiFetch(`/logs/read?${params.toString()}`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data?.ok === false) throw new Error(String(data?.error || `HTTP ${res.status}`));
+      const text = Array.isArray(data?.lines) ? data.lines.join("\n") : "";
+      logTextEl.textContent = text || "(空文件)";
+      statusEl.textContent = `已加载 ${data?.line_count || 0} 行` + (data?.truncated ? "（尾部截断）" : "");
+      logTextEl.scrollTop = logTextEl.scrollHeight;
+    } catch (e) {
+      logTextEl.textContent = "读取日志失败。";
+      statusEl.textContent = `读取失败: ${String(e?.message || e)}`;
+    }
+  }
+
+  async function findEventById() {
+    const raw = String(eventIdInput?.value || "").trim();
+    if (!raw) {
+      statusEl.textContent = "请输入审计ID";
+      return;
+    }
+    statusEl.textContent = `查询审计ID ${raw} ...`;
+    titleEl.textContent = `按ID查询: ${raw}`;
+    try {
+      const params = new URLSearchParams({ id: raw });
+      const res = await apiFetch(`/logs/by-id?${params.toString()}`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data?.ok === false) throw new Error(String(data?.error || `HTTP ${res.status}`));
+      const payload = {
+        id: data?.id,
+        source_file: data?.source_file || "",
+        source_line: data?.source_line || 0,
+        source_path: data?.source_path || "",
+        event: data?.event || {},
+      };
+      logTextEl.textContent = JSON.stringify(payload, null, 2);
+      statusEl.textContent = `查询成功: #${String(data?.id || "")}`;
+      logTextEl.scrollTop = 0;
+    } catch (e) {
+      logTextEl.textContent = "按ID查询失败。";
+      statusEl.textContent = `查询失败: ${String(e?.message || e)}`;
+    }
+  }
+
+  refreshFilesBtn.addEventListener("click", loadFiles);
+  reloadBtn.addEventListener("click", readActiveFile);
+  findByIdBtn.addEventListener("click", findEventById);
+  lineLimitInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      readActiveFile();
+    }
+  });
+  eventIdInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      findEventById();
+    }
+  });
+
+  (async () => {
+    const ok = await ensureLoggedIn();
+    if (!ok) return;
+    await loadFiles();
+  })();
+</script>
+</body>
+</html>

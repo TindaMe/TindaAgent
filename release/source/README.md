@@ -1,6 +1,6 @@
 # TindaAgent
 
-当前版本：`1.6.6`
+当前版本：`1.6.8`
 
 TindaAgent 是一个本地化 Web Agent 系统，聚焦于以下能力：
 
@@ -71,6 +71,14 @@ conda run -n base python /mnt/e/Python/TindaAgent/run_web.py
 ## 版本策略
 
 项目版本以 `pyproject.toml` 为准；前端显示通过后端 `/system/version` 读取，避免被残留 `egg-info` 元数据污染。
+
+版本切换与签名规则：
+
+1. 版本源以 GitHub Releases 为准。
+2. 每个发布版本必须提供 `manifest.json + manifest.sig`（Ed25519）。
+3. 本地仅信任公钥验签，验签通过版本才允许安装/切换。
+4. 多版本目录位于 `~/.tinda/agent/versions/<version>`，活动版本通过 `~/.tinda/agent/current.json` 指针切换。
+5. 外部数据采用共享目录并在切换时自动迁移，失败自动回滚。
 
 ## 变更记录
 

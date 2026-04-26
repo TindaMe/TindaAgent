@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "updated_at": "2026-04-25T00:00:00+08:00",
+  "tools": {
+    "echo": {
+      "required_perm_bits": 4,
+      "required_perm_labels": ["PUBLIC_EXECUTE"],
+      "description": "按行输出文本到工具 stdout"
+    },
+    "get_tinda_profile": {
+      "required_perm_bits": 1,
+      "required_perm_labels": ["PUBLIC_READ"],
+      "description": "获取 Tinda 个人简介"
+    },
+    "get_current_time": {
+      "required_perm_bits": 1,
+      "required_perm_labels": ["PUBLIC_READ"],
+      "description": "获取当前时间"
+    },
+    "summarize_text": {
+      "required_perm_bits": 1,
+      "required_perm_labels": ["PUBLIC_READ"],
+      "description": "摘要长文本"
+    },
+    "extract_keywords": {
+      "required_perm_bits": 1,
+      "required_perm_labels": ["PUBLIC_READ"],
+      "description": "提取关键词"
+    },
+    "read_profile_snippet": {
+      "required_perm_bits": 1,
+      "required_perm_labels": ["PUBLIC_READ"],
+      "description": "读取资料片段"
+    },
+    "read_memories": {
+      "required_perm_bits": 1,
+      "required_perm_labels": ["PUBLIC_READ"],
+      "description": "读取全局记忆"
+    },
+    "save_memory": {
+      "required_perm_bits": 2,
+      "required_perm_labels": ["PUBLIC_WRITE"],
+      "description": "写入全局记忆"
+    },
+    "delete_memory": {
+      "required_perm_bits": 2,
+      "required_perm_labels": ["PUBLIC_WRITE"],
+      "description": "删除全局记忆"
+    },
+    "admin_noop": {
+      "required_perm_bits": 511,
+      "required_perm_labels": [
+        "PUBLIC_READ",
+        "PUBLIC_WRITE",
+        "PUBLIC_EXECUTE",
+        "TOOL_READ",
+        "TOOL_WRITE",
+        "TOOL_EXECUTE",
+        "SYSTEM_READ",
+        "SYSTEM_WRITE",
+        "SYSTEM_EXECUTE"
+      ],
+      "description": "空工具（仅满权限可调用，用于权限验证）"
+    }
+  }
+}

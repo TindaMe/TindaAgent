@@ -1,75 +1,22 @@
-import json
 import os
-from abc import ABC, abstractmethod
+import json
+import re
 from pathlib import Path
 from typing import Any, Iterator
-
-from dotenv import load_dotenv
 from openai import OpenAI
-
+from dotenv import load_dotenv
 from TindaAgent.Tool import tool as tool_registry
+from TindaAgent.Process.Observability import audit_event
 
 # .env 位于 TindaAgent 包根目录
 _ENV_PATH = Path(__file__).resolve().parent.parent.parent / ".env"
 load_dotenv(dotenv_path=_ENV_PATH)
-
-
-class ProviderAdapter(ABC):
-    """
-    用处：抽象模型供应商适配层，为多模型/多厂商预留统一接口。
-    """
-
-    @abstractmethod
-    def chat_create(
-        self,
-        *,
-        model: str,
-        messages: list[dict[str, Any]],
-        temperature: float,
-        tools: list[dict[str, Any]] | None = None,
-        tool_choice: str | None = None,
-        stream: bool = False,
-    ) -> Any:
-        """
-        发起一次 chat.completions 请求（可流式）。
-        """
-        raise NotImplementedError
-
-
-class OpenAICompatibleProviderAdapter(ProviderAdapter):
-    """
-    用处：适配 OpenAI 兼容接口（当前 DeepSeek 走该适配器）。
-    """
-
-    def __init__(self, api_key: str, base_url: str) -> None:
-        self._client = OpenAI(api_key=api_key, base_url=base_url)
-
-    def chat_create(
-        self,
-        *,
-        model: str,
-        messages: list[dict[str, Any]],
-        temperature: float,
-        tools: list[dict[str, Any]] | None = None,
-        tool_choice: str | None = None,
-        stream: bool = False,
-    ) -> Any:
-        kwargs: dict[str, Any] = {
-            "model": model,
-            "messages": messages,
-            "temperature": temperature,
-            "stream": stream,
-        }
-        if tools is not None:
-            kwargs["tools"] = tools
-        if tool_choice is not None:
-            kwargs["tool_choice"] = tool_choice
-        return self._client.chat.completions.create(**kwargs)
+_THIS_FILE = str(Path(__file__).resolve())
 
 
 class LLMClient:
     """
-    用处：封装 LLM 调用，Provider 可替换，业务层接口保持稳定。
+    用处： 封装 LLM 调用，未来换厂商/接 LiteLLM 只改这一个文件
     """
 
     def __init__(
@@ -77,38 +24,69 @@ class LLMClient:
         api_key: str = None,
         base_url: str = None,
         model: str = None,
-        provider: ProviderAdapter | None = None,
     ) -> None:
         """
+        用处： 初始化 LLM 客户端，默认读取环境变量
+
         参数：
-            api_key: 默认读取 DEEPSEEK_API_KEY
-            base_url: 默认读取 DEEPSEEK_BASE_URL
-            model: 默认读取 DEEPSEEK_MODEL
-            provider: 可注入自定义适配器，便于未来多厂商扩展
+            api_key: str // API 密钥，默认读 DEEPSEEK_API_KEY
+            base_url: str // 接口地址，默认读 DEEPSEEK_BASE_URL
+            model: str // 模型名，默认读 DEEPSEEK_MODEL
         """
         self.api_key = api_key or os.getenv("DEEPSEEK_API_KEY")
         self.base_url = base_url or os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
-        self.model = model or os.getenv("DEEPSEEK_MODEL", "deepseek-v4-pro")
+        self.model = model or os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
 
         if not self.api_key:
             raise ValueError("缺少 DEEPSEEK_API_KEY，请在 .env 中配置")
 
-        self._provider = provider or OpenAICompatibleProviderAdapter(
-            api_key=self.api_key,
-            base_url=self.base_url,
-        )
+        self._client = OpenAI(api_key=self.api_key, base_url=self.base_url)
 
     def chat(self, messages: list[dict], temperature: float = 0.7) -> str:
         """
-        用处：发起一次对话请求，返回模型回复文本。
+        用处： 发起一次对话请求，返回模型回复文本
+
+        参数：
+            messages: list[dict] // OpenAI 格式的消息列表
+            temperature: float // 采样温度，0-2
+
+        返回：
+            str // 模型回复内容
         """
-        response = self._provider.chat_create(
-            model=self.model,
-            messages=messages,
-            temperature=temperature,
-            stream=False,
+        audit_event(
+            op_type="SYSTEM_EXECUTE",
+            subsystem="ai",
+            func="LLMClient.chat",
+            file_path=_THIS_FILE,
+            content="llm_chat_start",
+            extra={"model": self.model, "messages_count": len(messages), "temperature": float(temperature)},
         )
-        return response.choices[0].message.content
+        try:
+            response = self._client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                temperature=temperature,
+            )
+            text = response.choices[0].message.content
+            audit_event(
+                op_type="SYSTEM_EXECUTE",
+                subsystem="ai",
+                func="LLMClient.chat",
+                file_path=_THIS_FILE,
+                content="llm_chat_done",
+                extra={"model": self.model, "ok": True, "reply_len": len(str(text or ""))},
+            )
+            return text
+        except Exception as e:
+            audit_event(
+                op_type="SYSTEM_EXECUTE",
+                subsystem="ai",
+                func="LLMClient.chat",
+                file_path=_THIS_FILE,
+                content=f"llm_chat_failed err={e}",
+                extra={"model": self.model, "ok": False, "error": str(e)},
+            )
+            raise
 
     @staticmethod
     def _parse_tool_arguments(raw_arguments: str | None) -> dict[str, Any]:
@@ -195,6 +173,84 @@ class LLMClient:
             },
         }
 
+    @staticmethod
+    def _extract_dsml_tool_calls(content: str | None, *, fallback_prefix: str) -> list[dict[str, Any]]:
+        """
+        兼容 DeepSeek 偶发把 tool call 以 DSML 文本吐在 content 中的场景。
+        """
+        text = str(content or "")
+        lower = text.lower()
+        if "tool_calls" not in lower and "invoke" not in lower:
+            return []
+
+        invoke_blocks = re.findall(
+            r"<[^>]*invoke[^>]*name=\"([^\"]+)\"[^>]*>(.*?)</[^>]*invoke>",
+            text,
+            flags=re.DOTALL | re.IGNORECASE,
+        )
+        if not invoke_blocks:
+            return []
+
+        normalized: list[dict[str, Any]] = []
+        for idx, (invoke_name, body) in enumerate(invoke_blocks):
+            params: dict[str, str] = {}
+            for p_name, p_value in re.findall(
+                r"<[^>]*parameter[^>]*name=\"([^\"]+)\"[^>]*>(.*?)</[^>]*parameter>",
+                body,
+                flags=re.DOTALL | re.IGNORECASE,
+            ):
+                params[str(p_name).strip()] = str(p_value).strip()
+
+            fn_name = str(invoke_name or "").strip()
+            if not fn_name:
+                continue
+
+            # call_backend_tool 需要参数打包成 JSON arguments
+            if fn_name == "call_backend_tool":
+                tool_name = str(params.get("tool_name", "")).strip()
+                args_val = params.get("args", "")
+                kwargs_val = params.get("kwargs", "")
+                arguments: dict[str, Any] = {"tool_name": tool_name}
+                if args_val:
+                    try:
+                        parsed_args = json.loads(args_val)
+                        if isinstance(parsed_args, list):
+                            arguments["args"] = parsed_args
+                    except Exception:
+                        pass
+                if kwargs_val:
+                    try:
+                        parsed_kwargs = json.loads(kwargs_val)
+                        if isinstance(parsed_kwargs, dict):
+                            arguments["kwargs"] = parsed_kwargs
+                    except Exception:
+                        pass
+                normalized.append(
+                    {
+                        "id": f"{fallback_prefix}_{idx}",
+                        "type": "function",
+                        "function": {
+                            "name": "call_backend_tool",
+                            "arguments": json.dumps(arguments, ensure_ascii=False),
+                        },
+                    }
+                )
+                continue
+
+            # 其他 invoke 当作普通 function call，按参数字典传
+            normalized.append(
+                {
+                    "id": f"{fallback_prefix}_{idx}",
+                    "type": "function",
+                    "function": {
+                        "name": fn_name,
+                        "arguments": json.dumps(params, ensure_ascii=False),
+                    },
+                }
+            )
+
+        return normalized
+
     def _run_normalized_tool_calls(
         self,
         *,
@@ -202,22 +258,76 @@ class LLMClient:
         user_perm: int,
         working_messages: list[dict[str, Any]],
         tool_trace: list[dict[str, Any]],
-    ) -> None:
+    ) -> list[dict[str, Any]]:
+        executed_steps: list[dict[str, Any]] = []
         for call in normalized_tool_calls:
             tool_name = str(call["function"].get("name", ""))
             raw_arguments = call["function"].get("arguments", "")
             parsed_args = self._parse_tool_arguments(raw_arguments)
+            model_call_id = str(call.get("id", "") or "")
+            start_event_id = audit_event(
+                op_type="TOOL_EXECUTE",
+                subsystem="ai",
+                func="LLMClient._run_normalized_tool_calls",
+                file_path=_THIS_FILE,
+                content=f"llm_tool_call_start tool={tool_name}",
+                extra={
+                    "tool_name": tool_name,
+                    "has_arguments": bool(parsed_args),
+                    "model_tool_call_id": model_call_id,
+                },
+            )
+            call_id = f"tc_{int(start_event_id):010d}"
             tool_result = tool_registry.run_agent_tool(
                 tool_name,
                 user_perm,
                 parsed_args,
+                call_id=call_id,
             )
             parsed_result = self._parse_json(tool_result)
+            user_safe_result = parsed_result
+            model_tool_content = tool_result
+            if isinstance(user_safe_result, dict):
+                user_safe_result.setdefault("call_id", call_id)
+            if isinstance(parsed_result, dict):
+                parsed_result.setdefault("call_id", call_id)
+                error_code = str(parsed_result.get("error_code", "") or "")
+                if error_code == "permission_denied" and parsed_result.get("expose_to_user") is False:
+                    # 模型侧保留详细缺权信息，避免反复盲调同一受限工具。
+                    model_view = dict(parsed_result)
+                    model_view["error"] = str(
+                        parsed_result.get("llm_message")
+                        or parsed_result.get("error")
+                        or "权限不足"
+                    )
+                    model_tool_content = json.dumps(model_view, ensure_ascii=False)
+
+                    safe = dict(parsed_result)
+                    safe["error"] = str(parsed_result.get("user_message") or "该工具当前不可用，请尝试其它方式。")
+                    safe.pop("llm_message", None)
+                    safe.pop("missing_perm_labels", None)
+                    safe.pop("required_perm_labels", None)
+                    safe.pop("required_perm_bits", None)
+                    safe.pop("user_perm", None)
+                    safe.pop("user_perm_labels", None)
+                    user_safe_result = safe
             tool_trace.append(
                 {
                     "agent_tool": tool_name,
+                    "call_id": call_id,
+                    "tool_call_id": model_call_id,
                     "arguments": parsed_args,
-                    "result": parsed_result,
+                    "result": user_safe_result,
+                    "raw_result": tool_result,
+                }
+            )
+            executed_steps.append(
+                {
+                    "agent_tool": tool_name,
+                    "call_id": call_id,
+                    "tool_call_id": model_call_id,
+                    "arguments": parsed_args,
+                    "result": user_safe_result,
                     "raw_result": tool_result,
                 }
             )
@@ -225,9 +335,23 @@ class LLMClient:
                 {
                     "role": "tool",
                     "tool_call_id": call["id"],
-                    "content": tool_result,
+                    "content": model_tool_content,
                 }
             )
+            audit_event(
+                op_type="TOOL_EXECUTE",
+                subsystem="ai",
+                func="LLMClient._run_normalized_tool_calls",
+                file_path=_THIS_FILE,
+                content=f"llm_tool_call_done tool={tool_name} call_id={call_id}",
+                extra={
+                    "tool_name": tool_name,
+                    "ok": True,
+                    "call_id": call_id,
+                    "model_tool_call_id": model_call_id,
+                },
+            )
+        return executed_steps
 
     def _append_assistant_tool_message(
         self,
@@ -294,10 +418,10 @@ class LLMClient:
 
         返回：
             {
-                "reply": str,
-                "history_delta": list[dict],
-                "tool_steps": int,
-                "tool_trace": list[dict],
+                "reply": str,               # 最终 assistant 文本回复
+                "history_delta": list[dict],# 本轮新增到历史的消息（assistant/tool 等）
+                "tool_steps": int,          # 实际工具循环次数
+                "tool_trace": list[dict],   # 本轮工具调用轨迹
             }
         """
         working_messages: list[dict[str, Any]] = [m.copy() for m in messages]
@@ -305,16 +429,29 @@ class LLMClient:
         base_len = len(working_messages)
         steps = 0
         tool_trace: list[dict[str, Any]] = []
+        audit_event(
+            op_type="SYSTEM_EXECUTE",
+            subsystem="ai",
+            func="LLMClient.chat_with_tools",
+            file_path=_THIS_FILE,
+            content="chat_with_tools_start",
+            extra={
+                "model": self.model,
+                "messages_count": len(messages),
+                "user_perm": int(user_perm),
+                "max_tool_steps": int(max_tool_steps),
+            },
+        )
 
         while True:
+            # 接近上限时，强制模型基于现有工具结果作答，避免继续 tool-call 循环
             force_finalize = steps >= max_tool_steps - 1 and len(tool_trace) > 0
-            response = self._provider.chat_create(
+            response = self._client.chat.completions.create(
                 model=self.model,
                 messages=working_messages,
                 temperature=temperature,
                 tools=tools,
                 tool_choice="none" if force_finalize else "auto",
-                stream=False,
             )
             msg = response.choices[0].message
             reasoning_content = self._normalize_reasoning_content(getattr(msg, "reasoning_content", None))
@@ -330,6 +467,12 @@ class LLMClient:
                             fallback_id=f"call_{steps}_{idx}",
                         )
                     )
+                # 兼容 DSML 文本工具调用（msg.tool_calls 为空但 content 内含 invoke）
+                if not normalized_tool_calls:
+                    normalized_tool_calls = self._extract_dsml_tool_calls(
+                        msg.content or "",
+                        fallback_prefix=f"dsml_{steps}",
+                    )
 
             if not normalized_tool_calls:
                 assistant_msg = self._attach_reasoning_content(
@@ -340,6 +483,19 @@ class LLMClient:
                     reasoning_content,
                 )
                 working_messages.append(assistant_msg)
+                audit_event(
+                    op_type="SYSTEM_EXECUTE",
+                    subsystem="ai",
+                    func="LLMClient.chat_with_tools",
+                    file_path=_THIS_FILE,
+                    content="chat_with_tools_done",
+                    extra={
+                        "model": self.model,
+                        "tool_steps": steps,
+                        "tool_trace_len": len(tool_trace),
+                        "reply_len": len(str(assistant_msg.get("content", ""))),
+                    },
+                )
                 return self._build_done_payload(
                     assistant_msg["content"],
                     working_messages,
@@ -369,6 +525,18 @@ class LLMClient:
                     "content": fallback_text,
                 }
                 working_messages.append(fallback_msg)
+                audit_event(
+                    op_type="SYSTEM_EXECUTE",
+                    subsystem="ai",
+                    func="LLMClient.chat_with_tools",
+                    file_path=_THIS_FILE,
+                    content="chat_with_tools_reach_max_steps",
+                    extra={
+                        "model": self.model,
+                        "tool_steps": steps,
+                        "tool_trace_len": len(tool_trace),
+                    },
+                )
                 return self._build_done_payload(
                     fallback_text,
                     working_messages,
@@ -389,7 +557,7 @@ class LLMClient:
 
         事件：
             {"type":"delta","content":str}
-            {"type":"reset"}
+            {"type":"reset"}  # 本轮出现 tool_call，清空临时文本
             {"type":"done","reply":str,"history_delta":list,"tool_trace":list,"tool_steps":int}
         """
         working_messages: list[dict[str, Any]] = [m.copy() for m in messages]
@@ -397,10 +565,24 @@ class LLMClient:
         base_len = len(working_messages)
         steps = 0
         tool_trace: list[dict[str, Any]] = []
+        audit_event(
+            op_type="SYSTEM_EXECUTE",
+            subsystem="ai",
+            func="LLMClient.stream_chat_with_tools",
+            file_path=_THIS_FILE,
+            content="stream_chat_with_tools_start",
+            extra={
+                "model": self.model,
+                "messages_count": len(messages),
+                "user_perm": int(user_perm),
+                "max_tool_steps": int(max_tool_steps),
+            },
+        )
 
         while True:
+            # 接近上限时，强制模型基于现有工具结果作答，避免继续 tool-call 循环
             force_finalize = steps >= max_tool_steps - 1 and len(tool_trace) > 0
-            stream = self._provider.chat_create(
+            stream = self._client.chat.completions.create(
                 model=self.model,
                 messages=working_messages,
                 temperature=temperature,
@@ -471,6 +653,12 @@ class LLMClient:
                             fallback_id=f"call_{steps}_{idx}",
                         )
                     )
+                # 兼容流式下 DSML 文本工具调用（无 delta.tool_calls）
+                if not ordered_tool_calls:
+                    ordered_tool_calls = self._extract_dsml_tool_calls(
+                        round_content,
+                        fallback_prefix=f"dsml_{steps}",
+                    )
 
             if not ordered_tool_calls:
                 assistant_msg = self._attach_reasoning_content(
@@ -478,6 +666,19 @@ class LLMClient:
                     round_reasoning,
                 )
                 working_messages.append(assistant_msg)
+                audit_event(
+                    op_type="SYSTEM_EXECUTE",
+                    subsystem="ai",
+                    func="LLMClient.stream_chat_with_tools",
+                    file_path=_THIS_FILE,
+                    content="stream_chat_with_tools_done",
+                    extra={
+                        "model": self.model,
+                        "tool_steps": steps,
+                        "tool_trace_len": len(tool_trace),
+                        "reply_len": len(round_content),
+                    },
+                )
                 yield {
                     "type": "done",
                     **self._build_done_payload(
@@ -490,6 +691,8 @@ class LLMClient:
                 }
                 return
 
+            # 只要进入 tool_call 轮次就发 reset，前端据此追加工具调用标记。
+            # 不能依赖 round_content，否则某些“纯工具轮”会完全看不到调用痕迹。
             yield {"type": "reset"}
 
             self._append_assistant_tool_message(
@@ -498,12 +701,14 @@ class LLMClient:
                 reasoning_content=round_reasoning,
                 normalized_tool_calls=ordered_tool_calls,
             )
-            self._run_normalized_tool_calls(
+            step_trace = self._run_normalized_tool_calls(
                 normalized_tool_calls=ordered_tool_calls,
                 user_perm=user_perm,
                 working_messages=working_messages,
                 tool_trace=tool_trace,
             )
+            if step_trace:
+                yield {"type": "tool_step", "trace": step_trace}
 
             steps += 1
             if steps >= max_tool_steps:
@@ -520,4 +725,16 @@ class LLMClient:
                         tool_trace,
                     ),
                 }
+                audit_event(
+                    op_type="SYSTEM_EXECUTE",
+                    subsystem="ai",
+                    func="LLMClient.stream_chat_with_tools",
+                    file_path=_THIS_FILE,
+                    content="stream_chat_with_tools_reach_max_steps",
+                    extra={
+                        "model": self.model,
+                        "tool_steps": steps,
+                        "tool_trace_len": len(tool_trace),
+                    },
+                )
                 return
