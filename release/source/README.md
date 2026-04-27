@@ -9,6 +9,7 @@ TindaAgent 是一个本地化 Web Agent 系统，聚焦于以下能力：
 3. 会话记录持久化（聊天/终端/提示同链路）
 4. 审计日志与错误日志
 5. 可切换模型与会话管理
+6. 模型能力检测页（连接 / 思考支持 / 图片 / 视频）
 
 ## 目录与职责
 
@@ -88,6 +89,50 @@ cd /mnt/e/Python/release/source
 - `http://127.0.0.1:8000/`
 - 聊天页：`/app`
 - 日志页：`/logs`
+- 模型检测页：`/model-diagnostics`
+
+## 模型检测能力（v1.7.5）
+
+模型检测页用于做最小片段能力验证，避免“模型看起来可用但实际能力缺失”。
+
+入口：
+
+1. 聊天页头部“模型检测”按钮（仅有 LLM 权限用户可见）
+2. 直接访问 `/model-diagnostics`
+
+检测项：
+
+1. `connectivity`：连接测试（最小文本请求）
+2. `reasoning`：思考支持测试（是否返回 `reasoning_content`）
+3. `image`：图片测试（基于 `image_url`）
+4. `video`：视频测试（基于 `video_url`）
+
+后端接口：
+
+- `POST /model-diagnostics/run`
+
+请求示例：
+
+```json
+{
+  "model": "deepseek-v4-flash",
+  "tests": ["connectivity", "reasoning", "image", "video"],
+  "image_url": "https://example.com/demo.png",
+  "video_url": "https://example.com/demo.mp4"
+}
+```
+
+权限规则：
+
+1. 必须登录
+2. 必须具备 LLM 执行权限（`PUBLIC_EXECUTE`，位值 `4`）
+3. 无权限返回 `403`
+
+结果规则：
+
+1. 状态枚举：`pass` / `fail` / `unsupported` / `skipped`
+2. 每项返回耗时、摘要、错误信息、结果片段
+3. 检测结果仅页面展示，不写入会话消息存储
 
 版本切换说明：
 
