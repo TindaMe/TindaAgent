@@ -7,6 +7,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
+from datetime import datetime
 
 from fastapi import FastAPI
 from fastapi import HTTPException
@@ -114,6 +115,7 @@ _HTML_HOME = (Path(__file__).parent / "home.html").read_text(encoding="utf-8")
 _HTML_CHAT = (Path(__file__).parent / "chat.html").read_text(encoding="utf-8")
 _HTML_USER_ADMIN = (Path(__file__).parent / "user_admin.html").read_text(encoding="utf-8")
 _HTML_LOG_VIEW = (Path(__file__).parent / "logs.html").read_text(encoding="utf-8")
+_HTML_MODEL_DIAGNOSTICS = (Path(__file__).parent / "model_diagnostics.html").read_text(encoding="utf-8")
 _LOG_ROOT = get_log_root()
 _LOG_MAX_READ_BYTES = 2 * 1024 * 1024
 _AUTH_OPEN_PATHS = {
@@ -122,6 +124,7 @@ _AUTH_OPEN_PATHS = {
     "/chat",
     "/app",
     "/logs",
+    "/model-diagnostics",
     "/favicon.ico",
     "/system/version",
     "/user-admin",
@@ -308,9 +311,14 @@ class VersionSnapshotCurrentRequest(BaseModel):
     force: bool = False
 
 
-def _now_iso() -> str:
-    from datetime import datetime
+class ModelDiagnosticsRequest(BaseModel):
+    model: str | None = None
+    tests: list[str] = Field(default_factory=list)
+    image_url: str | None = None
+    video_url: str | None = None
 
+
+def _now_iso() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
 
 
@@ -319,6 +327,167 @@ def _normalize_model_choice(raw: str | None) -> str | None:
     if not key:
         return None
     return _MODEL_ALIAS.get(key)
+
+
+def _sanitize_diagnostic_url(raw: str | None) -> str:
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    low = text.lower()
+    if not (low.startswith("http://") or low.startswith("https://")):
+        return ""
+    return text
+
+
+def _to_diagnostic_fail(test: str, err: Exception) -> dict:
+    msg = str(err or "unknown error")
+    em = msg.lower()
+    status = "fail"
+    if "not support" in em or "unsupported" in em or "invalid type" in em:
+        status = "unsupported"
+    return {
+        "test": test,
+        "status": status,
+        "latency_ms": 0,
+        "summary": "执行失败",
+        "error_code": "api_error",
+        "error_message": msg[:380],
+        "raw_excerpt": "",
+    }
+
+
+def _run_model_diagnostic_single(
+    *,
+    test_key: str,
+    model_name: str,
+    image_url: str,
+    video_url: str,
+) -> dict:
+    start = time.perf_counter()
+    result = {
+        "test": test_key,
+        "status": "fail",
+        "latency_ms": 0,
+        "summary": "",
+        "error_code": "",
+        "error_message": "",
+        "raw_excerpt": "",
+    }
+    try:
+        messages: list[dict] = []
+        if test_key == "connectivity":
+            messages = [{"role": "user", "content": "请仅回复：PONG"}]
+        elif test_key == "reasoning":
+            messages = [{"role": "user", "content": "小李比小王大2岁，小王比小张大3岁。请问小李比小张大几岁？"}]
+        elif test_key == "image":
+            if not image_url:
+                result["status"] = "skipped"
+                result["summary"] = "未提供 image_url，已跳过"
+                return result
+            messages = [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "请简短描述这张图片的主要内容。"},
+                        {"type": "image_url", "image_url": {"url": image_url}},
+                    ],
+                }
+            ]
+        elif test_key == "video":
+            if not video_url:
+                result["status"] = "skipped"
+                result["summary"] = "未提供 video_url，已跳过"
+                return result
+            messages = [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "请简短描述这个视频的大意。"},
+                        {"type": "input_video", "input_video": {"url": video_url}},
+                    ],
+                }
+            ]
+        else:
+            result["status"] = "fail"
+            result["summary"] = "未知测试项"
+            result["error_code"] = "invalid_test"
+            result["error_message"] = f"unsupported test: {test_key}"
+            return result
+
+        resp = _client._client.chat.completions.create(
+            model=model_name,
+            messages=messages,
+            temperature=0.2,
+            max_tokens=120,
+            timeout=25,
+        )
+        msg = resp.choices[0].message
+        content = str(getattr(msg, "content", "") or "").strip()
+        reasoning = str(getattr(msg, "reasoning_content", "") or "").strip()
+
+        if test_key == "reasoning":
+            if reasoning:
+                result["status"] = "pass"
+                result["summary"] = "检测到 reasoning_content，支持思考输出"
+                result["raw_excerpt"] = reasoning[:240]
+            else:
+                result["status"] = "unsupported"
+                result["summary"] = "未检测到 reasoning_content"
+                result["raw_excerpt"] = content[:240]
+        else:
+            if content:
+                result["status"] = "pass"
+                result["summary"] = "响应成功"
+                result["raw_excerpt"] = content[:240]
+            else:
+                result["status"] = "fail"
+                result["summary"] = "响应为空"
+                result["error_code"] = "empty_reply"
+                result["error_message"] = "model reply is empty"
+    except Exception as e:
+        fail = _to_diagnostic_fail(test_key, e)
+        result.update(fail)
+    finally:
+        result["latency_ms"] = max(0, int((time.perf_counter() - start) * 1000))
+    return result
+
+
+def _run_model_diagnostics(
+    *,
+    model_name: str,
+    tests: list[str],
+    image_url: str,
+    video_url: str,
+) -> list[dict]:
+    rows: list[dict] = []
+    for key in tests:
+        started = _audit_web(
+            "SYSTEM_EXECUTE",
+            "_run_model_diagnostics",
+            f"model_diag_start test={key}",
+            {"test": key, "model": model_name},
+        )
+        row = _run_model_diagnostic_single(
+            test_key=key,
+            model_name=model_name,
+            image_url=image_url,
+            video_url=video_url,
+        )
+        rows.append(row)
+        _audit_web(
+            "SYSTEM_EXECUTE",
+            "_run_model_diagnostics",
+            f"model_diag_done test={key} status={row.get('status')}",
+            {
+                "test": key,
+                "model": model_name,
+                "status": row.get("status"),
+                "latency_ms": int(row.get("latency_ms", 0)),
+                "parent_audit_id": int(started),
+                "error_code": str(row.get("error_code", "")),
+            },
+        )
+    return rows
 
 
 def _sanitize_meta_value(value: str | None, max_len: int = 240) -> str:
@@ -1151,32 +1320,44 @@ def _resolve_total_jsonl_candidates() -> list[Path]:
 
 
 def _find_audit_event_by_id(event_id: int) -> dict | None:
+    """通过索引 O(1) 查找，不再线性扫描 JSONL。"""
     target = int(event_id)
     for path in _resolve_total_jsonl_candidates():
+        idx_path = path.with_suffix(".idx")
+        idx = {}
+        try:
+            raw = idx_path.read_text(encoding="utf-8")
+            idx = json.loads(raw) if raw.strip() else {}
+        except Exception:
+            idx = {}
+        if not isinstance(idx, dict):
+            idx = {}
+        offset = idx.get(str(target))
+        if offset is None:
+            continue
+        if not isinstance(offset, (int, str)):
+            continue
+        try:
+            offset = int(offset)
+        except (ValueError, TypeError):
+            continue
+        if offset < 0:
+            continue
         try:
             with path.open("r", encoding="utf-8") as fp:
-                for line_no, line in enumerate(fp, start=1):
-                    row_text = str(line).strip()
-                    if not row_text:
-                        continue
-                    try:
-                        row = json.loads(row_text)
-                    except Exception:
-                        continue
-                    try:
-                        rid = int(row.get("id", -1))
-                    except Exception:
-                        continue
-                    if rid != target:
-                        continue
+                fp.seek(int(offset))
+                line = fp.readline()
+                row = json.loads(line.strip())
+                rid = int(row.get("id", -1))
+                if rid == target:
                     return {
                         "event": row,
                         "source_file": str(path.name),
                         "source_path": str(path),
-                        "source_line": int(line_no),
+                        "source_line": 0,
                     }
         except Exception:
-            continue
+            pass
     return None
 
 
@@ -1203,6 +1384,53 @@ async def chat_page_legacy():
 @app.get("/app", response_class=HTMLResponse)
 async def chat_page():
     return _HTML_CHAT
+
+
+@app.get("/model-diagnostics", response_class=HTMLResponse)
+async def model_diagnostics_page():
+    return _HTML_MODEL_DIAGNOSTICS
+
+
+@app.post("/model-diagnostics/run")
+async def run_model_diagnostics(req: ModelDiagnosticsRequest):
+    current = _require_login()
+    if not _has_llm_perm(current):
+        return JSONResponse({"ok": False, "error": "权限不足：当前账户不可执行模型检测"}, status_code=403)
+
+    allowed_tests = ("connectivity", "reasoning", "image", "video")
+    raw_tests = [str(x or "").strip().lower() for x in (req.tests or []) if str(x or "").strip()]
+    if not raw_tests:
+        return JSONResponse({"ok": False, "error": "tests 不能为空"}, status_code=400)
+    tests = []
+    for key in raw_tests:
+        if key not in allowed_tests:
+            return JSONResponse({"ok": False, "error": f"不支持的 tests 项: {key}"}, status_code=400)
+        if key not in tests:
+            tests.append(key)
+
+    target_model = _normalize_model_choice(req.model) or str(_client.model or "").strip()
+    if not target_model:
+        return JSONResponse({"ok": False, "error": "model 无效"}, status_code=400)
+
+    image_url = _sanitize_diagnostic_url(req.image_url)
+    video_url = _sanitize_diagnostic_url(req.video_url)
+
+    started_at = _now_iso()
+    rows = _run_model_diagnostics(
+        model_name=target_model,
+        tests=tests,
+        image_url=image_url,
+        video_url=video_url,
+    )
+    return JSONResponse(
+        {
+            "ok": True,
+            "model": target_model,
+            "started_at": started_at,
+            "finished_at": _now_iso(),
+            "results": rows,
+        }
+    )
 
 
 @app.get("/system/version")

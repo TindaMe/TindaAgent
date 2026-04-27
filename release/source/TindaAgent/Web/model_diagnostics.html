@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TindaAgent · 模型检测</title>
+  <style>
+    :root {
+      --bg: #fff6fb;
+      --surface: #ffffff;
+      --surface-2: #fff0f7;
+      --border: #f5c5da;
+      --text: #3a1d2c;
+      --muted: #8a5470;
+      --accent: #ef4f9a;
+      --ok: #1f9d5a;
+      --warn: #c98013;
+      --fail: #d64040;
+      --chip: #fde6f1;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Nunito", "PingFang SC", "Microsoft YaHei", sans-serif;
+      color: var(--text);
+      background: radial-gradient(circle at 10% -8%, #ffd9e9 0%, transparent 44%), var(--bg);
+    }
+    .wrap {
+      max-width: 1080px;
+      margin: 0 auto;
+      padding: 20px 16px 30px;
+    }
+    .top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+    .title {
+      margin: 0;
+      font-size: 24px;
+      line-height: 1.2;
+    }
+    .sub {
+      margin: 6px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .btn {
+      height: 34px;
+      border-radius: 999px;
+      border: 1.5px solid var(--border);
+      background: #fff;
+      color: var(--text);
+      font-size: 13px;
+      padding: 0 14px;
+      cursor: pointer;
+      font-weight: 700;
+    }
+    .btn:hover { border-color: var(--accent); color: var(--accent); }
+    .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .btn.primary:hover { filter: brightness(0.96); }
+    .btn:disabled { opacity: 0.52; cursor: not-allowed; }
+
+    .card {
+      background: var(--surface);
+      border: 1.5px solid var(--border);
+      border-radius: 16px;
+      padding: 14px;
+      box-shadow: 0 8px 18px rgba(239,79,154,0.09);
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: 1.1fr 1fr 1fr;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+    label {
+      display: block;
+      margin-bottom: 5px;
+      font-size: 12px;
+      color: var(--muted);
+      font-weight: 700;
+    }
+    input, select {
+      width: 100%;
+      height: 36px;
+      border-radius: 10px;
+      border: 1.4px solid var(--border);
+      padding: 0 10px;
+      font-size: 13px;
+      color: var(--text);
+      background: #fff;
+      outline: none;
+    }
+    input:focus, select:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(239,79,154,0.12);
+    }
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 6px;
+    }
+    .status {
+      margin-top: 10px;
+      min-height: 18px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 12px;
+      background: var(--surface);
+      border-radius: 12px;
+      overflow: hidden;
+      border: 1.2px solid var(--border);
+    }
+    th, td {
+      text-align: left;
+      padding: 9px 10px;
+      border-bottom: 1px solid #f8d9e7;
+      vertical-align: top;
+      font-size: 12.5px;
+    }
+    th {
+      background: var(--surface-2);
+      color: var(--muted);
+      font-weight: 700;
+      font-size: 12px;
+    }
+    tr:last-child td { border-bottom: none; }
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      padding: 1px 8px;
+      font-size: 12px;
+      font-weight: 700;
+      border: 1px solid transparent;
+      white-space: nowrap;
+    }
+    .chip.pass { color: var(--ok); background: #e8f7ee; border-color: #bfe8d0; }
+    .chip.unsupported { color: var(--warn); background: #fff3df; border-color: #f7ddb0; }
+    .chip.fail { color: var(--fail); background: #fee9e9; border-color: #f8c6c6; }
+    .chip.skipped { color: #6c6c6c; background: #f1f1f1; border-color: #dddddd; }
+
+    .mono {
+      font-family: "JetBrains Mono", Consolas, monospace;
+      font-size: 11.5px;
+      white-space: pre-wrap;
+      word-break: break-word;
+      color: #5c3b4c;
+      background: #fffafd;
+      border: 1px dashed #f1c9dc;
+      border-radius: 8px;
+      padding: 6px;
+      max-height: 90px;
+      overflow: auto;
+    }
+
+    @media (max-width: 880px) {
+      .grid { grid-template-columns: 1fr; }
+      .top { flex-direction: column; align-items: flex-start; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top">
+      <div>
+        <h1 class="title">模型检测</h1>
+        <p class="sub">最小片段能力检测：连接、思考支持、图片、视频</p>
+      </div>
+      <div>
+        <button class="btn" onclick="goApp()">返回聊天</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="grid">
+        <div>
+          <label for="modelSelect">目标模型</label>
+          <select id="modelSelect"></select>
+        </div>
+        <div>
+          <label for="imageUrl">图片 URL（可选）</label>
+          <input id="imageUrl" placeholder="https://example.com/a.png" />
+        </div>
+        <div>
+          <label for="videoUrl">视频 URL（可选）</label>
+          <input id="videoUrl" placeholder="https://example.com/a.mp4" />
+        </div>
+      </div>
+
+      <div class="actions">
+        <button id="btnRunAll" class="btn primary" onclick="runAll()">一键全部检测</button>
+        <button class="btn" onclick="runSingle('connectivity')">连接测试</button>
+        <button class="btn" onclick="runSingle('reasoning')">思考支持测试</button>
+        <button class="btn" onclick="runSingle('image')">图片测试</button>
+        <button class="btn" onclick="runSingle('video')">视频测试</button>
+      </div>
+
+      <div id="statusLine" class="status">就绪</div>
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th style="width: 130px;">测试项</th>
+          <th style="width: 110px;">状态</th>
+          <th style="width: 90px;">耗时</th>
+          <th style="width: 200px;">摘要</th>
+          <th>详情</th>
+        </tr>
+      </thead>
+      <tbody id="resultBody">
+        <tr><td colspan="5" style="color:#9b6780;">尚未执行检测</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <script>
+    const AUTH_TOKEN_KEY = "ta_auth_token";
+    const MODEL_FALLBACK = [
+      { id: "deepseek-chat", label: "deepseek-chat" },
+      { id: "deepseek-v4-pro", label: "deepseek-pro" },
+      { id: "deepseek-reasoner", label: "deepseek-reasoner" },
+      { id: "deepseek-v4-flash", label: "deepseek-v4-flash" },
+    ];
+
+    const modelSelectEl = document.getElementById("modelSelect");
+    const imageUrlEl = document.getElementById("imageUrl");
+    const videoUrlEl = document.getElementById("videoUrl");
+    const statusLineEl = document.getElementById("statusLine");
+    const resultBodyEl = document.getElementById("resultBody");
+    const btnRunAllEl = document.getElementById("btnRunAll");
+
+    function getAuthToken() {
+      return String(localStorage.getItem(AUTH_TOKEN_KEY) || "").trim();
+    }
+
+    function authHeaders(extra) {
+      const headers = Object.assign({}, extra || {});
+      const token = getAuthToken();
+      if (token) headers["X-User-Token"] = token;
+      return headers;
+    }
+
+    async function apiFetch(url, options = {}) {
+      const opts = Object.assign({}, options);
+      opts.headers = authHeaders(opts.headers || {});
+      return fetch(url, opts);
+    }
+
+    function goApp() {
+      location.href = "/app";
+    }
+
+    function setStatus(text) {
+      statusLineEl.textContent = String(text || "");
+    }
+
+    function testLabel(key) {
+      return {
+        connectivity: "连接测试",
+        reasoning: "思考支持",
+        image: "图片测试",
+        video: "视频测试",
+      }[String(key)] || key;
+    }
+
+    function renderResults(rows) {
+      if (!Array.isArray(rows) || rows.length === 0) {
+        resultBodyEl.innerHTML = `<tr><td colspan="5" style="color:#9b6780;">无结果</td></tr>`;
+        return;
+      }
+      resultBodyEl.innerHTML = rows.map((r) => {
+        const status = String(r?.status || "fail");
+        const latency = Number(r?.latency_ms || 0);
+        const detail = String(r?.error_message || r?.raw_excerpt || "-");
+        return `
+          <tr>
+            <td>${escapeHtml(testLabel(String(r?.test || "")))}</td>
+            <td><span class="chip ${escapeHtml(status)}">${escapeHtml(status)}</span></td>
+            <td>${Number.isFinite(latency) ? `${latency}ms` : "-"}</td>
+            <td>${escapeHtml(String(r?.summary || ""))}</td>
+            <td><div class="mono">${escapeHtml(detail)}</div></td>
+          </tr>
+        `;
+      }).join("");
+    }
+
+    function escapeHtml(raw) {
+      const s = String(raw ?? "");
+      return s.replaceAll("&", "&amp;")
+              .replaceAll("<", "&lt;")
+              .replaceAll(">", "&gt;")
+              .replaceAll('"', "&quot;")
+              .replaceAll("'", "&#39;");
+    }
+
+    function setRunning(flag) {
+      btnRunAllEl.disabled = Boolean(flag);
+      document.querySelectorAll("button.btn").forEach((btn) => {
+        if (btn !== btnRunAllEl && btn.textContent.includes("测试")) {
+          btn.disabled = Boolean(flag);
+        }
+      });
+    }
+
+    async function ensureAllowed() {
+      const res = await apiFetch("/auth/status");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      if (!data?.logged_in) {
+        setStatus("未登录，跳转到首页...");
+        setTimeout(() => { location.href = "/"; }, 500);
+        return false;
+      }
+      const p = Number(data?.user?.perm || 0);
+      const LLM_EXECUTE_PERM = 4;
+      if ((p & LLM_EXECUTE_PERM) !== LLM_EXECUTE_PERM) {
+        setStatus("当前账户无 LLM 权限，无法执行模型检测");
+        setRunning(true);
+        return false;
+      }
+      return true;
+    }
+
+    async function loadModels() {
+      try {
+        const res = await apiFetch("/model");
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        const rows = Array.isArray(data?.available_models) && data.available_models.length > 0
+          ? data.available_models
+          : MODEL_FALLBACK;
+        modelSelectEl.innerHTML = rows.map((x) => {
+          const id = String(x?.id || "").trim();
+          const label = String(x?.label || id || "").trim();
+          return `<option value="${escapeHtml(id)}">${escapeHtml(label)}</option>`;
+        }).join("");
+        const current = String(data?.current_model || "").trim();
+        if (current) modelSelectEl.value = current;
+      } catch (e) {
+        modelSelectEl.innerHTML = MODEL_FALLBACK.map((x) => `<option value="${escapeHtml(x.id)}">${escapeHtml(x.label)}</option>`).join("");
+      }
+    }
+
+    async function runByTests(tests) {
+      if (!Array.isArray(tests) || tests.length === 0) return;
+      if (!(await ensureAllowed())) return;
+
+      setRunning(true);
+      setStatus(`检测中：${tests.map(testLabel).join(" / ")} ...`);
+      try {
+        const res = await apiFetch("/model-diagnostics/run", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model: String(modelSelectEl.value || "").trim(),
+            tests,
+            image_url: String(imageUrlEl.value || "").trim(),
+            video_url: String(videoUrlEl.value || "").trim(),
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok || data?.ok === false) {
+          throw new Error(String(data?.error || `HTTP ${res.status}`));
+        }
+        renderResults(data?.results || []);
+        setStatus(`完成：${String(data?.model || "")}`);
+      } catch (e) {
+        setStatus(`检测失败：${String(e?.message || e)}`);
+      } finally {
+        setRunning(false);
+      }
+    }
+
+    async function runAll() {
+      await runByTests(["connectivity", "reasoning", "image", "video"]);
+    }
+
+    async function runSingle(key) {
+      await runByTests([String(key || "")]);
+    }
+
+    (async () => {
+      await loadModels();
+      await ensureAllowed();
+    })();
+  </script>
+</body>
+</html>

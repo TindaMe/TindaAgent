@@ -1437,6 +1437,13 @@
         <path d="M18 7h2v12h-2"></path>
       </svg>
     </button>
+    <a id="modelDiagnosticsBtn" class="icon-btn" href="/model-diagnostics" title="模型检测" data-tip="模型检测" onclick="event.preventDefault(); smoothNavigate('/model-diagnostics');" aria-label="模型检测" style="display:none;">
+      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+        <rect x="4" y="5" width="16" height="14" rx="2"></rect>
+        <path d="M7 15l3-3 2 2 4-4"></path>
+        <path d="M7 10h3"></path>
+      </svg>
+    </a>
     <a id="adminLinkBtn" class="icon-btn" href="/user-admin" title="用户管理" data-tip="用户管理" onclick="event.preventDefault(); smoothNavigate('/user-admin');" aria-label="用户管理" style="display:none;">
       <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
         <path d="M12 3l7 3v6c0 4.2-2.9 7.8-7 8.8-4.1-1-7-4.6-7-8.8V6z"></path>
@@ -1563,6 +1570,7 @@
   const resizerEl   = document.getElementById("resizer");
   const modelSwitchBtnEl = document.getElementById("modelSwitchBtn");
   const modelPanelEl = document.getElementById("modelPanel");
+  const modelDiagnosticsBtnEl = document.getElementById("modelDiagnosticsBtn");
   const adminLinkBtnEl = document.getElementById("adminLinkBtn");
   const userSwitchSelectEl = document.getElementById("headerUserSwitchSelect");
   const userSwitchBtnEl = document.getElementById("headerUserSwitchBtn");
@@ -3266,8 +3274,10 @@
       uid: sanitizeMetaText(data?.uid),
       perm: sanitizeMetaText(data?.perm_label ?? data?.perm),
     };
+    const p = Number(data?.perm ?? 0);
+    const hasLlmPerm = Number.isFinite(p) && ((p & 4) === 4);
+    if (modelDiagnosticsBtnEl) modelDiagnosticsBtnEl.style.display = hasLlmPerm ? "" : "none";
     if (adminLinkBtnEl) {
-      const p = Number(data?.perm ?? 0);
       const visible = Number.isFinite(p) && ((p & USER_ADMIN_PERM) === USER_ADMIN_PERM);
       adminLinkBtnEl.style.display = visible ? "" : "none";
     }
