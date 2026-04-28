@@ -116,6 +116,7 @@ _HTML_CHAT = (Path(__file__).parent / "chat.html").read_text(encoding="utf-8")
 _HTML_USER_ADMIN = (Path(__file__).parent / "user_admin.html").read_text(encoding="utf-8")
 _HTML_LOG_VIEW = (Path(__file__).parent / "logs.html").read_text(encoding="utf-8")
 _HTML_MODEL_DIAGNOSTICS = (Path(__file__).parent / "model_diagnostics.html").read_text(encoding="utf-8")
+_HTML_SETTINGS = (Path(__file__).parent / "settings.html").read_text(encoding="utf-8")
 _LOG_ROOT = get_log_root()
 _LOG_MAX_READ_BYTES = 2 * 1024 * 1024
 _AUTH_OPEN_PATHS = {
@@ -1431,6 +1432,11 @@ async def chat_page_legacy():
 @app.get("/app", response_class=HTMLResponse)
 async def chat_page():
     return _HTML_CHAT
+
+
+@app.get("/settings", response_class=HTMLResponse)
+async def settings_page():
+    return HTMLResponse(_HTML_SETTINGS)
 
 
 @app.get("/model-diagnostics", response_class=HTMLResponse)

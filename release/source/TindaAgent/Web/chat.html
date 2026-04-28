@@ -204,6 +204,12 @@
       gap: 10px;
       justify-self: end;
     }
+    #quickBtns {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-shrink: 0;
+    }
     .header-user-switch {
       display: flex;
       align-items: center;
@@ -1478,6 +1484,68 @@
       .tinda-toast { bottom: 100px; }
     }
 
+    .account-popup {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 350;
+      background: rgba(0,0,0,0.35);
+      align-items: center;
+      justify-content: center;
+    }
+    .account-popup.show { display: flex; }
+    .account-card {
+      background: var(--surface);
+      border: 1.5px solid var(--border);
+      border-radius: 16px;
+      padding: 18px 20px;
+      min-width: 240px;
+      max-width: 320px;
+      box-shadow: 0 12px 32px rgba(255,110,180,0.14);
+    }
+    .account-card h3 {
+      margin: 0 0 10px;
+      font-size: 15px;
+      font-weight: 800;
+      color: var(--text);
+    }
+    .account-list {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      max-height: 260px;
+      overflow-y: auto;
+    }
+    .account-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 10px;
+      border-radius: 10px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--text);
+      border: 1.5px solid transparent;
+      transition: all 0.15s;
+    }
+    .account-item:hover {
+      background: var(--surface-2);
+      border-color: var(--border);
+    }
+    .account-item.active {
+      background: rgba(255,110,180,0.08);
+      border-color: var(--accent-2);
+      color: var(--accent-deep);
+    }
+    .account-item .dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .account-item .dot.on { background: #22c55e; }
+    .account-item .dot.off { background: var(--text-faint); }
+
     .config-overlay {
       display: none;
       position: fixed;
@@ -1573,7 +1641,10 @@
   <div class="brand">
     <div class="brand-logo" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"></circle><path d="M12 2.8v4.2M12 17v4.2M2.8 12h4.2M17 12h4.2M5.3 5.3l3 3M15.7 15.7l3 3M18.7 5.3l-3 3M8.3 15.7l-3 3"></path></svg></div>
     <span class="brand-name">TindaAgent</span>
-    <button id="versionBadgeBtn" class="version-badge version-btn" onclick="showVersionTip()" title="版本信息">v1.7.7</button>
+    <button id="versionBadgeBtn" class="version-badge version-btn" onclick="showVersionTip()" title="版本信息">v1.7.8</button>
+    <button id="accountBtn" class="icon-btn account-btn" onclick="showAccountPopup()" title="切换账户" aria-label="切换账户">
+      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 21a8 8 0 0 0-16 0"></path><circle cx="12" cy="8" r="3.2"></circle></svg>
+    </button>
   </div>
   <div class="header-center">
     <span id="statusPill" class="status-pill">
@@ -1581,94 +1652,24 @@
       <span class="status-text">AI Agent · 在线</span>
     </span>
   </div>
-  <div class="header-right">
-    <div class="header-user-switch">
-      <select id="headerUserSwitchSelect" title="选择账户"></select>
-      <button id="headerUserSwitchBtn" type="button">切换</button>
-    </div>
-    <div class="model-wrap">
-      <button id="modelSwitchBtn" class="icon-btn model-btn" type="button" title="切换模型" data-tip="切换模型" aria-label="切换模型">
-        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M9 3h6"></path>
-          <path d="M12 3v4"></path>
-          <rect x="5" y="7" width="14" height="14" rx="3"></rect>
-          <path d="M9 12h.01M15 12h.01M9 16h6"></path>
-        </svg>
-      </button>
-      <div id="modelPanel" class="model-panel"></div>
-    </div>
-    <button id="streamToggleBtn" class="icon-btn stream-btn" onclick="toggleStream()" title="流式输出" data-tip="切换流式输出" aria-label="流式输出">
-      <svg class="icon stream-icon stream-off" viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M4 5h16"></path>
-        <path d="M4 12h12"></path>
-        <path d="M4 19h8"></path>
-      </svg>
-      <svg class="icon stream-icon stream-on" viewBox="0 0 24 24" aria-hidden="true" style="display:none;">
-        <path d="M3 12h4l2 3 3-6 3 6 2-3h4"></path>
-      </svg>
-    </button>
-    <div class="btn-sep"></div>
-    <button id="termToggleBtn" class="icon-btn term-toggle" onclick="toggleTerm()" title="打开终端" data-tip="打开终端" aria-label="打开终端">
-      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
-        <rect x="3" y="4" width="18" height="14" rx="2"></rect>
-        <path d="M8 20h8"></path>
-      </svg>
-    </button>
-    <button id="recordsToggleBtn" class="icon-btn" onclick="toggleRecordsPanel()" title="会话管理" data-tip="会话管理" aria-label="会话管理">
-      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M4 5h12a2 2 0 0 1 2 2v12H6a2 2 0 0 1-2-2z"></path>
-        <path d="M8 9h6M8 13h6"></path>
-        <path d="M18 7h2v12h-2"></path>
-      </svg>
-    </button>
-    <button id="configBtn" class="icon-btn" onclick="showConfigDialog()" title="上下文配置" data-tip="上下文配置" aria-label="上下文配置">
-      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
-        <circle cx="12" cy="12" r="2.5"></circle>
-        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
-      </svg>
-    </button>
-    <a id="modelDiagnosticsBtn" class="icon-btn" href="/model-diagnostics" title="模型检测" data-tip="模型检测" onclick="event.preventDefault(); smoothNavigate('/model-diagnostics');" aria-label="模型检测" style="display:none;">
-      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
-        <rect x="4" y="5" width="16" height="14" rx="2"></rect>
-        <path d="M7 15l3-3 2 2 4-4"></path>
-        <path d="M7 10h3"></path>
-      </svg>
-    </a>
-    <a id="adminLinkBtn" class="icon-btn" href="/user-admin" title="用户管理" data-tip="用户管理" onclick="event.preventDefault(); smoothNavigate('/user-admin');" aria-label="用户管理" style="display:none;">
-      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M12 3l7 3v6c0 4.2-2.9 7.8-7 8.8-4.1-1-7-4.6-7-8.8V6z"></path>
-        <path d="M9.5 12.5l1.8 1.8 3.4-3.4"></path>
-      </svg>
+  <div class="header-right" id="headerRight">
+    <div id="quickBtns"></div>
+    <div class="btn-sep" id="quickSep" style="display:none;"></div>
+    <a class="icon-btn" href="/settings" title="设置" data-tip="设置" onclick="event.preventDefault(); smoothNavigate('/settings');" aria-label="设置">
+      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="2.5"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
     </a>
     <a class="icon-btn" href="/" title="返回主页" data-tip="返回主页" onclick="event.preventDefault(); smoothNavigate('/');" aria-label="返回主页">
-      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M3 11.5 12 4l9 7.5"></path>
-        <path d="M6 10.5V20h12v-9.5"></path>
-      </svg>
+      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11.5 12 4l9 7.5"></path><path d="M6 10.5V20h12v-9.5"></path></svg>
     </a>
-    <a class="icon-btn" href="/logs" title="日志查看" data-tip="日志查看" onclick="event.preventDefault(); smoothNavigate('/logs');" aria-label="日志查看">
-      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
-        <rect x="4" y="4" width="16" height="16" rx="2"></rect>
-        <path d="M8 9h8M8 13h8M8 17h6"></path>
-      </svg>
-    </a>
-    <button id="compressCtxBtn" class="icon-btn" onclick="compressCurrentContext()" title="压缩上下文" data-tip="压缩上下文" aria-label="压缩上下文">
-      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M4 6h16"></path>
-        <path d="M4 12h10"></path>
-        <path d="M4 18h7"></path>
-        <path d="M18 10v8"></path>
-        <path d="M14 14h8"></path>
-      </svg>
-    </button>
-    <button class="icon-btn" onclick="resetChat()" title="清空上下文" data-tip="清空当前会话上下文" aria-label="清空上下文">
-      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M20 12a8 8 0 1 1-2.3-5.7"></path>
-        <path d="M20 4v5h-5"></path>
-      </svg>
-    </button>
   </div>
 </header>
+
+<div id="accountPopup" class="account-popup" onclick="if(event.target===this)hideAccountPopup()">
+  <div class="account-card">
+    <h3>切换账户</h3>
+    <div id="accountList" class="account-list"></div>
+  </div>
+</div>
 
 <div id="configOverlay" class="config-overlay" onclick="if(event.target===this)hideConfigDialog()">
   <div class="config-dialog">
@@ -1794,11 +1795,11 @@
   const modelPanelEl = document.getElementById("modelPanel");
   const modelDiagnosticsBtnEl = document.getElementById("modelDiagnosticsBtn");
   const adminLinkBtnEl = document.getElementById("adminLinkBtn");
-  const userSwitchSelectEl = document.getElementById("headerUserSwitchSelect");
-  const userSwitchBtnEl = document.getElementById("headerUserSwitchBtn");
-  const streamToggleBtnEl = document.getElementById("streamToggleBtn");
-  const termToggleBtnEl = document.getElementById("termToggleBtn");
-  const recordsToggleBtnEl = document.getElementById("recordsToggleBtn");
+  const quickBtnsEl = document.getElementById("quickBtns");
+  const quickSepEl = document.getElementById("quickSep");
+  const accountBtnEl = document.getElementById("accountBtn");
+  const accountPopupEl = document.getElementById("accountPopup");
+  const accountListEl = document.getElementById("accountList");
   const recordsMaskEl = document.getElementById("recordsMask");
   const recordsPanelEl = document.getElementById("recordsPanel");
   const recordsListEl = document.getElementById("recordsList");
@@ -1840,7 +1841,7 @@
   };
   const USER_ADMIN_PERM = 511;
   const AUTH_TOKEN_KEY = "ta_auth_token";
-  const VERSION_FALLBACK = "v1.7.7";
+  const VERSION_FALLBACK = "v1.7.8";
 
   function getAuthToken() {
     return String(localStorage.getItem(AUTH_TOKEN_KEY) || "").trim();
@@ -2159,10 +2160,11 @@
   function openTerm() {
     ensureTermInitialized();
     termOpen = true;
-    if (termToggleBtnEl) {
-      termToggleBtnEl.classList.add("on");
-      termToggleBtnEl.title = "关闭终端";
-      termToggleBtnEl.setAttribute("data-tip", "关闭终端");
+    const tb = document.getElementById("termToggleBtn");
+    if (tb) {
+      tb.classList.add("on");
+      tb.title = "关闭终端";
+      tb.setAttribute("data-tip", "关闭终端");
     }
     // double-RAF：确保浏览器已记录 width:0/opacity:0 的初始帧，再启动过渡
     requestAnimationFrame(() => {
@@ -2185,10 +2187,11 @@
     termPanelEl.classList.remove("open");
     resizerEl.classList.remove("visible");
     scheduleRecalcPinnedSpacerHeight();
-    if (termToggleBtnEl) {
-      termToggleBtnEl.classList.remove("on");
-      termToggleBtnEl.title = "打开终端";
-      termToggleBtnEl.setAttribute("data-tip", "打开终端");
+    const tb = document.getElementById("termToggleBtn");
+    if (tb) {
+      tb.classList.remove("on");
+      tb.title = "打开终端";
+      tb.setAttribute("data-tip", "打开终端");
     }
   }
 
@@ -2443,11 +2446,12 @@
   }
 
   function setModelSwitchBtnUI() {
-    if (!modelSwitchBtnEl) return;
+    const mb = document.getElementById("modelSwitchBtn");
+    if (!mb) return;
     const label = getModelLabel(currentModel);
-    modelSwitchBtnEl.classList.toggle("on", !!currentModel);
-    modelSwitchBtnEl.title = `当前模型：${label}`;
-    modelSwitchBtnEl.setAttribute("data-tip", `当前模型：${label}`);
+    mb.classList.toggle("on", !!currentModel);
+    mb.title = `当前模型：${label}`;
+    mb.setAttribute("data-tip", `当前模型：${label}`);
   }
 
   function renderModelPanel() {
@@ -3244,17 +3248,18 @@
   }
 
   function setStreamToggleUI() {
-    if (!streamToggleBtnEl) return;
-    const iconOn = streamToggleBtnEl.querySelector(".stream-on");
-    const iconOff = streamToggleBtnEl.querySelector(".stream-off");
+    const sb = document.getElementById("streamToggleBtn");
+    if (!sb) return;
+    const iconOn = sb.querySelector(".stream-on");
+    const iconOff = sb.querySelector(".stream-off");
     if (iconOn && iconOff) {
       iconOn.style.display = streamEnabled ? "" : "none";
       iconOff.style.display = streamEnabled ? "none" : "";
     }
-    streamToggleBtnEl.classList.toggle("on", streamEnabled);
+    sb.classList.toggle("on", streamEnabled);
     const tip = "切换流式输出";
-    streamToggleBtnEl.title = tip;
-    streamToggleBtnEl.setAttribute("data-tip", tip);
+    sb.title = tip;
+    sb.setAttribute("data-tip", tip);
   }
 
   function toggleStream() {
@@ -3617,93 +3622,212 @@
       const visible = Number.isFinite(p) && ((p & USER_ADMIN_PERM) === USER_ADMIN_PERM);
       adminLinkBtnEl.style.display = visible ? "" : "none";
     }
-    if (userSwitchSelectEl && userMeta.uid !== "N/A") {
-      const hasOption = Array.from(userSwitchSelectEl.options).some((opt) => opt.value === userMeta.uid);
-      if (hasOption) userSwitchSelectEl.value = userMeta.uid;
-    }
   }
 
-  function renderHeaderUserOptions(users, currentUid) {
-    if (!userSwitchSelectEl) return;
-    userSwitchSelectEl.innerHTML = "";
-    if (!Array.isArray(users) || users.length === 0) {
-      const opt = document.createElement("option");
-      opt.value = "";
-      opt.textContent = "无可用账户";
-      userSwitchSelectEl.appendChild(opt);
-      userSwitchSelectEl.disabled = true;
-      if (userSwitchBtnEl) userSwitchBtnEl.disabled = true;
-      return;
+  // ── 快捷按钮 ──
+  const QUICK_BUTTON_DEFS = {
+    model: {
+      label: "切换模型", icon: '<svg class="icon" viewBox="0 0 24 24"><path d="M9 3h6"/><path d="M12 3v4"/><rect x="5" y="7" width="14" height="14" rx="3"/><path d="M9 12h.01M15 12h.01M9 16h6"/></svg>',
+      render: () => {
+        const wrap = document.createElement("div"); wrap.className = "model-wrap";
+        const btn = document.createElement("button"); btn.className = "icon-btn model-btn"; btn.title = "切换模型"; btn.setAttribute("data-tip","切换模型"); btn.setAttribute("aria-label","切换模型");
+        btn.id = "modelSwitchBtn"; btn.innerHTML = QUICK_BUTTON_DEFS.model.icon;
+        const panel = document.createElement("div"); panel.id = "modelPanel"; panel.className = "model-panel";
+        wrap.appendChild(btn); wrap.appendChild(panel);
+        btn.addEventListener("click", toggleModelPanel);
+        return wrap;
+      }
+    },
+    stream: {
+      label: "流式输出", icon: '<svg class="icon stream-icon stream-off" viewBox="0 0 24 24"><path d="M4 5h16"/><path d="M4 12h12"/><path d="M4 19h8"/></svg><svg class="icon stream-icon stream-on" viewBox="0 0 24 24" style="display:none;"><path d="M3 12h4l2 3 3-6 3 6 2-3h4"/></svg>',
+      render: () => {
+        const btn = document.createElement("button"); btn.className = "icon-btn stream-btn"; btn.title = "流式输出"; btn.setAttribute("data-tip","切换流式输出"); btn.setAttribute("aria-label","流式输出");
+        btn.id = "streamToggleBtn"; btn.innerHTML = QUICK_BUTTON_DEFS.stream.icon;
+        btn.addEventListener("click", toggleStream);
+        return btn;
+      }
+    },
+    terminal: {
+      label: "终端", icon: '<svg class="icon" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M8 20h8"/></svg>',
+      render: () => {
+        const btn = document.createElement("button"); btn.className = "icon-btn term-toggle"; btn.title = "打开终端"; btn.setAttribute("data-tip","打开终端"); btn.setAttribute("aria-label","打开终端");
+        btn.id = "termToggleBtn"; btn.innerHTML = QUICK_BUTTON_DEFS.terminal.icon;
+        btn.addEventListener("click", toggleTerm);
+        return btn;
+      }
+    },
+    compress: {
+      label: "压缩上下文", icon: '<svg class="icon" viewBox="0 0 24 24"><path d="M4 6h16"/><path d="M4 12h10"/><path d="M4 18h7"/><path d="M18 10v8"/><path d="M14 14h8"/></svg>',
+      render: () => {
+        const btn = document.createElement("button"); btn.className = "icon-btn"; btn.title = "压缩上下文"; btn.setAttribute("data-tip","压缩上下文"); btn.setAttribute("aria-label","压缩上下文");
+        btn.id = "compressCtxBtn"; btn.innerHTML = QUICK_BUTTON_DEFS.compress.icon;
+        btn.addEventListener("click", compressCurrentContext);
+        return btn;
+      }
+    },
+    sessions: {
+      label: "会话管理", icon: '<svg class="icon" viewBox="0 0 24 24"><path d="M4 5h12a2 2 0 0 1 2 2v12H6a2 2 0 0 1-2-2z"/><path d="M8 9h6M8 13h6"/><path d="M18 7h2v12h-2"/></svg>',
+      render: () => {
+        const btn = document.createElement("button"); btn.className = "icon-btn"; btn.title = "会话管理"; btn.setAttribute("data-tip","会话管理"); btn.setAttribute("aria-label","会话管理");
+        btn.id = "recordsToggleBtn"; btn.innerHTML = QUICK_BUTTON_DEFS.sessions.icon;
+        btn.addEventListener("click", toggleRecordsPanel);
+        return btn;
+      }
+    },
+    reset: {
+      label: "清空上下文", icon: '<svg class="icon" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.3-5.7"/><path d="M20 4v5h-5"/></svg>',
+      render: () => {
+        const btn = document.createElement("button"); btn.className = "icon-btn"; btn.title = "清空上下文"; btn.setAttribute("data-tip","清空当前会话上下文"); btn.setAttribute("aria-label","清空上下文");
+        btn.innerHTML = QUICK_BUTTON_DEFS.reset.icon;
+        btn.addEventListener("click", resetChat);
+        return btn;
+      }
+    },
+    diagnostics: {
+      label: "模型检测", icon: '<svg class="icon" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M7 15l3-3 2 2 4-4"/><path d="M7 10h3"/></svg>',
+      render: () => {
+        const a = document.createElement("a"); a.className = "icon-btn"; a.href = "/model-diagnostics"; a.title = "模型检测"; a.setAttribute("data-tip","模型检测"); a.setAttribute("aria-label","模型检测");
+        a.onclick = function(e){ e.preventDefault(); smoothNavigate("/model-diagnostics"); };
+        a.id = "modelDiagnosticsBtn"; a.innerHTML = QUICK_BUTTON_DEFS.diagnostics.icon;
+        return a;
+      }
+    },
+    logs: {
+      label: "日志查看", icon: '<svg class="icon" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 9h8M8 13h8M8 17h6"/></svg>',
+      render: () => {
+        const a = document.createElement("a"); a.className = "icon-btn"; a.href = "/logs"; a.title = "日志查看"; a.setAttribute("data-tip","日志查看"); a.setAttribute("aria-label","日志查看");
+        a.onclick = function(e){ e.preventDefault(); smoothNavigate("/logs"); };
+        a.innerHTML = QUICK_BUTTON_DEFS.logs.icon;
+        return a;
+      }
+    },
+    admin: {
+      label: "用户管理", icon: '<svg class="icon" viewBox="0 0 24 24"><path d="M12 3l7 3v6c0 4.2-2.9 7.8-7 8.8-4.1-1-7-4.6-7-8.8V6z"/><path d="M9.5 12.5l1.8 1.8 3.4-3.4"/></svg>',
+      render: () => {
+        const a = document.createElement("a"); a.className = "icon-btn"; a.href = "/user-admin"; a.title = "用户管理"; a.setAttribute("data-tip","用户管理"); a.setAttribute("aria-label","用户管理");
+        a.onclick = function(e){ e.preventDefault(); smoothNavigate("/user-admin"); };
+        a.id = "adminLinkBtn"; a.innerHTML = QUICK_BUTTON_DEFS.admin.icon;
+        return a;
+      }
     }
-    users.forEach((u) => {
-      const opt = document.createElement("option");
-      opt.value = String(u?.uid || "");
-      const uname = String(u?.name || "-");
-      const uuid = String(u?.uid || "-");
-      opt.textContent = `${uname} (${uuid})`;
-      if (String(u?.uid || "") === String(currentUid || "")) opt.selected = true;
-      userSwitchSelectEl.appendChild(opt);
+  };
+
+  function getQuickSettings() {
+    try {
+      const raw = localStorage.getItem("tinda_settings");
+      if (!raw) return ["model","stream","terminal","compress"];
+      const s = JSON.parse(raw);
+      return Array.isArray(s.quickButtons) ? s.quickButtons : ["model","stream","terminal","compress"];
+    } catch { return ["model","stream","terminal","compress"]; }
+  }
+
+  function renderQuickButtons() {
+    if (!quickBtnsEl) return;
+    quickBtnsEl.innerHTML = "";
+    const keys = getQuickSettings();
+    keys.forEach(key => {
+      const def = QUICK_BUTTON_DEFS[key];
+      if (!def) return;
+      // admin button only for admin users
+      if (key === "admin") {
+        const p = userMeta.perm;
+        if (!Number.isFinite(p) || ((p & 511) !== 511)) return;
+      }
+      // diagnostics only for LLM perm users
+      if (key === "diagnostics") {
+        const p = userMeta.perm;
+        if (!Number.isFinite(p) || ((p & 4) !== 4)) return;
+      }
+      const el = def.render();
+      if (el) quickBtnsEl.appendChild(el);
     });
-    userSwitchSelectEl.disabled = false;
-    if (userSwitchBtnEl) userSwitchBtnEl.disabled = false;
+    // show/hide separator
+    if (quickSepEl) quickSepEl.style.display = quickBtnsEl.children.length > 0 ? "" : "none";
+    // rebind global refs to newly created elements
+    const newModel = document.getElementById("modelSwitchBtn");
+    const newPanel = document.getElementById("modelPanel");
+    const newStream = document.getElementById("streamToggleBtn");
+    const newTerm = document.getElementById("termToggleBtn");
+    const newRecords = document.getElementById("recordsToggleBtn");
+    const newDiagnostics = document.getElementById("modelDiagnosticsBtn");
+    const newAdmin = document.getElementById("adminLinkBtn");
+    const newCompress = document.getElementById("compressCtxBtn");
+    if (newModel) window.modelSwitchBtnEl = newModel;
+    if (newPanel) window.modelPanelEl = newPanel;
+    if (newStream) window.streamToggleBtnEl = newStream;
+    if (newTerm) window.termToggleBtnEl = newTerm;
+    if (newRecords) window.recordsToggleBtnEl = newRecords;
+    if (newDiagnostics) window.modelDiagnosticsBtnEl = newDiagnostics;
+    if (newAdmin) window.adminLinkBtnEl = newAdmin;
+    // update stream button state
+    if (newStream) {
+      const offIcon = newStream.querySelector(".stream-off");
+      const onIcon = newStream.querySelector(".stream-on");
+      if (streamEnabled) { newStream.classList.add("on"); if (offIcon) offIcon.style.display = "none"; if (onIcon) onIcon.style.display = ""; }
+      else { newStream.classList.remove("on"); if (offIcon) offIcon.style.display = ""; if (onIcon) onIcon.style.display = "none"; }
+    }
   }
 
-  async function loadHeaderUsersAndSelection() {
-    if (!userSwitchSelectEl) return;
+  // ── 账户切换 Popup ──
+  async function loadAccountList() {
+    if (!accountListEl) return;
     try {
       const res = await apiFetch("/users");
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       window.__headerUsersCache = Array.isArray(data?.users) ? data.users : [];
-      renderHeaderUserOptions(data?.users || [], data?.current_uid || userMeta.uid);
-    } catch (e) {
+      renderAccountList(window.__headerUsersCache, data?.current_uid || userMeta.uid);
+    } catch {
       window.__headerUsersCache = [];
-      renderHeaderUserOptions([], "");
-      reportErrorToTerminal(`读取账户列表失败：${String(e?.message || e)}`, { source: "users", persist: false });
+      renderAccountList([], "");
     }
   }
 
-  async function switchHeaderSelectedUser() {
-    if (!userSwitchSelectEl || !userSwitchBtnEl) return;
-    const uid = String(userSwitchSelectEl.value || "").trim();
-    if (!uid) return;
-    if (uid === String(userMeta.uid || "").trim()) return;
+  function renderAccountList(users, currentUid) {
+    if (!accountListEl) return;
+    accountListEl.innerHTML = "";
+    if (!Array.isArray(users) || users.length === 0) {
+      accountListEl.innerHTML = '<div style="font-size:12px;color:var(--text-dim);padding:8px;">无可用账户</div>';
+      return;
+    }
+    users.forEach(u => {
+      const uid = String(u?.uid || "");
+      const name = String(u?.name || "-");
+      const active = uid === String(currentUid || "");
+      const div = document.createElement("div");
+      div.className = "account-item" + (active ? " active" : "");
+      div.innerHTML = `<span class="dot ${active ? "on" : "off"}"></span><span>${name} (${uid})</span>`;
+      div.addEventListener("click", () => switchToAccount(uid));
+      accountListEl.appendChild(div);
+    });
+  }
 
-    const oldText = userSwitchBtnEl.textContent;
-    userSwitchBtnEl.disabled = true;
-    userSwitchBtnEl.textContent = "切换中...";
+  async function switchToAccount(uid) {
+    if (!uid || uid === String(userMeta.uid || "")) { hideAccountPopup(); return; }
+    const users = Array.isArray(window.__headerUsersCache) ? window.__headerUsersCache : [];
+    const target = users.find(x => String(x?.uid || "") === uid);
+    if (!target) return;
+    const token = String(target?.token || "").trim();
+    if (!token) { showToast("目标账户缺少 token", "error"); return; }
+    setAuthToken(token);
     try {
-      const users = Array.isArray(window.__headerUsersCache) ? window.__headerUsersCache : [];
-      const target = users.find((x) => String(x?.uid || "") === uid) || null;
-      const token = String(target?.token || "").trim();
-      if (!token) throw new Error("目标账户缺少 token");
-      setAuthToken(token);
-
-      const res = await apiFetch("/user/switch", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ uid }),
-      });
+      const res = await apiFetch("/user/switch", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({uid}) });
       const data = await res.json();
-      if (!res.ok || data?.ok === false) {
-        throw new Error(String(data?.error || `HTTP ${res.status}`));
-      }
+      if (!res.ok || data?.ok === false) throw new Error(String(data?.error || `HTTP ${res.status}`));
       applyUserMeta(data);
-      await loadHeaderUsersAndSelection();
-      addSystemNotice(`已切换账户：${userMeta.name} (${userMeta.uid})`, { persist: false });
+      addSystemNotice(`已切换账户：${userMeta.name} (${userMeta.uid})`, {persist:false});
       showToast("账户已切换");
-      if (!adminLinkBtnEl || adminLinkBtnEl.style.display === "none") {
-        if (location.pathname === "/user-admin") location.href = "/";
-      }
-    } catch (e) {
+      hideAccountPopup();
+      await loadAccountList();
+      renderQuickButtons();
+      if (!adminLinkBtnEl || adminLinkBtnEl.style.display === "none") { if (location.pathname === "/user-admin") location.href = "/"; }
+    } catch(e) {
       setAuthToken("");
-      reportErrorToTerminal(`切换账户失败：${String(e?.message || e)}`, { source: "user_switch" });
-      addSystemNotice(`切换账户失败：${String(e?.message || e)}`);
-    } finally {
-      userSwitchBtnEl.disabled = false;
-      userSwitchBtnEl.textContent = oldText;
+      showToast(`切换失败：${String(e?.message||e)}`, "error");
     }
   }
+
+  function showAccountPopup() { if (accountPopupEl) { loadAccountList(); accountPopupEl.classList.add("show"); } }
+  function hideAccountPopup() { if (accountPopupEl) accountPopupEl.classList.remove("show"); }
 
 
   async function pollToolEventsOnce(sessionId) {
@@ -4128,7 +4252,6 @@
       refreshRecords();
     }
   });
-  userSwitchBtnEl?.addEventListener("click", switchHeaderSelectedUser);
   modelSwitchBtnEl?.addEventListener("click", (e) => {
     e.stopPropagation();
     toggleModelPanel();
@@ -4165,8 +4288,9 @@
         closeTimePanel();
       }
     }
-    if (modelPanelEl && modelSwitchBtnEl) {
-      if (!(modelPanelEl.contains(target) || modelSwitchBtnEl.contains(target))) {
+    if (modelPanelEl) {
+      const mb = document.getElementById("modelSwitchBtn");
+      if (mb && !(modelPanelEl.contains(target) || mb.contains(target))) {
         closeModelPanel();
       }
     }
@@ -4256,7 +4380,8 @@
       return;
     }
     await ensureUserMetaLoaded();
-    await loadHeaderUsersAndSelection();
+    await loadAccountList();
+    renderQuickButtons();
     const sid = await ensureActiveSession();
     const sessionsRes = await apiFetch(`/sessions?limit=${RECORDS_PAGE_LIMIT}&offset=0`);
     if (sessionsRes.ok) {

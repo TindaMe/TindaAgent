@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TindaAgent · 设置</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #fff5f9;
+      --surface: #ffffff;
+      --surface-2: #fef0f5;
+      --border: #fcd5e5;
+      --border-strong: #f9a8c9;
+      --text: #3d1f2f;
+      --text-dim: #9b5f78;
+      --text-faint: #d4a0b5;
+      --accent: #ff6eb4;
+      --accent-2: #ff9fd3;
+      --accent-deep: #c2185b;
+      --lavender: #a78bfa;
+      --gradient: linear-gradient(90deg, #ff6eb4 0%, #ff9fd3 100%);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--text);
+      font-family: 'Nunito', -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: var(--bg);
+      animation: pageIn 0.42s cubic-bezier(0.34,1.56,0.64,1);
+    }
+    @keyframes pageIn {
+      from { opacity: 0; transform: translateY(10px) scale(0.985); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    .deco {
+      position: fixed;
+      pointer-events: none;
+      z-index: 0;
+      user-select: none;
+      opacity: 0;
+      animation: floatUp linear infinite;
+    }
+    .deco svg {
+      display: block;
+      width: 1em; height: 1em;
+      stroke: currentColor;
+      fill: none;
+      stroke-width: 1.8;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+    @keyframes floatUp {
+      0%   { transform: translateY(0) rotate(0deg); opacity: 0.18; }
+      50%  { opacity: 0.36; }
+      100% { transform: translateY(-44px) rotate(18deg); opacity: 0.18; }
+    }
+
+    header {
+      position: relative;
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 20px;
+      background: rgba(255,255,255,0.82);
+      backdrop-filter: blur(24px);
+      -webkit-backdrop-filter: blur(24px);
+      border-bottom: 1.5px solid var(--border);
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .brand-logo {
+      width: 30px; height: 30px;
+      border-radius: 50%;
+      background: var(--gradient);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      animation: wiggle 3.5s ease-in-out infinite;
+    }
+    .brand-logo svg {
+      width: 18px; height: 18px;
+      stroke: #fff; fill: none;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+    @keyframes wiggle {
+      0%,100% { transform: rotate(-5deg); }
+      50% { transform: rotate(5deg); }
+    }
+    .brand-name {
+      font-size: 16px;
+      font-weight: 800;
+      color: var(--text);
+    }
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .icon-btn {
+      background: transparent;
+      border: 1.5px solid var(--border);
+      color: var(--text-dim);
+      width: 34px; height: 34px;
+      border-radius: 50%;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.22s cubic-bezier(0.34,1.56,0.64,1);
+      text-decoration: none;
+      flex-shrink: 0;
+    }
+    .icon-btn:hover {
+      background: var(--surface-2);
+      border-color: var(--accent-2);
+      color: var(--accent-deep);
+      transform: scale(1.1);
+    }
+    .icon-btn .icon {
+      width: 16px; height: 16px;
+      stroke: currentColor;
+      fill: none;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    .wrap {
+      position: relative;
+      z-index: 1;
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 24px 16px 40px;
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1.5px solid var(--border);
+      border-radius: 16px;
+      padding: 18px 20px;
+      margin-bottom: 14px;
+      box-shadow: 0 8px 20px rgba(255,110,180,0.08);
+    }
+    .card h2 {
+      margin: 0 0 2px;
+      font-size: 16px;
+      font-weight: 800;
+      background: var(--gradient);
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .card .sub {
+      margin: 0 0 14px;
+      font-size: 12px;
+      color: var(--text-dim);
+      font-weight: 600;
+    }
+
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 0;
+      border-bottom: 1px solid var(--surface-2);
+    }
+    .toggle-row:last-child { border-bottom: none; }
+    .toggle-row label {
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--text);
+    }
+    .toggle-row .hint {
+      font-size: 11px;
+      color: var(--text-dim);
+      margin-top: 1px;
+    }
+    .switch {
+      position: relative;
+      width: 44px; height: 26px;
+      flex-shrink: 0;
+    }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .switch .slider {
+      position: absolute;
+      inset: 0;
+      background: var(--surface-2);
+      border: 1.5px solid var(--border);
+      border-radius: 999px;
+      cursor: pointer;
+      transition: 0.22s;
+    }
+    .switch .slider::before {
+      content: "";
+      position: absolute;
+      width: 18px; height: 18px;
+      left: 3px; top: 2.5px;
+      background: #fff;
+      border-radius: 50%;
+      transition: 0.22s;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+    }
+    .switch input:checked + .slider {
+      background: var(--accent);
+      border-color: var(--accent);
+    }
+    .switch input:checked + .slider::before {
+      transform: translateX(18px);
+    }
+
+    .input-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 0;
+    }
+    .input-row label {
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--text);
+      white-space: nowrap;
+    }
+    .input-row input {
+      width: 120px;
+      height: 32px;
+      border-radius: 10px;
+      border: 1.5px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+      font-family: inherit;
+      font-size: 13px;
+      font-weight: 700;
+      padding: 0 10px;
+      outline: none;
+    }
+    .input-row input:focus {
+      border-color: var(--accent-2);
+      box-shadow: 0 0 0 3px rgba(255,110,180,0.12);
+    }
+    .input-row .unit {
+      font-size: 12px;
+      color: var(--text-dim);
+      font-weight: 600;
+    }
+
+    .quick-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+    }
+    .quick-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 10px;
+      border-radius: 10px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--text);
+      border: 1.5px solid var(--surface-2);
+      transition: all 0.15s;
+      user-select: none;
+    }
+    .quick-item:hover {
+      border-color: var(--border);
+      background: var(--surface-2);
+    }
+    .quick-item.checked {
+      border-color: var(--accent-2);
+      background: rgba(255,110,180,0.08);
+      color: var(--accent-deep);
+    }
+    .quick-item input { display: none; }
+
+    .version-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 6px 0;
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .version-row .ver {
+      color: var(--accent-deep);
+      background: rgba(255,110,180,0.08);
+      border: 1.5px solid var(--accent-2);
+      border-radius: 999px;
+      padding: 2px 12px;
+      font-size: 12px;
+    }
+
+    .toast {
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: var(--text);
+      color: #fff;
+      padding: 8px 18px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      z-index: 999;
+      animation: toastIn 0.25s ease;
+      pointer-events: none;
+    }
+    @keyframes toastIn {
+      from { opacity: 0; transform: translateX(-50%) translateY(8px); }
+      to { opacity: 1; transform: translateX(-50%) translateY(0); }
+    }
+
+    @media (max-width: 640px) {
+      .quick-grid { grid-template-columns: 1fr; }
+      header { padding: 10px 14px; }
+    }
+  </style>
+</head>
+<body>
+  <span class="deco" style="top:6%;left:4%;font-size:18px;animation-duration:4.8s;color:#f472b6;"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"></circle><path d="M12 2.8v4.2M12 17v4.2M2.8 12h4.2M17 12h4.2"></path></svg></span>
+  <span class="deco" style="top:16%;right:5%;font-size:13px;animation-duration:5.6s;animation-delay:-1.4s;color:#fb7185;"><svg viewBox="0 0 24 24"><path d="M12 3.5l2.4 4.9 5.4.8-3.9 3.8.9 5.4L12 16l-4.8 2.4.9-5.4-3.9-3.8 5.4-.8z"></path></svg></span>
+  <span class="deco" style="top:70%;left:3%;font-size:14px;animation-duration:4.9s;animation-delay:-2.0s;color:#ec4899;"><svg viewBox="0 0 24 24"><path d="M12 20c-4.5-3.1-7-5.6-7-8.8a4.2 4.2 0 0 1 7-3.1 4.2 4.2 0 0 1 7 3.1c0 3.2-2.5 5.7-7 8.8z"></path></svg></span>
+
+  <header>
+    <div class="brand">
+      <div class="brand-logo" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"></circle><path d="M12 2.8v4.2M12 17v4.2M2.8 12h4.2M17 12h4.2M5.3 5.3l3 3M15.7 15.7l3 3M18.7 5.3l-3 3M8.3 15.7l-3 3"></path></svg>
+      </div>
+      <span class="brand-name">设置</span>
+    </div>
+    <div class="header-actions">
+      <a class="icon-btn" href="/chat" title="返回聊天" aria-label="返回聊天">
+        <svg class="icon" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4-4 4-4h12a2 2 0 0 1 2 2z"></path></svg>
+      </a>
+      <a class="icon-btn" href="/" title="返回主页" aria-label="返回主页">
+        <svg class="icon" viewBox="0 0 24 24"><path d="M3 11.5 12 4l9 7.5"></path><path d="M6 10.5V20h12v-9.5"></path></svg>
+      </a>
+    </div>
+  </header>
+
+  <div class="wrap">
+    <div class="card">
+      <h2>对话设置</h2>
+      <p class="sub">控制聊天页面的默认行为</p>
+      <div class="toggle-row">
+        <div>
+          <label>流式输出</label>
+          <div class="hint">消息逐字显示，体验更流畅</div>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="settingStream" checked>
+          <span class="slider"></span>
+        </label>
+      </div>
+      <div class="toggle-row">
+        <div>
+          <label>默认打开终端</label>
+          <div class="hint">进入聊天时自动展开终端面板</div>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="settingTermOpen">
+          <span class="slider"></span>
+        </label>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>上下文管理</h2>
+      <p class="sub">控制 token 阈值与自动压缩</p>
+      <div class="input-row">
+        <label for="settingTokenLimit">压缩阈值</label>
+        <input type="number" id="settingTokenLimit" min="100" max="10000000" step="100" value="16000">
+        <span class="unit">tokens</span>
+      </div>
+      <div class="hint" style="font-size:11px;color:var(--text-dim);">超过此值自动压缩上下文（100 ~ 10M）</div>
+    </div>
+
+    <div class="card">
+      <h2>快捷按钮</h2>
+      <p class="sub">选择在聊天 Header 中显示的按钮</p>
+      <div class="quick-grid" id="quickGrid">
+        <label class="quick-item checked"><input type="checkbox" value="model" checked> 模型切换</label>
+        <label class="quick-item checked"><input type="checkbox" value="stream" checked> 流式输出</label>
+        <label class="quick-item checked"><input type="checkbox" value="terminal" checked> 终端</label>
+        <label class="quick-item checked"><input type="checkbox" value="compress" checked> 压缩上下文</label>
+        <label class="quick-item"><input type="checkbox" value="sessions"> 会话管理</label>
+        <label class="quick-item"><input type="checkbox" value="reset"> 清空上下文</label>
+        <label class="quick-item"><input type="checkbox" value="diagnostics"> 模型检测</label>
+        <label class="quick-item"><input type="checkbox" value="logs"> 日志查看</label>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>关于</h2>
+      <p class="sub">TindaAgent 版本信息</p>
+      <div class="version-row">
+        <span>版本</span>
+        <span class="ver" id="versionLabel">v1.7.7</span>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const AUTH_TOKEN_KEY = "ta_auth_token";
+    const SETTINGS_KEY = "tinda_settings";
+
+    function getAuthToken() {
+      return String(localStorage.getItem(AUTH_TOKEN_KEY) || "").trim();
+    }
+
+    async function apiFetch(url, options = {}) {
+      const headers = { ...(options.headers || {}) };
+      const token = getAuthToken();
+      if (token) headers["Authorization"] = "Bearer " + token;
+      return fetch(url, { ...options, headers });
+    }
+
+    function loadSettings() {
+      try {
+        const raw = localStorage.getItem(SETTINGS_KEY);
+        return raw ? JSON.parse(raw) : {};
+      } catch { return {}; }
+    }
+
+    function saveSettings(obj) {
+      const cur = loadSettings();
+      Object.assign(cur, obj);
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify(cur));
+    }
+
+    function showToast(text) {
+      const el = document.createElement("div");
+      el.className = "toast";
+      el.textContent = text;
+      document.body.appendChild(el);
+      setTimeout(() => { el.remove(); }, 1800);
+    }
+
+    // --- Init ---
+    const s = loadSettings();
+
+    const streamEl = document.getElementById("settingStream");
+    streamEl.checked = s.streamEnabled !== false;
+    streamEl.addEventListener("change", () => {
+      saveSettings({ streamEnabled: streamEl.checked });
+      localStorage.setItem("tinda_stream_enabled", streamEl.checked ? "1" : "0");
+      showToast(streamEl.checked ? "已开启流式输出" : "已关闭流式输出");
+    });
+
+    const termEl = document.getElementById("settingTermOpen");
+    termEl.checked = s.termOpen === true;
+    termEl.addEventListener("change", () => {
+      saveSettings({ termOpen: termEl.checked });
+      showToast(termEl.checked ? "已开启默认终端" : "已关闭默认终端");
+    });
+
+    const tokenEl = document.getElementById("settingTokenLimit");
+    tokenEl.value = String(s.tokenLimit || 16000);
+    tokenEl.addEventListener("change", () => {
+      const val = Math.max(100, Math.min(10000000, parseInt(tokenEl.value, 10) || 16000));
+      tokenEl.value = String(val);
+      saveSettings({ tokenLimit: val });
+      // Also push to current session if active
+      const sid = localStorage.getItem("tinda_active_session_id");
+      if (sid) {
+        apiFetch(`/sessions/${encodeURIComponent(sid)}/config`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ max_context_tokens: val }),
+        }).catch(() => {});
+      }
+      showToast(`压缩阈值已设为 ${val} tokens`);
+    });
+
+    // Quick buttons
+    const quickGrid = document.getElementById("quickGrid");
+    const quickCheckboxes = quickGrid.querySelectorAll("input[type=checkbox]");
+    const savedQuick = Array.isArray(s.quickButtons) ? s.quickButtons : ["model","stream","terminal","compress"];
+
+    quickCheckboxes.forEach(cb => {
+      if (savedQuick.includes(cb.value)) cb.checked = true;
+      updateQuickItem(cb);
+      cb.addEventListener("change", () => {
+        updateQuickItem(cb);
+        const selected = [];
+        quickGrid.querySelectorAll("input[type=checkbox]:checked").forEach(c => selected.push(c.value));
+        saveSettings({ quickButtons: selected });
+        showToast("快捷按钮已更新");
+      });
+    });
+
+    function updateQuickItem(cb) {
+      const label = cb.closest(".quick-item");
+      if (label) label.classList.toggle("checked", cb.checked);
+    }
+
+    // Version
+    (async () => {
+      try {
+        const res = await apiFetch("/system/version");
+        const data = await res.json();
+        const v = data?.effective_version || data?.version || "v1.7.7";
+        document.getElementById("versionLabel").textContent = v.startsWith("v") ? v : "v" + v;
+      } catch {}
+    })();
+  </script>
+</body>
+</html>
