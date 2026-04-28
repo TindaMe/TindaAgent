@@ -169,13 +169,82 @@ def _build_tool_limit_fallback(tool_trace: list[dict]) -> str:
 
 
 def _detect_fake_tool_claim(text: str) -> bool:
-    """检测模型是否在文本中伪造了工具调用描述。轻量启发式，无海量正则。"""
+    """检测模型是否在文本中伪造了工具调用描述，同时尽量避免误报（如"不需要调用工具"）。"""
     if not text:
         return False
     lower = text.lower()
-    claims = ("调用工具", "执行成功", "全部通过", "全部成功", "所有工具", "工具调用完成",
-              "tool_calls", "当前可用工具", "可用工具列表")
-    return any(p in lower for p in claims)
+    prefix_map = _DETECT_PREFIX_MAP
+    for raw, result in prefix_map.items():
+        if raw in lower:
+            return result
+    return False
+
+
+_DETECT_PREFIX_MAP = {
+    # ── Chinese: 否定句式排除（优先匹配，避免误报）──
+    "不需要调用工具": False,
+    "无需调用工具": False,
+    "不必调用工具": False,
+    "不需要执行工具": False,
+    "无需执行工具": False,
+    "没有调用工具": False,
+    "没有执行工具": False,
+    "不需要工具调用": False,
+    "无需工具调用": False,
+    # ── Chinese: 伪造调用/执行描述 ──
+    "调用工具": True,
+    "执行成功": True,
+    "全部通过": True,
+    "全部成功": True,
+    "所有工具": True,
+    "工具调用完成": True,
+    "当前可用工具": True,
+    "可用工具列表": True,
+    "工具返回": True,
+    "根据工具": True,
+    "工具执行": True,
+    "执行完毕": True,
+    "工具输出": True,
+    "已获取数据": True,
+    "查询结果": True,
+    "读取到以下": True,
+    "返回了以下内容": True,
+    "调用完成": True,
+    "工具调用结果": True,
+    "调用了工具": True,
+    "工具已执行": True,
+    "数据已获取": True,
+    "已通过工具": True,
+    "工具结果显示": True,
+    "获取到以下信息": True,
+    # ── English: 伪造调用描述 ──
+    "i called the": True,
+    "i've called the": True,
+    "tool returned": True,
+    "the tool returned": True,
+    "execution result": True,
+    "i've retrieved": True,
+    "using the tool": True,
+    "the output of": True,
+    "the tool says": True,
+    "the tool shows": True,
+    "the tool indicates": True,
+    "tool output": True,
+    "called the function": True,
+    "function result": True,
+    "result from tool": True,
+    "executed the tool": True,
+    "running the tool": True,
+    "i retrieved the": True,
+    "the tool has": True,
+    "successfully called": True,
+    "successfully executed": True,
+    "tool call completed": True,
+    "tool execution result": True,
+    "the result from": True,
+    # ── English: 保留关键字 ──
+    "tool_calls": True,
+}
 
 
 class LLMClient:
@@ -248,8 +317,8 @@ class LLMClient:
 
     def _retry_with_tool_reminder(self, messages: list[dict], tools: list[dict],
                                   user_perm: int, temperature: float,
-                                  round: int) -> dict:
-        """模型第一次返回假调用时，追加纠正提示后重试。"""
+                                  round: int, force_finalize: bool = False) -> dict:
+        """模型返回假调用时，追加纠正提示后重试。"""
         correction: dict = {
             "role": "user",
             "content": (
@@ -259,9 +328,10 @@ class LLMClient:
             ),
         }
         retry_msgs = list(messages) + [correction]
+        tc = "none" if force_finalize else "auto"
         resp = self._client.chat.completions.create(
             model=self.model, messages=retry_msgs, temperature=temperature,
-            tools=tools, tool_choice="auto")
+            tools=tools, tool_choice=tc)
         msg = resp.choices[0].message
         rc = _concat_reasoning(getattr(msg, "reasoning_content", None))
         calls = [_normalize_tool_call(
@@ -283,7 +353,8 @@ class LLMClient:
         tools = tool_registry.build_agent_tool_schemas(user_perm)
         steps = 0
         trace = []
-        retried = False  # 每轮对话仅允许一次重试纠正
+        retries = 0
+        MAX_RETRIES = 3
 
         while True:
             force_finalize = steps >= max_tool_steps - 1 and len(trace) > 0
@@ -303,15 +374,17 @@ class LLMClient:
             if not calls:
                 calls = _detect_dsml_tool_calls(content, prefix=f"dsml_{steps}")
 
-            # 没有实际 tool_call → 检查是否在伪造调用 → 重试一次
-            if not calls and _detect_fake_tool_claim(content) and not retried:
-                audit_event("SYSTEM_EXECUTE", "ai", func, _THIS_FILE, "fake_tool_claim_detected_retrying",
-                             extra={"model": self.model, "steps": steps})
-                retry = self._retry_with_tool_reminder(msgs, tools, user_perm, temperature, steps)
+            if not calls and _detect_fake_tool_claim(content) and retries < MAX_RETRIES:
+                audit_event("SYSTEM_EXECUTE", "ai", func, _THIS_FILE,
+                             "fake_tool_claim_detected_retrying",
+                             extra={"model": self.model, "steps": steps, "retries": retries + 1})
+                retry = self._retry_with_tool_reminder(
+                    msgs, tools, user_perm, temperature, steps,
+                    force_finalize=force_finalize)
                 calls = retry["tool_calls"]
                 content = retry["content"]
                 rc = _concat_reasoning(retry.get("reasoning_content", ""))
-                retried = True
+                retries += 1
 
             if not calls:
                 msg_out = _attach_reasoning({"role": "assistant", "content": content}, rc)
@@ -348,7 +421,8 @@ class LLMClient:
         base_len = len(msgs)
         steps = 0
         trace = []
-        retried = False
+        retries = 0
+        MAX_RETRIES = 3
         audit_event("SYSTEM_EXECUTE", "ai", "LLMClient.stream_chat_with_tools", _THIS_FILE,
                      "stream_start", extra={"model": self.model, "messages_count": len(messages),
                                             "user_perm": user_perm, "max_tool_steps": max_tool_steps})
@@ -408,20 +482,19 @@ class LLMClient:
                 if not calls:
                     calls = _detect_dsml_tool_calls(content, prefix=f"dsml_{steps}")
 
-            # 流式场景：如果没有 tool_call，检查假调用并重试
-            if not calls and _detect_fake_tool_claim(content) and not retried:
-                # 流式模式下已发出去的 delta 不能撤回，追加纠正
+            if not calls and _detect_fake_tool_claim(content) and retries < MAX_RETRIES:
                 correction = (
                     "\n\n> [系统检测] 模型以文本描述了工具调用但未实际执行。正在重新处理…\n\n"
                 )
                 yield {"type": "delta", "content": correction}
 
-                retry = self._retry_with_tool_reminder(msgs, tools, user_perm, temperature, steps)
+                retry = self._retry_with_tool_reminder(
+                    msgs, tools, user_perm, temperature, steps,
+                    force_finalize=force_finalize)
                 calls = retry["tool_calls"]
                 content = retry["content"]
                 rc = _concat_reasoning(retry.get("reasoning_content", ""))
-                retried = True
-                # 重试结果中如果有文本 delta，也发出去
+                retries += 1
                 if content:
                     yield {"type": "delta", "content": content}
 

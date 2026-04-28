@@ -4,6 +4,7 @@ from typing import Iterator
 from TindaAgent.Process.Architecture import perm
 from TindaAgent.Process.Architecture.versioning import get_app_version
 from TindaAgent.Process.AI.client import LLMClient
+from TindaAgent.Process.AI.tokenizer import estimate_messages_tokens
 from TindaAgent.User import userdata
 
 try:
@@ -42,26 +43,17 @@ class Agent:
         client: LLMClient = None,
         model_name: str = None,
         max_turns: int = 12,
+        max_context_tokens: int = 16000,
     ) -> None:
-        """
-        用处： 初始化智能体，绑定用户、权限、对话历史与 LLM 客户端
-
-        参数：
-            user_name: str // 智能体用户名
-            user_perm: int // 智能体权限，默认为 LLM_BASE
-            system_prompt: str // 自定义系统提示词，None 则使用默认模板
-            client: LLMClient // LLM 客户端，默认懒加载
-            model_name: str // 当前接入的模型名，写入默认 prompt；传 None 则显示"未指定"
-            max_turns: int // 最多保留的对话轮数（不含 system/fewshot）
-        """
-        # Web 会话 Agent 仅作为运行时身份，不应写入用户注册表
         self.user = userdata.UserManager(user_name, user_perm, persist=False)
         self.perm = self.user.get_perm()
         self.system_prompt = system_prompt if system_prompt is not None else _build_system_prompt(model_name)
         self._fewshot = _build_fewshot(_VERSION)
         self._max_turns = max(1, int(max_turns))
+        self.max_context_tokens = max(100, min(10_000_000, int(max_context_tokens)))
         self.history: list[dict] = self._build_base_history()
         self._client = client
+        self.total_estimated_tokens: int = 0
 
     def _compose_system_prompt(self) -> str:
         if getattr(self, "_memory_context", None):
@@ -103,6 +95,12 @@ class Agent:
 
         start_idx = user_indexes[-self._max_turns]
         self.history = base + conversation[start_idx:]
+
+    def estimate_current_tokens(self) -> int:
+        return estimate_messages_tokens(self.history)
+
+    def _should_compress(self) -> bool:
+        return self.estimate_current_tokens() > self.max_context_tokens
 
     def get_conversation_messages(self) -> list[dict]:
         """

@@ -51,6 +51,7 @@ class SessionMeta:
     reset_anchor_msg_id: str = ""
     summary_anchor_msg_id: str = ""
     latest_summary_message_id: str = ""
+    max_context_tokens: int = 16000
 
 
 class SessionStore:
@@ -188,6 +189,7 @@ class SessionStore:
         summary_anchor_msg_id: str | None = None,
         latest_summary_message_id: str | None = None,
         message_count: int | None = None,
+        max_context_tokens: int | None = None,
     ) -> dict[str, Any]:
         sid = _safe_session_id(session_id)
         if not sid:
@@ -212,6 +214,7 @@ class SessionStore:
                 "reset_anchor_msg_id": "",
                 "summary_anchor_msg_id": "",
                 "latest_summary_message_id": "",
+                "max_context_tokens": 16000,
             }
             sessions.append(item)
             idx = len(sessions) - 1
@@ -220,6 +223,7 @@ class SessionStore:
         row.setdefault("reset_anchor_msg_id", "")
         row.setdefault("summary_anchor_msg_id", "")
         row.setdefault("latest_summary_message_id", "")
+        row.setdefault("max_context_tokens", 16000)
         row["updated_at"] = now
         if title is not None:
             t = str(title or "").strip().strip("\"'")
@@ -232,6 +236,8 @@ class SessionStore:
             row["latest_summary_message_id"] = str(latest_summary_message_id or "")
         if message_count is not None:
             row["message_count"] = max(0, int(message_count))
+        if max_context_tokens is not None:
+            row["max_context_tokens"] = max(100, min(10_000_000, int(max_context_tokens)))
         sessions[idx] = row
 
         sessions.sort(key=lambda x: str(x.get("updated_at", "")), reverse=True)
@@ -461,6 +467,15 @@ class SessionStore:
                 "reset_anchor_msg_id": str(meta.get("reset_anchor_msg_id", "") or ""),
                 "message_count": len(rows),
             }
+
+    def set_session_config(self, session_id: str, *, max_context_tokens: int | None = None) -> dict[str, Any]:
+        sid = _safe_session_id(session_id)
+        if not sid:
+            raise SessionStoreError("session_id 非法")
+        with self._get_session_lock(sid):
+            self.ensure_session(sid)
+            meta = self._touch_session_meta(sid, max_context_tokens=max_context_tokens)
+            return {"session_id": sid, "max_context_tokens": int(meta.get("max_context_tokens", 16000))}
 
     def load_messages(self, session_id: str) -> list[dict[str, Any]]:
         sid = _safe_session_id(session_id)

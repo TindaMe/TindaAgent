@@ -171,7 +171,7 @@ def _build_runtime_version_state() -> dict[str, object]:
     runtime_app_path = str(Path(__file__).resolve().parents[2])
     version_consistent = not (runtime_version and selected_version_raw and runtime_version != selected_version_raw)
 
-    # 产品策略：切换禁用时，不保留“已选版本”历史错位；检测到错位自动对齐 current.json。
+    # 产品策略：切换禁用时，不保留"已选版本"历史错位；检测到错位自动对齐 current.json。
     if not version_consistent:
         try:
             aligned = _version_mgr.align_current_to_runtime(runtime_version, runtime_app_path, keep_switched_at=True)
@@ -906,6 +906,43 @@ def _perm_items() -> list[dict]:
     ]
 
 
+def _maybe_auto_compress(session_id: str) -> None:
+    sid = str(session_id)
+    agent = _sessions.get(sid)
+    if not agent:
+        return
+    if not agent._should_compress():
+        return
+    rows = _store.get_context_messages(sid)
+    raw_rows = [
+        x for x in rows
+        if not bool(x.get("is_summary", False))
+        and str(x.get("entry_type", "chat")) == "chat"
+        and str(x.get("role", "")) in {"user", "assistant"}
+    ]
+    if len(raw_rows) < 6:
+        return
+    older = raw_rows[:-4]
+    try:
+        summary = _compress_messages_with_llm(older)
+        if not summary:
+            return
+        _store.compress_context(sid, summary)
+        # Reload compressed context
+        new_rows = _store.get_context_messages(sid)
+        agent_rows, _ = _store_to_agent_messages(new_rows)
+        agent.replace_conversation(agent_rows)
+        _audit_web(
+            "SYSTEM_EXECUTE",
+            "_maybe_auto_compress",
+            f"auto_compress_done session_id={sid}",
+            {"session_id": sid, "compressed_count": len(older),
+             "context_tokens_before": agent.estimate_current_tokens()},
+        )
+    except Exception:
+        pass  # 压缩失败不阻断请求
+
+
 def _get_agent(session_id: str):
     sid = str(session_id)
     current = _require_login()
@@ -930,7 +967,11 @@ def _get_agent(session_id: str):
                 pass
     _touch_session_cache(sid)
 
-    # 每次都基于 store 的“有效上下文”回灌，确保压缩边界生效
+    # 同步会话级阈值到 agent
+    meta = _store.get_session(sid) or {}
+    agent.max_context_tokens = max(100, int(meta.get("max_context_tokens", 16000)))
+
+    # 每次都基于 store 的"有效上下文"回灌，确保压缩边界生效
     rows = _store.get_context_messages(sid)
     agent_rows, filter_stats = _store_to_agent_messages(rows)
     _sessions[sid].replace_conversation(agent_rows)
@@ -944,8 +985,14 @@ def _get_agent(session_id: str):
             "agent_rows": len(agent_rows),
             "context_filter": filter_stats,
             "model": _client.model,
+            "estimated_tokens": agent.estimate_current_tokens(),
+            "max_context_tokens": agent.max_context_tokens,
         },
     )
+
+    # 自动压缩：上下文超过阈值时触发
+    _maybe_auto_compress(sid)
+
     return _sessions[sid]
 
 
@@ -1987,6 +2034,26 @@ async def compress_session_context(session_id: str):
         return JSONResponse({"ok": False, "error": "压缩失败"}, status_code=500)
 
     return JSONResponse({"ok": True, **result})
+
+
+class SessionConfigRequest(BaseModel):
+    max_context_tokens: int | None = None
+
+
+@app.patch("/sessions/{session_id}/config")
+async def patch_session_config(session_id: str, req: SessionConfigRequest):
+    current = _require_login()
+    if not _has_llm_perm(current):
+        return JSONResponse({"ok": False, "error": "权限不足"}, status_code=403)
+    try:
+        result = _store.set_session_config(session_id, max_context_tokens=req.max_context_tokens)
+        # 同步到运行中的 agent
+        agent = _sessions.get(session_id)
+        if agent and req.max_context_tokens is not None:
+            agent.max_context_tokens = max(100, int(req.max_context_tokens))
+        return JSONResponse({"ok": True, **result})
+    except SessionStoreError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
 
 
 @app.post("/chat")

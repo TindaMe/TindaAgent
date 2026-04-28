@@ -1477,6 +1477,86 @@
       .header-user-switch { display: none; }
       .tinda-toast { bottom: 100px; }
     }
+
+    .config-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 300;
+      background: rgba(0,0,0,0.35);
+      align-items: center;
+      justify-content: center;
+    }
+    .config-overlay.show { display: flex; }
+    .config-dialog {
+      background: var(--surface);
+      border: 1.5px solid var(--border);
+      border-radius: 16px;
+      padding: 18px 20px;
+      min-width: 280px;
+      box-shadow: 0 12px 32px rgba(255,110,180,0.14);
+      font-family: inherit;
+    }
+    .config-dialog h3 {
+      margin: 0 0 4px;
+      font-size: 15px;
+      font-weight: 800;
+      color: var(--text);
+    }
+    .config-dialog .sub {
+      font-size: 12px;
+      color: var(--text-dim);
+      margin: 0 0 12px;
+    }
+    .config-dialog label {
+      display: block;
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--text-dim);
+      margin-bottom: 4px;
+    }
+    .config-dialog input {
+      width: 100%;
+      height: 36px;
+      border-radius: 10px;
+      border: 1.5px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+      font-family: inherit;
+      font-size: 14px;
+      padding: 0 10px;
+      outline: none;
+    }
+    .config-dialog input:focus {
+      border-color: var(--accent-2);
+      box-shadow: 0 0 0 3px rgba(255,110,180,0.12);
+    }
+    .config-dialog .btn-row {
+      margin-top: 14px;
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+    .config-dialog .btn {
+      height: 32px;
+      border-radius: 999px;
+      border: 1.5px solid var(--border);
+      background: #fff;
+      color: var(--text);
+      font-size: 12px;
+      font-weight: 700;
+      padding: 0 14px;
+      cursor: pointer;
+      font-family: inherit;
+      transition: all 0.15s;
+    }
+    .config-dialog .btn:hover { border-color: var(--accent-2); color: var(--accent-deep); }
+    .config-dialog .btn.save {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+    .config-dialog .btn.save:hover { color: #fff; opacity: 0.88; }
   </style>
 </head>
 <body>
@@ -1541,6 +1621,12 @@
         <path d="M18 7h2v12h-2"></path>
       </svg>
     </button>
+    <button id="configBtn" class="icon-btn" onclick="showConfigDialog()" title="上下文配置" data-tip="上下文配置" aria-label="上下文配置">
+      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="12" cy="12" r="2.5"></circle>
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+      </svg>
+    </button>
     <a id="modelDiagnosticsBtn" class="icon-btn" href="/model-diagnostics" title="模型检测" data-tip="模型检测" onclick="event.preventDefault(); smoothNavigate('/model-diagnostics');" aria-label="模型检测" style="display:none;">
       <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
         <rect x="4" y="5" width="16" height="14" rx="2"></rect>
@@ -1583,6 +1669,19 @@
     </button>
   </div>
 </header>
+
+<div id="configOverlay" class="config-overlay" onclick="if(event.target===this)hideConfigDialog()">
+  <div class="config-dialog">
+    <h3>上下文配置</h3>
+    <p class="sub">设置触发自动压缩的 token 阈值（当前会话）</p>
+    <label for="configTokenInput">最大上下文字 token（100 ~ 10M）</label>
+    <input type="number" id="configTokenInput" min="100" max="10000000" step="100" value="16000" placeholder="16000">
+    <div class="btn-row">
+      <button class="btn" onclick="hideConfigDialog()">取消</button>
+      <button class="btn save" onclick="saveConfig()">保存</button>
+    </div>
+  </div>
+</div>
 
 <div class="content-wrap">
   <div class="chat-col">
@@ -3745,6 +3844,47 @@
       reportErrorToTerminal(`压缩失败：${String(e?.message || e)}`, { source: "compress", sessionId: sid });
       addSystemNotice(`压缩失败：${String(e?.message || e)}`);
     }
+  }
+
+  function showConfigDialog() {
+    const el = document.getElementById("configOverlay");
+    if (!el) return;
+    // 预填当前值（从本地缓存或默认值）
+    const stored = sessionStorage.getItem("tinda_max_context_tokens");
+    document.getElementById("configTokenInput").value = stored || "16000";
+    el.classList.add("show");
+  }
+
+  function hideConfigDialog() {
+    const el = document.getElementById("configOverlay");
+    if (el) el.classList.remove("show");
+  }
+
+  async function saveConfig() {
+    const input = document.getElementById("configTokenInput");
+    const val = Math.max(100, Math.min(10000000, parseInt(String(input?.value || "16000"), 10) || 16000));
+    if (input) input.value = String(val);
+    sessionStorage.setItem("tinda_max_context_tokens", String(val));
+    const sid = getSessionId();
+    if (sid) {
+      try {
+        const res = await apiFetch(`/sessions/${encodeURIComponent(sid)}/config`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ max_context_tokens: val }),
+        });
+        const data = await res.json();
+        if (!res.ok || data?.ok === false) {
+          throw new Error(String(data?.error || `http ${res.status}`));
+        }
+        showToast(`上下文阈值已设为 ${val} tokens`, "ok");
+      } catch (e) {
+        showToast(`保存失败：${String(e?.message || e)}`, "error");
+      }
+    } else {
+      showToast(`阈值已设为 ${val} tokens（下次会话生效）`, "info");
+    }
+    hideConfigDialog();
   }
 
   // --- Actions ---
