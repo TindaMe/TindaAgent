@@ -254,35 +254,40 @@
       font-weight: 600;
     }
 
-    .quick-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 6px;
+    .quick-row {
+      display: flex;
+      align-items: center;
+      padding: 7px 0;
+      border-bottom: 1px solid var(--surface-2);
     }
-    .quick-item {
+    .quick-row:last-child { border-bottom: none; }
+    .quick-row .action-btn {
       display: flex;
       align-items: center;
       gap: 8px;
-      padding: 6px 10px;
-      border-radius: 10px;
+      flex: 1;
+      min-width: 0;
+      background: none;
+      border: none;
       cursor: pointer;
-      font-size: 12px;
+      font-family: inherit;
+      font-size: 13px;
       font-weight: 700;
       color: var(--text);
-      border: 1.5px solid var(--surface-2);
-      transition: all 0.15s;
-      user-select: none;
+      padding: 0;
+      text-decoration: none;
+      transition: color 0.15s;
     }
-    .quick-item:hover {
-      border-color: var(--border);
-      background: var(--surface-2);
+    .quick-row .action-btn:hover { color: var(--accent-deep); }
+    .quick-row .action-btn svg {
+      width: 16px; height: 16px;
+      flex-shrink: 0;
+      stroke: currentColor;
+      fill: none;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
     }
-    .quick-item.checked {
-      border-color: var(--accent-2);
-      background: rgba(255,110,180,0.08);
-      color: var(--accent-deep);
-    }
-    .quick-item input { display: none; }
 
     .version-row {
       display: flex;
@@ -388,16 +393,8 @@
 
     <div class="card">
       <h2>快捷按钮</h2>
-      <p class="sub">选择在聊天 Header 中显示的按钮</p>
-      <div class="quick-grid" id="quickGrid">
-        <label class="quick-item checked"><input type="checkbox" value="model" checked> 模型切换</label>
-        <label class="quick-item checked"><input type="checkbox" value="stream" checked> 流式输出</label>
-        <label class="quick-item checked"><input type="checkbox" value="terminal" checked> 终端</label>
-        <label class="quick-item checked"><input type="checkbox" value="compress" checked> 压缩上下文</label>
-        <label class="quick-item"><input type="checkbox" value="sessions"> 会话管理</label>
-        <label class="quick-item"><input type="checkbox" value="reset"> 清空上下文</label>
-        <label class="quick-item"><input type="checkbox" value="diagnostics"> 模型检测</label>
-        <label class="quick-item"><input type="checkbox" value="logs"> 日志查看</label>
+      <p class="sub">点击左侧按钮直接使用，右侧开关控制是否显示在聊天 Header</p>
+      <div id="quickGrid">
       </div>
     </div>
 
@@ -483,27 +480,68 @@
       showToast(`压缩阈值已设为 ${val} tokens`);
     });
 
-    // Quick buttons
-    const quickGrid = document.getElementById("quickGrid");
-    const quickCheckboxes = quickGrid.querySelectorAll("input[type=checkbox]");
-    const savedQuick = Array.isArray(s.quickButtons) ? s.quickButtons : ["model","stream","terminal","compress"];
+    // Quick buttons — each row: [action button]  [toggle]
+    const QUICK_ITEMS = [
+      { key: "model",      label: "模型切换",   icon: '<svg viewBox="0 0 24 24"><path d="M9 3h6"/><path d="M12 3v4"/><rect x="5" y="7" width="14" height="14" rx="3"/><path d="M9 12h.01M15 12h.01M9 16h6"/></svg>',   action: "function:openModelPanel" },
+      { key: "stream",     label: "流式输出",   icon: '<svg viewBox="0 0 24 24"><path d="M3 12h4l2 3 3-6 3 6 2-3h4"/></svg>',   action: "function:toggleStreamSetting" },
+      { key: "terminal",   label: "终端",       icon: '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M8 20h8"/></svg>',   action: "function:noop" },
+      { key: "compress",   label: "压缩上下文", icon: '<svg viewBox="0 0 24 24"><path d="M4 6h16"/><path d="M4 12h10"/><path d="M4 18h7"/><path d="M18 10v8"/><path d="M14 14h8"/></svg>',   action: "function:noop" },
+      { key: "sessions",   label: "会话管理",   icon: '<svg viewBox="0 0 24 24"><path d="M4 5h12a2 2 0 0 1 2 2v12H6a2 2 0 0 1-2-2z"/><path d="M8 9h6M8 13h6"/><path d="M18 7h2v12h-2"/></svg>',   action: "function:noop" },
+      { key: "logs",       label: "日志查看",   icon: '<svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 9h8M8 13h8M8 17h6"/></svg>',   action: "nav:/logs" },
+      { key: "diagnostics",label: "模型检测",   icon: '<svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M7 15l3-3 2 2 4-4"/><path d="M7 10h3"/></svg>',   action: "nav:/model-diagnostics" },
+      { key: "reset",      label: "清空上下文", icon: '<svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.3-5.7"/><path d="M20 4v5h-5"/></svg>',   action: "function:noop" },
+    ];
 
-    quickCheckboxes.forEach(cb => {
-      if (savedQuick.includes(cb.value)) cb.checked = true;
-      updateQuickItem(cb);
+    const savedQuick = Array.isArray(s.quickButtons) ? s.quickButtons : ["model","stream","terminal","compress"];
+    const quickGrid = document.getElementById("quickGrid");
+
+    QUICK_ITEMS.forEach(item => {
+      const row = document.createElement("div");
+      row.className = "quick-row";
+
+      // Action button
+      let actionEl;
+      if (item.action.startsWith("nav:")) {
+        const url = item.action.slice(4);
+        actionEl = document.createElement("a");
+        actionEl.href = url;
+        actionEl.className = "action-btn";
+        actionEl.innerHTML = item.icon + item.label;
+      } else {
+        actionEl = document.createElement("button");
+        actionEl.type = "button";
+        actionEl.className = "action-btn";
+        actionEl.innerHTML = item.icon + item.label;
+        actionEl.addEventListener("click", () => {
+          if (item.action === "function:toggleStreamSetting") {
+            const cb = document.getElementById("settingStream");
+            if (cb) { cb.checked = !cb.checked; cb.dispatchEvent(new Event("change")); }
+          }
+          showToast(`${item.label}`);
+        });
+      }
+      row.appendChild(actionEl);
+
+      // Toggle switch
+      const sw = document.createElement("label");
+      sw.className = "switch";
+      const cb = document.createElement("input");
+      cb.type = "checkbox"; cb.value = item.key;
+      if (savedQuick.includes(item.key)) cb.checked = true;
+      const slider = document.createElement("span");
+      slider.className = "slider";
+      sw.appendChild(cb); sw.appendChild(slider);
+      row.appendChild(sw);
+
       cb.addEventListener("change", () => {
-        updateQuickItem(cb);
         const selected = [];
         quickGrid.querySelectorAll("input[type=checkbox]:checked").forEach(c => selected.push(c.value));
         saveSettings({ quickButtons: selected });
         showToast("快捷按钮已更新");
       });
-    });
 
-    function updateQuickItem(cb) {
-      const label = cb.closest(".quick-item");
-      if (label) label.classList.toggle("checked", cb.checked);
-    }
+      quickGrid.appendChild(row);
+    });
 
     // Version
     (async () => {
