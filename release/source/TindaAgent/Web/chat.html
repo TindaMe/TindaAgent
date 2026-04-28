@@ -576,52 +576,11 @@
     .msg.user.same-as-prev .bubble.file-chip { border-top-right-radius: 16px; }
 
     .msg.bot .bubble.cmd {
-      background: linear-gradient(180deg, #fff7fb 0%, #ffeef6 100%);
-      border-color: rgba(251,113,133,0.35);
+      background: rgba(167,139,250,0.1);
+      border-color: rgba(167,139,250,0.32);
       font-family: "JetBrains Mono","Fira Code","SF Mono",Consolas,monospace;
-      font-size: 12.5px;
-      color: #334155;
-      box-shadow: 0 2px 12px rgba(251,113,133,0.10);
-    }
-    .msg.bot .bubble.cmd .cmd-head {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      padding-bottom: 8px;
-      margin-bottom: 8px;
-      border-bottom: 1px solid rgba(251,113,133,0.22);
-    }
-    .msg.bot .bubble.cmd .cmd-dots {
-      display: flex; gap: 5px; flex-shrink: 0;
-    }
-    .msg.bot .bubble.cmd .cmd-dot {
-      width: 7px; height: 7px; border-radius: 50%;
-      box-shadow: 0 1px 3px rgba(61,31,47,0.15);
-    }
-    .msg.bot .bubble.cmd .cmd-dot:nth-child(1) { background: #fb7185; }
-    .msg.bot .bubble.cmd .cmd-dot:nth-child(2) { background: #f59e0b; }
-    .msg.bot .bubble.cmd .cmd-dot:nth-child(3) { background: #34d399; }
-    .msg.bot .bubble.cmd .cmd-title {
-      flex: 1; text-align: center;
-      font-size: 11px; font-weight: 700;
-      color: #9d174d; letter-spacing: 0.2px;
-    }
-    .msg.bot .bubble.cmd .cmd-body {
-      font-family: "JetBrains Mono","Fira Code","SF Mono",Consolas,monospace;
-      font-size: 12.5px; line-height: 1.65; font-weight: 500;
-      color: #334155;
-    }
-    .msg.bot .bubble.cmd .cmd-prompt {
-      color: #db2777; font-weight: 700; user-select: none;
-    }
-    .msg.bot .bubble.cmd .cmd-out { color: #166534; }
-    .msg.bot .bubble.cmd .cmd-out.err { color: #dc2626; font-weight: 600; }
-    .msg.bot .bubble.cmd .cmd-out.info { color: #2563eb; font-weight: 600; }
-    .msg.bot .bubble.cmd .cmd-out.dim { color: #94a3b8; }
-    .msg.bot .bubble.cmd .cmd-sep {
-      color: rgba(190,24,93,0.45); text-align: center;
-      user-select: none; letter-spacing: 0.5px;
-      padding: 2px 0; margin: 2px 0;
+      font-size: 13px;
+      color: #7c3aed;
     }
 
     /* Markdown */
@@ -3022,17 +2981,7 @@
 
     const bubble = document.createElement("div");
     bubble.className = "bubble" + (isCommand ? " cmd" : "");
-    if (isCommand) {
-      // Terminal-style header + body
-      const head = document.createElement("div");
-      head.className = "cmd-head";
-      head.innerHTML = `<span class="cmd-dots"><span class="cmd-dot"></span><span class="cmd-dot"></span><span class="cmd-dot"></span></span><span class="cmd-title">工具输出</span>`;
-      bubble.appendChild(head);
-      const body = document.createElement("div");
-      body.className = "cmd-body";
-      body.textContent = text;
-      bubble.appendChild(body);
-    } else if (role === "bot") {
+    if (role === "bot") {
       bubble.classList.add("md");
       bubble.dataset.rawMd = String(text ?? "");
       bubble.innerHTML = renderMarkdown(text);
