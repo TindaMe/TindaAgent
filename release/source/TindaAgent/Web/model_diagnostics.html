@@ -4,85 +4,154 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>TindaAgent · 模型检测</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <style>
     :root {
-      --bg: #fff6fb;
+      --bg: #fff5f9;
       --surface: #ffffff;
-      --surface-2: #fff0f7;
-      --border: #f5c5da;
-      --text: #3a1d2c;
-      --muted: #8a5470;
-      --accent: #ef4f9a;
+      --surface-2: #fef0f5;
+      --border: #fcd5e5;
+      --border-strong: #f9a8c9;
+      --text: #3d1f2f;
+      --text-dim: #9b5f78;
+      --text-faint: #d4a0b5;
+      --accent: #ff6eb4;
+      --accent-2: #ff9fd3;
+      --accent-deep: #c2185b;
       --ok: #1f9d5a;
       --warn: #c98013;
       --fail: #d64040;
-      --chip: #fde6f1;
+      --skipped: #6c6c6c;
+      --gradient: linear-gradient(90deg, #ff6eb4 0%, #ff9fd3 100%);
     }
+
     * { box-sizing: border-box; }
+
     body {
       margin: 0;
-      font-family: "Nunito", "PingFang SC", "Microsoft YaHei", sans-serif;
+      min-height: 100vh;
       color: var(--text);
-      background: radial-gradient(circle at 10% -8%, #ffd9e9 0%, transparent 44%), var(--bg);
+      font-family: 'Nunito', -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: var(--bg);
     }
+
+    .deco {
+      position: fixed;
+      pointer-events: none;
+      z-index: 0;
+      user-select: none;
+      opacity: 0;
+      animation: floatUp linear infinite;
+    }
+    .deco svg {
+      display: block;
+      width: 1em;
+      height: 1em;
+      stroke: currentColor;
+      fill: none;
+      stroke-width: 1.8;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+    @keyframes floatUp {
+      0%   { transform: translateY(0) rotate(0deg); opacity: 0.18; }
+      50%  { opacity: 0.36; }
+      100% { transform: translateY(-44px) rotate(18deg); opacity: 0.18; }
+    }
+
     .wrap {
-      max-width: 1080px;
+      position: relative;
+      z-index: 1;
+      max-width: 1160px;
       margin: 0 auto;
-      padding: 20px 16px 30px;
+      padding: 22px 16px 34px;
     }
+
     .top {
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 12px;
       margin-bottom: 14px;
+      background: rgba(255,255,255,0.82);
+      border: 1.5px solid var(--border);
+      border-radius: 16px;
+      padding: 12px 14px;
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
     }
+
     .title {
       margin: 0;
       font-size: 24px;
       line-height: 1.2;
+      font-weight: 800;
+      background: var(--gradient);
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
     }
+
     .sub {
       margin: 6px 0 0;
-      color: var(--muted);
-      font-size: 13px;
+      color: var(--text-dim);
+      font-size: 12.5px;
+      font-weight: 700;
     }
+
     .btn {
       height: 34px;
       border-radius: 999px;
       border: 1.5px solid var(--border);
       background: #fff;
       color: var(--text);
-      font-size: 13px;
       padding: 0 14px;
       cursor: pointer;
+      font-size: 13px;
       font-weight: 700;
+      transition: all 0.15s ease;
+      font-family: inherit;
     }
-    .btn:hover { border-color: var(--accent); color: var(--accent); }
-    .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-    .btn.primary:hover { filter: brightness(0.96); }
-    .btn:disabled { opacity: 0.52; cursor: not-allowed; }
+    .btn:hover {
+      border-color: var(--accent-2);
+      color: var(--accent-deep);
+      transform: translateY(-1px);
+      box-shadow: 0 6px 14px rgba(255,110,180,0.16);
+    }
+    .btn:disabled { opacity: 0.58; cursor: not-allowed; transform: none; box-shadow: none; }
+
+    .btn.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+    .btn.primary:hover { color: #fff; opacity: 0.88; }
 
     .card {
       background: var(--surface);
       border: 1.5px solid var(--border);
       border-radius: 16px;
       padding: 14px;
-      box-shadow: 0 8px 18px rgba(239,79,154,0.09);
+      box-shadow: 0 10px 24px rgba(255,110,180,0.10);
     }
+
     .grid {
       display: grid;
-      grid-template-columns: 1.1fr 1fr 1fr;
+      grid-template-columns: 1.2fr 1fr 1fr;
       gap: 10px;
       margin-bottom: 10px;
     }
+
     label {
       display: block;
       margin-bottom: 5px;
       font-size: 12px;
-      color: var(--muted);
+      color: var(--text-dim);
       font-weight: 700;
     }
+
     input, select {
       width: 100%;
       height: 36px;
@@ -93,33 +162,98 @@
       color: var(--text);
       background: #fff;
       outline: none;
+      font-family: inherit;
     }
     input:focus, select:focus {
-      border-color: var(--accent);
-      box-shadow: 0 0 0 3px rgba(239,79,154,0.12);
+      border-color: var(--accent-2);
+      box-shadow: 0 0 0 3px rgba(255,110,180,0.12);
     }
+
     .actions {
       display: flex;
       flex-wrap: wrap;
       gap: 8px;
       margin-top: 6px;
     }
+
     .status {
       margin-top: 10px;
       min-height: 18px;
       font-size: 12px;
-      color: var(--muted);
+      color: var(--text-dim);
+      font-weight: 700;
+    }
+
+    .history {
+      margin-top: 14px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .run-card {
+      background: var(--surface);
+      border: 1.4px solid var(--border);
+      border-radius: 14px;
+      padding: 10px;
+      box-shadow: 0 8px 20px rgba(255,110,180,0.08);
+      animation: fadeIn 0.18s ease;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .run-head {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 2px 2px 8px;
+    }
+
+    .run-title {
+      font-size: 13px;
+      font-weight: 800;
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .run-meta {
+      font-size: 11.5px;
+      color: var(--text-dim);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .meta-chip {
+      display: inline-flex;
+      align-items: center;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 1px 8px;
+      background: var(--surface-2);
+      white-space: nowrap;
+    }
+
+    .run-table-wrap {
+      overflow-x: auto;
+      border: 1.2px solid var(--border);
+      border-radius: 10px;
+      background: #fff;
     }
 
     table {
       width: 100%;
       border-collapse: collapse;
-      margin-top: 12px;
-      background: var(--surface);
-      border-radius: 12px;
-      overflow: hidden;
-      border: 1.2px solid var(--border);
+      min-width: 780px;
     }
+
     th, td {
       text-align: left;
       padding: 9px 10px;
@@ -127,30 +261,34 @@
       vertical-align: top;
       font-size: 12.5px;
     }
+
     th {
       background: var(--surface-2);
-      color: var(--muted);
-      font-weight: 700;
+      color: var(--text-dim);
+      font-weight: 800;
       font-size: 12px;
     }
+
     tr:last-child td { border-bottom: none; }
+
     .chip {
       display: inline-flex;
       align-items: center;
       border-radius: 999px;
       padding: 1px 8px;
       font-size: 12px;
-      font-weight: 700;
+      font-weight: 800;
       border: 1px solid transparent;
       white-space: nowrap;
     }
+
     .chip.pass { color: var(--ok); background: #e8f7ee; border-color: #bfe8d0; }
     .chip.unsupported { color: var(--warn); background: #fff3df; border-color: #f7ddb0; }
     .chip.fail { color: var(--fail); background: #fee9e9; border-color: #f8c6c6; }
-    .chip.skipped { color: #6c6c6c; background: #f1f1f1; border-color: #dddddd; }
+    .chip.skipped { color: var(--skipped); background: #f1f1f1; border-color: #dddddd; }
 
     .mono {
-      font-family: "JetBrains Mono", Consolas, monospace;
+      font-family: 'JetBrains Mono', Consolas, monospace;
       font-size: 11.5px;
       white-space: pre-wrap;
       word-break: break-word;
@@ -159,22 +297,38 @@
       border: 1px dashed #f1c9dc;
       border-radius: 8px;
       padding: 6px;
-      max-height: 90px;
+      max-height: 120px;
       overflow: auto;
     }
 
-    @media (max-width: 880px) {
+    .empty {
+      border: 1px dashed var(--border);
+      border-radius: 12px;
+      padding: 16px;
+      text-align: center;
+      color: var(--text-dim);
+      background: rgba(255,255,255,0.78);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    @media (max-width: 900px) {
       .grid { grid-template-columns: 1fr; }
       .top { flex-direction: column; align-items: flex-start; }
+      .run-head { flex-direction: column; align-items: flex-start; }
     }
   </style>
 </head>
 <body>
+  <span class="deco" style="top:8%;left:4%;font-size:18px;animation-duration:4.8s;color:#f472b6;"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"></circle><path d="M12 2.8v4.2M12 17v4.2M2.8 12h4.2M17 12h4.2"></path></svg></span>
+  <span class="deco" style="top:18%;right:5%;font-size:13px;animation-duration:5.6s;animation-delay:-1.4s;color:#fb7185;"><svg viewBox="0 0 24 24"><path d="M12 3.5l2.4 4.9 5.4.8-3.9 3.8.9 5.4L12 16l-4.8 2.4.9-5.4-3.9-3.8 5.4-.8z"></path></svg></span>
+  <span class="deco" style="top:68%;left:3%;font-size:14px;animation-duration:4.9s;animation-delay:-2.0s;color:#ec4899;"><svg viewBox="0 0 24 24"><path d="M12 20c-4.5-3.1-7-5.6-7-8.8a4.2 4.2 0 0 1 7-3.1 4.2 4.2 0 0 1 7 3.1c0 3.2-2.5 5.7-7 8.8z"></path></svg></span>
+
   <div class="wrap">
     <div class="top">
       <div>
         <h1 class="title">模型检测</h1>
-        <p class="sub">最小片段能力检测：连接、思考支持、图片、视频</p>
+        <p class="sub">与主站同主题展示，每一次检测请求都会归档到独立表格</p>
       </div>
       <div>
         <button class="btn" onclick="goApp()">返回聊天</button>
@@ -199,29 +353,18 @@
 
       <div class="actions">
         <button id="btnRunAll" class="btn primary" onclick="runAll()">一键全部检测</button>
-        <button class="btn" onclick="runSingle('connectivity')">连接测试</button>
-        <button class="btn" onclick="runSingle('reasoning')">思考支持测试</button>
-        <button class="btn" onclick="runSingle('image')">图片测试</button>
-        <button class="btn" onclick="runSingle('video')">视频测试</button>
+        <button class="btn test-btn" onclick="runSingle('connectivity')">连接测试</button>
+        <button class="btn test-btn" onclick="runSingle('reasoning')">思考支持测试</button>
+        <button class="btn test-btn" onclick="runSingle('image')">图片测试</button>
+        <button class="btn test-btn" onclick="runSingle('video')">视频测试</button>
       </div>
 
       <div id="statusLine" class="status">就绪</div>
     </div>
 
-    <table>
-      <thead>
-        <tr>
-          <th style="width: 130px;">测试项</th>
-          <th style="width: 110px;">状态</th>
-          <th style="width: 90px;">耗时</th>
-          <th style="width: 200px;">摘要</th>
-          <th>详情</th>
-        </tr>
-      </thead>
-      <tbody id="resultBody">
-        <tr><td colspan="5" style="color:#9b6780;">尚未执行检测</td></tr>
-      </tbody>
-    </table>
+    <div id="historyWrap" class="history">
+      <div class="empty">尚未执行检测</div>
+    </div>
   </div>
 
   <script>
@@ -237,8 +380,10 @@
     const imageUrlEl = document.getElementById("imageUrl");
     const videoUrlEl = document.getElementById("videoUrl");
     const statusLineEl = document.getElementById("statusLine");
-    const resultBodyEl = document.getElementById("resultBody");
+    const historyWrapEl = document.getElementById("historyWrap");
     const btnRunAllEl = document.getElementById("btnRunAll");
+
+    const runHistory = [];
 
     function getAuthToken() {
       return String(localStorage.getItem(AUTH_TOKEN_KEY) || "").trim();
@@ -274,27 +419,6 @@
       }[String(key)] || key;
     }
 
-    function renderResults(rows) {
-      if (!Array.isArray(rows) || rows.length === 0) {
-        resultBodyEl.innerHTML = `<tr><td colspan="5" style="color:#9b6780;">无结果</td></tr>`;
-        return;
-      }
-      resultBodyEl.innerHTML = rows.map((r) => {
-        const status = String(r?.status || "fail");
-        const latency = Number(r?.latency_ms || 0);
-        const detail = String(r?.error_message || r?.raw_excerpt || "-");
-        return `
-          <tr>
-            <td>${escapeHtml(testLabel(String(r?.test || "")))}</td>
-            <td><span class="chip ${escapeHtml(status)}">${escapeHtml(status)}</span></td>
-            <td>${Number.isFinite(latency) ? `${latency}ms` : "-"}</td>
-            <td>${escapeHtml(String(r?.summary || ""))}</td>
-            <td><div class="mono">${escapeHtml(detail)}</div></td>
-          </tr>
-        `;
-      }).join("");
-    }
-
     function escapeHtml(raw) {
       const s = String(raw ?? "");
       return s.replaceAll("&", "&amp;")
@@ -306,11 +430,91 @@
 
     function setRunning(flag) {
       btnRunAllEl.disabled = Boolean(flag);
-      document.querySelectorAll("button.btn").forEach((btn) => {
-        if (btn !== btnRunAllEl && btn.textContent.includes("测试")) {
-          btn.disabled = Boolean(flag);
-        }
+      document.querySelectorAll("button.test-btn").forEach((btn) => {
+        btn.disabled = Boolean(flag);
       });
+    }
+
+    function formatTime(v) {
+      const s = String(v || "").trim();
+      if (!s) return "-";
+      const d = new Date(s);
+      if (Number.isNaN(d.getTime())) return s;
+      const yyyy = d.getFullYear();
+      const mm = String(d.getMonth() + 1).padStart(2, "0");
+      const dd = String(d.getDate()).padStart(2, "0");
+      const hh = String(d.getHours()).padStart(2, "0");
+      const mi = String(d.getMinutes()).padStart(2, "0");
+      const ss = String(d.getSeconds()).padStart(2, "0");
+      return `${yyyy}-${mm}-${dd} ${hh}:${mi}:${ss}`;
+    }
+
+    function renderHistory() {
+      if (!Array.isArray(runHistory) || runHistory.length === 0) {
+        historyWrapEl.innerHTML = `<div class="empty">尚未执行检测</div>`;
+        return;
+      }
+
+      historyWrapEl.innerHTML = runHistory.map((entry, idx) => {
+        const model = String(entry?.model || "unknown");
+        const tests = Array.isArray(entry?.tests) ? entry.tests : [];
+        const rows = Array.isArray(entry?.results) ? entry.results : [];
+        const started = formatTime(entry?.started_at);
+        const passCount = rows.filter((x) => String(x?.status) === "pass").length;
+        const unsupportedCount = rows.filter((x) => String(x?.status) === "unsupported").length;
+        const failCount = rows.filter((x) => String(x?.status) === "fail").length;
+        const skippedCount = rows.filter((x) => String(x?.status) === "skipped").length;
+
+        const tableRows = rows.length > 0
+          ? rows.map((r) => {
+              const status = String(r?.status || "fail");
+              const latency = Number(r?.latency_ms || 0);
+              const detail = String(r?.error_message || r?.raw_excerpt || "-");
+              return `
+                <tr>
+                  <td>${escapeHtml(testLabel(String(r?.test || "")))}</td>
+                  <td><span class="chip ${escapeHtml(status)}">${escapeHtml(status)}</span></td>
+                  <td>${Number.isFinite(latency) ? `${latency}ms` : "-"}</td>
+                  <td>${escapeHtml(String(r?.summary || ""))}</td>
+                  <td><div class="mono">${escapeHtml(detail)}</div></td>
+                </tr>
+              `;
+            }).join("")
+          : `<tr><td colspan="5" style="color:#9b5f78;">无结果</td></tr>`;
+
+        return `
+          <div class="run-card">
+            <div class="run-head">
+              <div class="run-title">
+                <span>请求 #${runHistory.length - idx}</span>
+                <span class="meta-chip">模型：${escapeHtml(model)}</span>
+                <span class="meta-chip">测试：${escapeHtml(tests.map(testLabel).join(" / "))}</span>
+              </div>
+              <div class="run-meta">
+                <span class="meta-chip">时间：${escapeHtml(started)}</span>
+                <span class="meta-chip">PASS ${passCount}</span>
+                <span class="meta-chip">UNSUPPORTED ${unsupportedCount}</span>
+                <span class="meta-chip">FAIL ${failCount}</span>
+                <span class="meta-chip">SKIPPED ${skippedCount}</span>
+              </div>
+            </div>
+            <div class="run-table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th style="width: 130px;">测试项</th>
+                    <th style="width: 110px;">状态</th>
+                    <th style="width: 90px;">耗时</th>
+                    <th style="width: 220px;">摘要</th>
+                    <th>详情</th>
+                  </tr>
+                </thead>
+                <tbody>${tableRows}</tbody>
+              </table>
+            </div>
+          </div>
+        `;
+      }).join("");
     }
 
     async function ensureAllowed() {
@@ -348,7 +552,9 @@
         const current = String(data?.current_model || "").trim();
         if (current) modelSelectEl.value = current;
       } catch (e) {
-        modelSelectEl.innerHTML = MODEL_FALLBACK.map((x) => `<option value="${escapeHtml(x.id)}">${escapeHtml(x.label)}</option>`).join("");
+        modelSelectEl.innerHTML = MODEL_FALLBACK
+          .map((x) => `<option value="${escapeHtml(x.id)}">${escapeHtml(x.label)}</option>`)
+          .join("");
       }
     }
 
@@ -358,22 +564,35 @@
 
       setRunning(true);
       setStatus(`检测中：${tests.map(testLabel).join(" / ")} ...`);
+
       try {
+        const payload = {
+          model: String(modelSelectEl.value || "").trim(),
+          tests,
+          image_url: String(imageUrlEl.value || "").trim(),
+          video_url: String(videoUrlEl.value || "").trim(),
+        };
         const res = await apiFetch("/model-diagnostics/run", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            model: String(modelSelectEl.value || "").trim(),
-            tests,
-            image_url: String(imageUrlEl.value || "").trim(),
-            video_url: String(videoUrlEl.value || "").trim(),
-          }),
+          body: JSON.stringify(payload),
         });
         const data = await res.json();
         if (!res.ok || data?.ok === false) {
           throw new Error(String(data?.error || `HTTP ${res.status}`));
         }
-        renderResults(data?.results || []);
+
+        runHistory.unshift({
+          model: String(data?.model || payload.model || ""),
+          tests: tests.slice(),
+          started_at: String(data?.started_at || ""),
+          finished_at: String(data?.finished_at || ""),
+          results: Array.isArray(data?.results) ? data.results : [],
+        });
+
+        if (runHistory.length > 10) runHistory.length = 10;
+
+        renderHistory();
         setStatus(`完成：${String(data?.model || "")}`);
       } catch (e) {
         setStatus(`检测失败：${String(e?.message || e)}`);
@@ -393,6 +612,7 @@
     (async () => {
       await loadModels();
       await ensureAllowed();
+      renderHistory();
     })();
   </script>
 </body>

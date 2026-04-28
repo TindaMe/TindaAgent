@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import gzip
 import json
 import os
+import shutil
 import threading
 from dataclasses import dataclass
 from datetime import datetime
@@ -54,6 +56,7 @@ def _truncate_text(text: Any, *, max_len: int = 4000) -> str:
 class _AuditFiles:
     root: Path
     total_jsonl: Path
+    total_idx: Path  # {event_id: byte_offset}
     total_text: Path
     error_text: Path
     legacy_error_text: Path
@@ -82,6 +85,7 @@ class GlobalAuditEngine:
         return _AuditFiles(
             root=root,
             total_jsonl=root / "total.jsonl",
+            total_idx=root / "total.idx",
             total_text=root / "total.log",
             error_text=root / "error.log",
             legacy_error_text=root / "audit_error.log",
@@ -150,6 +154,29 @@ class GlobalAuditEngine:
             f"[{event['func']}] [{event['dir']}] [{event['file']}] [{event['path']}] {event['content']}"
         )
 
+    def _rotate_if_needed(self) -> None:
+        """total.jsonl 超过 10MB 自动归档为 gz。"""
+        try:
+            size = self._files.total_jsonl.stat().st_size
+            if size < 10_485_760:  # 10MB
+                return
+            now = datetime.now().strftime("%Y%m%d_%H%M%S")
+            archive = self._files.root / f"total.{now}.jsonl.gz"
+            # 新建空文件替换旧文件，旧文件改名归档
+            temp = self._files.root / f"total.jsonl.rotating"
+            temp.touch()
+            shutil.copy2(str(self._files.total_jsonl), str(self._files.root / f"total.{now}.jsonl"))
+            temp.replace(self._files.total_jsonl)
+            # 压缩归档
+            src = self._files.root / f"total.{now}.jsonl"
+            with src.open("rb") as fin, gzip.open(str(archive), "wb", compresslevel=6) as fout:
+                shutil.copyfileobj(fin, fout)
+            src.unlink()
+            # 重置索引
+            self._files.total_idx.write_text("{}", encoding="utf-8")
+        except Exception:
+            pass  # 归档失败不阻断业务
+
     def _write_lines(
         self,
         *,
@@ -157,9 +184,30 @@ class GlobalAuditEngine:
         text_line: str,
         subsystem: str,
     ) -> None:
+        self._rotate_if_needed()
         subsystem_file = self._files.root / self._subsystem_file_name(subsystem)
+        # 写入 JSONL + 更新索引（先记偏移再写，偏移=写之前文件大小）
+        eid = int(json_event["id"])
+        idx: dict[int, int] = {}
+        try:
+            idx_text = self._files.total_idx.read_text(encoding="utf-8")
+            idx = json.loads(idx_text) if idx_text.strip() else {}
+            if not isinstance(idx, dict):
+                idx = {}
+        except Exception:
+            idx = {}
+        offset = self._files.total_jsonl.stat().st_size if self._files.total_jsonl.exists() else 0
         with self._files.total_jsonl.open("a", encoding="utf-8") as fp:
             fp.write(json.dumps(json_event, ensure_ascii=False, default=str) + "\n")
+        idx[str(eid)] = int(offset)
+        # 分摊写入：每 32 条持久化一次索引
+        idx.setdefault("_write_count", idx.get("_write_count", 0))
+        idx["_write_count"] = int(idx.get("_write_count", 0)) + 1
+        try:
+            self._files.total_idx.write_text(json.dumps(idx, ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            pass
+        # 文本镜像
         with self._files.total_text.open("a", encoding="utf-8") as fp:
             fp.write(text_line + "\n")
         with subsystem_file.open("a", encoding="utf-8") as fp:

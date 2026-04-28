@@ -1,6 +1,6 @@
 # TindaAgent
 
-当前版本：`1.7.5`
+当前版本：`1.7.6`
 
 TindaAgent 是一个本地化 Web Agent 系统，聚焦于以下能力：
 

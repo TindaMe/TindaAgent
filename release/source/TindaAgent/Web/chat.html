@@ -543,6 +543,32 @@
       box-shadow: 0 4px 18px rgba(255,110,180,0.26);
     }
 
+    .msg.user .bubble.file-chip {
+      background: var(--surface);
+      color: var(--accent-deep);
+      border: 1.5px solid var(--accent-2);
+      box-shadow: none;
+      padding: 6px 13px;
+      font-size: 12px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      border-radius: 16px;
+    }
+    .msg.user .bubble.file-chip svg {
+      width: 14px;
+      height: 14px;
+      stroke: var(--accent);
+      fill: none;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      flex-shrink: 0;
+    }
+    /* file chip consecutive: no pointy corner */
+    .msg.user.same-as-prev .bubble.file-chip { border-top-right-radius: 16px; }
+
     .msg.bot .bubble.cmd {
       background: rgba(167,139,250,0.1);
       border-color: rgba(167,139,250,0.32);
@@ -1007,6 +1033,84 @@
       background: var(--gradient);
     }
 
+    .file-bar {
+      max-width: 780px;
+      margin: 0 auto 8px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 5px 14px;
+      background: var(--surface);
+      border: 1.5px solid var(--border);
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--accent-deep);
+      pointer-events: auto;
+      box-shadow: 0 2px 8px rgba(255,110,180,0.08);
+    }
+    .file-bar .file-icon {
+      display: flex;
+      align-items: center;
+      flex-shrink: 0;
+    }
+    .file-bar .file-icon svg {
+      width: 15px; height: 15px;
+      stroke: var(--accent);
+      fill: none;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+    .file-bar .file-name {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .file-bar .file-remove {
+      flex-shrink: 0;
+      background: none;
+      border: none;
+      color: var(--text-dim);
+      cursor: pointer;
+      font-size: 16px;
+      line-height: 1;
+      padding: 0 2px;
+      transition: color 0.15s;
+    }
+    .file-bar .file-remove:hover { color: var(--fail); }
+
+    .file-btn {
+      background: var(--surface-2);
+      color: var(--text-dim);
+      border: 1.5px solid var(--border);
+      border-radius: 999px;
+      min-width: 40px;
+      height: 40px;
+      padding: 0;
+      cursor: pointer;
+      font-size: 14px;
+      font-family: inherit;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s ease;
+      box-shadow: 0 2px 10px rgba(255, 110, 180, 0.12);
+    }
+    .file-btn:hover {
+      border-color: var(--accent-2);
+      color: var(--accent-deep);
+      transform: translateY(-1px);
+    }
+    .file-btn.has-file {
+      background: rgba(255,110,180,0.10);
+      border-color: var(--accent-2);
+      color: var(--accent-deep);
+    }
+    .file-btn .icon { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
     .hint {
       max-width: 780px;
       margin: 10px auto 0;
@@ -1389,7 +1493,7 @@
   <div class="brand">
     <div class="brand-logo" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"></circle><path d="M12 2.8v4.2M12 17v4.2M2.8 12h4.2M17 12h4.2M5.3 5.3l3 3M15.7 15.7l3 3M18.7 5.3l-3 3M8.3 15.7l-3 3"></path></svg></div>
     <span class="brand-name">TindaAgent</span>
-    <button id="versionBadgeBtn" class="version-badge version-btn" onclick="showVersionTip()" title="版本信息">v1.7.5</button>
+    <button id="versionBadgeBtn" class="version-badge version-btn" onclick="showVersionTip()" title="版本信息">v1.7.6</button>
   </div>
   <div class="header-center">
     <span id="statusPill" class="status-pill">
@@ -1486,6 +1590,16 @@
       <div id="messages"></div>
     </div>
     <div class="input-dock">
+      <div class="file-bar" id="fileBar" style="display:none;">
+        <span class="file-icon">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+            <polyline points="14 2 14 8 20 8"></polyline>
+          </svg>
+        </span>
+        <span class="file-name" id="fileName"></span>
+        <button class="file-remove" onclick="removeFile()" title="移除文件">×</button>
+      </div>
       <div class="input-box">
         <textarea id="input" rows="1" placeholder="跟 Tinda 说说话吧 ..."></textarea>
         <div class="time-wrap">
@@ -1512,6 +1626,15 @@
             </div>
           </div>
         </div>
+        <button id="fileBtn" class="file-btn" type="button" title="导入文件" aria-label="导入文件" onclick="pickFile()">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+            <polyline points="14 2 14 8 20 8"></polyline>
+            <line x1="12" y1="18" x2="12" y2="11"></line>
+            <polyline points="9 14 12 11 15 14"></polyline>
+          </svg>
+        </button>
+        <input type="file" id="fileInput" style="display:none" />
         <button id="sendBtn" onclick="sendMessage()" title="发送" aria-label="发送">
           <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
             <path d="M3 12 20 4l-5 16-3-6-9-2z"></path>
@@ -1587,6 +1710,11 @@
   const timeCustomBoxEl = document.getElementById("timeCustomBox");
   const timeCustomInputEl = document.getElementById("timeCustomInput");
   const timeCustomApplyBtnEl = document.getElementById("timeCustomApplyBtn");
+  const fileBtnEl = document.getElementById("fileBtn");
+  const fileBarEl = document.getElementById("fileBar");
+  const fileNameEl = document.getElementById("fileName");
+  const fileInputEl = document.getElementById("fileInput");
+  let importedFile = null;
   const SESSION_KEY = "tinda_active_session_id";
   const TERM_WIDTH_KEY = "tinda_term_width";
   const STREAM_ENABLED_KEY = "tinda_stream_enabled";
@@ -1613,7 +1741,7 @@
   };
   const USER_ADMIN_PERM = 511;
   const AUTH_TOKEN_KEY = "ta_auth_token";
-  const VERSION_FALLBACK = "v1.7.5";
+  const VERSION_FALLBACK = "v1.7.6";
 
   function getAuthToken() {
     return String(localStorage.getItem(AUTH_TOKEN_KEY) || "").trim();
@@ -2149,7 +2277,7 @@
     if (role !== "user" && role !== "assistant") return null;
 
     const entryType = String(raw.entry_type || "chat").trim() || "chat";
-    const allowedTypes = ["chat", "notice", "tool_marker", "terminal"];
+    const allowedTypes = ["chat", "notice", "tool_marker", "terminal", "attachment"];
     const safeType = allowedTypes.includes(entryType) ? entryType : "chat";
 
     const terminalKindRaw = String(raw.terminal_kind || "").trim();
@@ -2592,10 +2720,20 @@
         return;
       }
 
+      if (entryType === "attachment") {
+        clearEmptyState();
+        addFileChipBubble(content);
+        hasChatBubble = true;
+        return;
+      }
+
       if (role === "user") {
         clearEmptyState();
-        addBubble(content, "user");
-        hasChatBubble = true;
+        const displayContent = stripFilePrefix(content);
+        if (displayContent) {
+          addBubble(displayContent, "user");
+          hasChatBubble = true;
+        }
         return;
       }
       if (role === "assistant") {
@@ -2757,6 +2895,49 @@
     }
     scrollToBottom();
     return { row, bubble };
+  }
+
+  function addFileChipBubble(fileName) {
+    const shortName = getDisplayFileName(fileName);
+    const row = document.createElement("div");
+    row.className = "msg user";
+
+    const spacer = messagesEl.querySelector(".sys-pin-spacer");
+    const prev = spacer ? spacer.previousElementSibling : messagesEl.lastElementChild;
+    if (prev && prev.classList.contains("msg") && prev.classList.contains("user")) {
+      row.classList.add("same-as-prev");
+    }
+
+    const avatar = document.createElement("div");
+    avatar.className = "avatar";
+    avatar.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 21a8 8 0 0 0-16 0"></path><circle cx="12" cy="8" r="3.2"></circle></svg>`;
+
+    const bubble = document.createElement("div");
+    bubble.className = "bubble file-chip";
+    bubble.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg><span>${escapeHtml(shortName)}</span>`;
+
+    row.appendChild(avatar);
+    row.appendChild(bubble);
+    if (spacer) {
+      messagesEl.insertBefore(row, spacer);
+    } else {
+      messagesEl.appendChild(row);
+    }
+    scrollToBottom();
+    return { row, bubble };
+  }
+
+  function getDisplayFileName(fullName) {
+    const name = String(fullName || "").trim();
+    const lastSlash = Math.max(name.lastIndexOf("/"), name.lastIndexOf("\\"));
+    return lastSlash >= 0 ? name.slice(lastSlash + 1) : name;
+  }
+
+  function stripFilePrefix(raw) {
+    const text = String(raw ?? "");
+    const m = text.match(/^\[文件: [^\n]+\]\n```[^\n]*\n[\s\S]*?\n```\n?/);
+    if (m) return text.slice(m[0].length).trim();
+    return text;
   }
 
   function appendMarkdownToBotBubble(bubbleEl, extraText) {
@@ -3128,6 +3309,62 @@
     inputEl.focus();
     autoResize();
   }
+
+  function pickFile() {
+    fileInputEl.value = "";
+    fileInputEl.click();
+  }
+
+  function removeFile() {
+    importedFile = null;
+    if (fileBarEl) fileBarEl.style.display = "none";
+    if (fileBtnEl) fileBtnEl.classList.remove("has-file");
+    if (fileInputEl) fileInputEl.value = "";
+  }
+
+  function getFileExtension(filename) {
+    const m = filename.match(/\.([^.]+)$/);
+    return m ? m[1].toLowerCase() : "";
+  }
+
+  function isTextFile(filename) {
+    const ext = getFileExtension(filename);
+    const textExts = new Set([
+      "txt", "md", "markdown", "json", "xml", "yaml", "yml", "toml", "ini", "cfg", "conf", "log", "csv",
+      "py", "pyw", "js", "mjs", "cjs", "ts", "tsx", "jsx", "html", "htm", "css", "scss", "less",
+      "c", "cpp", "cxx", "cc", "h", "hpp", "hxx", "java", "go", "rs", "rb", "php", "swift", "kt",
+      "scala", "lua", "r", "sql", "sh", "bash", "bat", "cmd", "ps1", "cmake", "make", "makefile",
+      "dockerfile", "gitignore", "env", "vue", "svelte", "astro", "tex", "gradle", "properties",
+      "pl", "pm", "dart", "proto", "graphql", "gql", "tf", "tfvars", "nix", "erb", "ejs", "jinja",
+      "jinja2", "twig", "mustache", "handlebars", "hbs", "prisma", "sol", "zig", "nim", "ex", "exs",
+      "elm", "fs", "fsx", "fsi", "ml", "mli", "clj", "cljs", "edn", "erl", "hrl", "hs", "lhs",
+      "rkt", "scm", "ss", "jl", "f", "f90", "f95", "for", "groovy", "gy", "vala", "vapi",
+    ]);
+    return textExts.has(ext);
+  }
+
+  function handleFileSelect(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!isTextFile(file.name)) {
+      showToast("不支持的文件类型", "warn");
+      if (fileInputEl) fileInputEl.value = "";
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = function(ev) {
+      importedFile = { name: file.name, content: ev.target.result };
+      fileNameEl.textContent = file.name;
+      fileBarEl.style.display = "flex";
+      fileBtnEl.classList.add("has-file");
+    };
+    reader.onerror = function() {
+      showToast("读取文件失败", "error");
+    };
+    reader.readAsText(file);
+  }
+
+  fileInputEl?.addEventListener("change", handleFileSelect);
 
   function autoResize() {
     inputEl.style.height = "auto";
@@ -3513,7 +3750,14 @@
   // --- Actions ---
   async function sendMessage() {
     const text = inputEl.value.trim();
-    if (!text) return;
+    const hasFile = importedFile !== null;
+    if (!text && !hasFile) return;
+    let fullMessage = text;
+    const fileBackup = hasFile ? { name: importedFile.name, content: importedFile.content } : null;
+    if (hasFile) {
+      const ext = getFileExtension(importedFile.name);
+      fullMessage = `[文件: ${importedFile.name}]\n\`\`\`${ext}\n${importedFile.content}\n\`\`\`\n` + (text || "");
+    }
     const sid = await ensureActiveSession();
 
     await ensureUserMetaLoaded();
@@ -3523,11 +3767,22 @@
     autoResize();
     sendBtn.disabled = true;
 
+    if (hasFile && fileBackup) {
+      addFileChipBubble(fileBackup.name);
+      enqueueSessionEntries([{
+        role: "user",
+        entry_type: "attachment",
+        content: fileBackup.name,
+      }], { sessionId: sid });
+      removeFile();
+    }
+    if (text) {
+      addBubble(text, "user");
+    }
     const echo = isEchoCmd(text);
-    addBubble(text, "user");
     if (echo) { showTerm(); }
     const isCommand = text.startsWith("/");
-    // 对普通对话统一走 SSE：即使“非流式显示”，也能实时接收 tool_step 终端事件
+    // 对普通对话统一走 SSE：即使"非流式显示"，也能实时接收 tool_step 终端事件
     const useStream = !isCommand;
     const renderDelta = streamEnabled;
     const typingRow = useStream ? (renderDelta ? null : addTyping()) : addTyping();
@@ -3548,7 +3803,7 @@
           streamBot.bubble.classList.add("md");
         }
         const params = new URLSearchParams({
-          message: text,
+          message: fullMessage,
           session_id: sid,
         });
         Object.entries(metaPayload).forEach(([k, v]) => params.set(k, String(v)));
@@ -3656,7 +3911,7 @@
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          message: text,
+          message: fullMessage,
           session_id: sid,
           ...metaPayload,
         }),
@@ -3694,6 +3949,7 @@
     } finally {
       sendBtn.disabled = false;
       inputEl.focus();
+      removeFile();
     }
   }
 

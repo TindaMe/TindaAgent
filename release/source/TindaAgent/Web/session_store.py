@@ -18,7 +18,7 @@ class SessionStoreError(ValueError):
 
 
 ROLE_SET = {"user", "assistant", "system"}
-ENTRY_TYPES = {"chat", "notice", "tool_marker", "terminal"}
+ENTRY_TYPES = {"chat", "notice", "tool_marker", "terminal", "attachment"}
 TERMINAL_KINDS = {"", "cmd", "out", "sep"}
 TERMINAL_CLASSES = {"", "err", "info", "dim"}
 MAX_MSG_CHARS = 64000
