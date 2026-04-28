@@ -126,6 +126,7 @@ _AUTH_OPEN_PATHS = {
     "/app",
     "/logs",
     "/model-diagnostics",
+    "/settings",
     "/favicon.ico",
     "/system/version",
     "/user-admin",
