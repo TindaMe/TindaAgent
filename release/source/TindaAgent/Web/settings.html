@@ -399,6 +399,29 @@
     </div>
 
     <div class="card">
+      <h2>终端控制</h2>
+      <p class="sub">命令白名单/黑名单（逗号分隔），bypass 仅满权限可开启</p>
+      <div class="input-row">
+        <label for="termWhitelist">白名单</label>
+        <input type="text" id="termWhitelist" placeholder="git, ls, cat" style="width:100%;">
+      </div>
+      <div class="input-row">
+        <label for="termBlacklist">黑名单</label>
+        <input type="text" id="termBlacklist" placeholder="rm -rf, dd" style="width:100%;">
+      </div>
+      <div class="toggle-row">
+        <div>
+          <label>Bypass 确认弹窗</label>
+          <div class="hint">跳过终端确认气泡，仅限管理员(511)</div>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="settingBypassTerm">
+          <span class="slider"></span>
+        </label>
+      </div>
+    </div>
+
+    <div class="card">
       <h2>关于</h2>
       <p class="sub">TindaAgent 版本信息</p>
       <div class="version-row">
@@ -542,6 +565,36 @@
 
       quickGrid.appendChild(row);
     });
+
+    // Terminal settings
+    const termWhitelistEl = document.getElementById("termWhitelist");
+    const termBlacklistEl = document.getElementById("termBlacklist");
+    const bypassTermEl = document.getElementById("settingBypassTerm");
+    (async () => {
+      try {
+        const res = await apiFetch("/terminal/settings");
+        const data = await res.json();
+        if (data?.ok) {
+          if (termWhitelistEl) termWhitelistEl.value = (data.whitelist || []).join(", ");
+          if (termBlacklistEl) termBlacklistEl.value = (data.blacklist || []).join(", ");
+          if (bypassTermEl) bypassTermEl.checked = !!data.bypass_terminal_confirm;
+        }
+      } catch {}
+    })();
+    function saveTerminalSettings() {
+      const wl = (termWhitelistEl?.value || "").split(",").map(s => s.trim()).filter(Boolean);
+      const bl = (termBlacklistEl?.value || "").split(",").map(s => s.trim()).filter(Boolean);
+      apiFetch("/terminal/settings", {
+        method: "PUT",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({ whitelist: wl, blacklist: bl, bypass_terminal_confirm: bypassTermEl?.checked || false }),
+      }).then(r => r.json()).then(d => {
+        if (d?.ok) showToast("终端设置已保存");
+        else showToast("保存失败");
+      }).catch(() => showToast("保存失败"));
+    }
+    [termWhitelistEl, termBlacklistEl].forEach(el => el?.addEventListener("change", saveTerminalSettings));
+    bypassTermEl?.addEventListener("change", saveTerminalSettings);
 
     // Version
     (async () => {
