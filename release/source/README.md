@@ -57,37 +57,19 @@ TindaAgent 是一个本地化 Web Agent 系统，聚焦于以下能力：
 - `~/.tinda/agent/Data`：会话、系统数据、用户数据
 - `~/.tinda/agent/log`：`total.jsonl`、子系统日志、`error.log`
 
-## 启动（AnacondaAnaconda3）
-
-运行时目录由子系统 `TindaAgent/Process/Architecture/paths.py` 统一决策：
-
-- 默认基于系统环境变量 `HOME`/`USER`（Windows 兼容 `USERNAME`），相对生成 `$HOME/.tinda/agent`
-- 不使用盘符或挂载路径硬编码推断
-
-可通过环境变量 `TINDA_HOME` 显式覆盖，例如：
+## 启动
 
 ```bash
-export TINDA_HOME=/mnt/e/.tinda/agent
-```
-
-```bash
-cd /mnt/e/Python/release/source
 cp .env.example TindaAgent/.env
 # 编辑 TindaAgent/.env，填入 DEEPSEEK_API_KEY
-conda run -n base python run_web.py
-```
-
-等价启动命令（你常用的方式）：
-
-```bash
-cd /mnt/e/Python/release/source
-/mnt/e/AnacondaAnaconda3/python.exe run_web.py
+python run_web.py
 ```
 
 默认访问：
 
 - `http://127.0.0.1:8000/`
 - 聊天页：`/app`
+- 设置页：`/settings`
 - 日志页：`/logs`
 - 模型检测页：`/model-diagnostics`
 
