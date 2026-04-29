@@ -168,43 +168,6 @@ def _build_tool_limit_fallback(tool_trace: list[dict]) -> str:
     return "\n".join(lines)
 
 
-_FAKE_CLAIM_NEGATIVES = (
-    "不需要调用工具", "无需调用工具", "不必调用工具",
-    "不需要执行工具", "无需执行工具", "没有调用工具",
-    "没有执行工具", "不需要工具调用", "无需工具调用",
-)
-
-import re
-_FAKE_CLAIM_RE = re.compile(
-    "|".join(
-        "调用工具|执行成功|全部通过|全部成功|所有工具|工具调用完成|"
-        "当前可用工具|可用工具列表|工具返回|根据工具|工具执行|执行完毕|"
-        "工具输出|已获取数据|查询结果|读取到以下|返回了以下内容|调用完成|"
-        "工具调用结果|调用了工具|工具已执行|数据已获取|已通过工具|"
-        "工具结果显示|获取到以下信息|"
-        "i called the|i've called the|tool returned|the tool returned|"
-        "execution result|i've retrieved|using the tool|the output of|"
-        "the tool says|the tool shows|the tool indicates|tool output|"
-        "called the function|function result|result from tool|"
-        "executed the tool|running the tool|i retrieved the|"
-        "the tool has|successfully called|successfully executed|"
-        "tool call completed|tool execution result|the result from|"
-        "tool_calls".split("|")
-    ),
-    re.IGNORECASE,
-)
-
-
-def _detect_fake_tool_claim(text: str) -> bool:
-    if not text:
-        return False
-    lower = text.lower()
-    for neg in _FAKE_CLAIM_NEGATIVES:
-        if neg in lower:
-            return False
-    return bool(_FAKE_CLAIM_RE.search(text))
-
-
 class LLMClient:
     """
     用处：封装 LLM 调用，支持工具循环与自动纠正假调用。
@@ -273,36 +236,6 @@ class LLMClient:
                          extra={"tool_name": name, "ok": True, "call_id": call_id})
         return steps
 
-    def _retry_with_tool_reminder(self, messages: list[dict], tools: list[dict],
-                                  user_perm: int, temperature: float,
-                                  round: int, force_finalize: bool = False) -> dict:
-        """模型返回假调用时，追加纠正提示后重试。"""
-        correction: dict = {
-            "role": "user",
-            "content": (
-                "[系统纠正] 你刚才以文本形式描述了工具调用执行情况，但并未实际通过 tool_calls API 发起调用。\n"
-                "请重新处理用户的请求：如果你认为需要执行工具，请使用 tool_calls 接口发起真实调用；"
-                "如果不需要任何工具，请直接给出有用回答，不要假装执行了工具。"
-            ),
-        }
-        retry_msgs = list(messages) + [correction]
-        tc = "none" if force_finalize else "auto"
-        resp = self._client.chat.completions.create(
-            model=self.model, messages=retry_msgs, temperature=temperature,
-            tools=tools, tool_choice=tc)
-        msg = resp.choices[0].message
-        rc = _concat_reasoning(getattr(msg, "reasoning_content", None))
-        calls = [_normalize_tool_call(
-            call_id=getattr(c, "id", None), call_type=getattr(c, "type", None),
-            function_name=getattr(c.function, "name", ""),
-            function_arguments=getattr(c.function, "arguments", None),
-            fallback_id=f"retry_{round}_{i}")
-            for i, c in enumerate(msg.tool_calls or [])]
-        if not calls:
-            calls = _detect_dsml_tool_calls(msg.content or "", prefix=f"dsml_retry_{round}")
-        return {"role": "assistant", "content": msg.content or "", "tool_calls": calls,
-                "reasoning_content": rc}
-
     def _process_tool_loop(self, messages: list[dict], user_perm: int, temperature: float,
                            max_tool_steps: int, stream: bool, base_len: int,
                            func: str) -> tuple[str, list[dict], int, list[dict]]:
@@ -311,8 +244,6 @@ class LLMClient:
         tools = tool_registry.build_agent_tool_schemas(user_perm)
         steps = 0
         trace = []
-        retries = 0
-        MAX_RETRIES = 3
 
         while True:
             force_finalize = steps >= max_tool_steps - 1 and len(trace) > 0
@@ -331,18 +262,6 @@ class LLMClient:
                 for i, c in enumerate(msg.tool_calls or [])]
             if not calls:
                 calls = _detect_dsml_tool_calls(content, prefix=f"dsml_{steps}")
-
-            if not calls and _detect_fake_tool_claim(content) and retries < MAX_RETRIES:
-                audit_event("SYSTEM_EXECUTE", "ai", func, _THIS_FILE,
-                             "fake_tool_claim_detected_retrying",
-                             extra={"model": self.model, "steps": steps, "retries": retries + 1})
-                retry = self._retry_with_tool_reminder(
-                    msgs, tools, user_perm, temperature, steps,
-                    force_finalize=force_finalize)
-                calls = retry["tool_calls"]
-                content = retry["content"]
-                rc = _concat_reasoning(retry.get("reasoning_content", ""))
-                retries += 1
 
             if not calls:
                 msg_out = _attach_reasoning({"role": "assistant", "content": content}, rc)
@@ -379,8 +298,6 @@ class LLMClient:
         base_len = len(msgs)
         steps = 0
         trace = []
-        retries = 0
-        MAX_RETRIES = 3
         audit_event("SYSTEM_EXECUTE", "ai", "LLMClient.stream_chat_with_tools", _THIS_FILE,
                      "stream_start", extra={"model": self.model, "messages_count": len(messages),
                                             "user_perm": user_perm, "max_tool_steps": max_tool_steps})
@@ -439,22 +356,6 @@ class LLMClient:
                         fallback_id=f"call_{steps}_{key}"))
                 if not calls:
                     calls = _detect_dsml_tool_calls(content, prefix=f"dsml_{steps}")
-
-            if not calls and _detect_fake_tool_claim(content) and retries < MAX_RETRIES:
-                correction = (
-                    "\n\n> [系统检测] 模型以文本描述了工具调用但未实际执行。正在重新处理…\n\n"
-                )
-                yield {"type": "delta", "content": correction}
-
-                retry = self._retry_with_tool_reminder(
-                    msgs, tools, user_perm, temperature, steps,
-                    force_finalize=force_finalize)
-                calls = retry["tool_calls"]
-                content = retry["content"]
-                rc = _concat_reasoning(retry.get("reasoning_content", ""))
-                retries += 1
-                if content:
-                    yield {"type": "delta", "content": content}
 
             if not calls:
                 msg_out = _attach_reasoning({"role": "assistant", "content": content}, rc)
