@@ -168,83 +168,41 @@ def _build_tool_limit_fallback(tool_trace: list[dict]) -> str:
     return "\n".join(lines)
 
 
+_FAKE_CLAIM_NEGATIVES = (
+    "不需要调用工具", "无需调用工具", "不必调用工具",
+    "不需要执行工具", "无需执行工具", "没有调用工具",
+    "没有执行工具", "不需要工具调用", "无需工具调用",
+)
+
+import re
+_FAKE_CLAIM_RE = re.compile(
+    "|".join(
+        "调用工具|执行成功|全部通过|全部成功|所有工具|工具调用完成|"
+        "当前可用工具|可用工具列表|工具返回|根据工具|工具执行|执行完毕|"
+        "工具输出|已获取数据|查询结果|读取到以下|返回了以下内容|调用完成|"
+        "工具调用结果|调用了工具|工具已执行|数据已获取|已通过工具|"
+        "工具结果显示|获取到以下信息|"
+        "i called the|i've called the|tool returned|the tool returned|"
+        "execution result|i've retrieved|using the tool|the output of|"
+        "the tool says|the tool shows|the tool indicates|tool output|"
+        "called the function|function result|result from tool|"
+        "executed the tool|running the tool|i retrieved the|"
+        "the tool has|successfully called|successfully executed|"
+        "tool call completed|tool execution result|the result from|"
+        "tool_calls".split("|")
+    ),
+    re.IGNORECASE,
+)
+
+
 def _detect_fake_tool_claim(text: str) -> bool:
-    """检测模型是否在文本中伪造了工具调用描述，同时尽量避免误报（如"不需要调用工具"）。"""
     if not text:
         return False
     lower = text.lower()
-    prefix_map = _DETECT_PREFIX_MAP
-    for raw, result in prefix_map.items():
-        if raw in lower:
-            return result
-    return False
-
-
-_DETECT_PREFIX_MAP = {
-    # ── Chinese: 否定句式排除（优先匹配，避免误报）──
-    "不需要调用工具": False,
-    "无需调用工具": False,
-    "不必调用工具": False,
-    "不需要执行工具": False,
-    "无需执行工具": False,
-    "没有调用工具": False,
-    "没有执行工具": False,
-    "不需要工具调用": False,
-    "无需工具调用": False,
-    # ── Chinese: 伪造调用/执行描述 ──
-    "调用工具": True,
-    "执行成功": True,
-    "全部通过": True,
-    "全部成功": True,
-    "所有工具": True,
-    "工具调用完成": True,
-    "当前可用工具": True,
-    "可用工具列表": True,
-    "工具返回": True,
-    "根据工具": True,
-    "工具执行": True,
-    "执行完毕": True,
-    "工具输出": True,
-    "已获取数据": True,
-    "查询结果": True,
-    "读取到以下": True,
-    "返回了以下内容": True,
-    "调用完成": True,
-    "工具调用结果": True,
-    "调用了工具": True,
-    "工具已执行": True,
-    "数据已获取": True,
-    "已通过工具": True,
-    "工具结果显示": True,
-    "获取到以下信息": True,
-    # ── English: 伪造调用描述 ──
-    "i called the": True,
-    "i've called the": True,
-    "tool returned": True,
-    "the tool returned": True,
-    "execution result": True,
-    "i've retrieved": True,
-    "using the tool": True,
-    "the output of": True,
-    "the tool says": True,
-    "the tool shows": True,
-    "the tool indicates": True,
-    "tool output": True,
-    "called the function": True,
-    "function result": True,
-    "result from tool": True,
-    "executed the tool": True,
-    "running the tool": True,
-    "i retrieved the": True,
-    "the tool has": True,
-    "successfully called": True,
-    "successfully executed": True,
-    "tool call completed": True,
-    "tool execution result": True,
-    "the result from": True,
-    # ── English: 保留关键字 ──
-    "tool_calls": True,
-}
+    for neg in _FAKE_CLAIM_NEGATIVES:
+        if neg in lower:
+            return False
+    return bool(_FAKE_CLAIM_RE.search(text))
 
 
 class LLMClient:

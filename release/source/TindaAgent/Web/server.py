@@ -908,14 +908,14 @@ def _perm_items() -> list[dict]:
     ]
 
 
-def _maybe_auto_compress(session_id: str) -> None:
+def _maybe_auto_compress(session_id: str, *, context_rows: list[dict] | None = None) -> None:
     sid = str(session_id)
     agent = _sessions.get(sid)
     if not agent:
         return
     if not agent._should_compress():
         return
-    rows = _store.get_context_messages(sid)
+    rows = context_rows if context_rows is not None else _store.get_context_messages(sid)
     raw_rows = [
         x for x in rows
         if not bool(x.get("is_summary", False))
@@ -930,7 +930,6 @@ def _maybe_auto_compress(session_id: str) -> None:
         if not summary:
             return
         _store.compress_context(sid, summary)
-        # Reload compressed context
         new_rows = _store.get_context_messages(sid)
         agent_rows, _ = _store_to_agent_messages(new_rows)
         agent.replace_conversation(agent_rows)
@@ -942,7 +941,7 @@ def _maybe_auto_compress(session_id: str) -> None:
              "context_tokens_before": agent.estimate_current_tokens()},
         )
     except Exception:
-        pass  # 压缩失败不阻断请求
+        pass
 
 
 def _get_agent(session_id: str):
@@ -993,7 +992,7 @@ def _get_agent(session_id: str):
     )
 
     # 自动压缩：上下文超过阈值时触发
-    _maybe_auto_compress(sid)
+    _maybe_auto_compress(sid, context_rows=rows)
 
     return _sessions[sid]
 

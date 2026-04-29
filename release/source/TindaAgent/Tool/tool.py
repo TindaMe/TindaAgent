@@ -175,6 +175,7 @@ def tool(tool_perm: int, tool_des: str, must: bool = False) -> Callable:
             SYSTEM_TOOL[tool_name] = tool_info
         else:
             SPARE_TOOL[tool_name] = tool_info
+        _invalidate_tool_caches()
 
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
@@ -283,41 +284,40 @@ def run_tool(tool_name: str, user_perm: int, *args, **kwargs):
         raise
 
 
+_all_tools_cache: dict[str, dict] | None = None
+_schema_cache: dict[int, list[dict]] = {}
+
+
+def _invalidate_tool_caches() -> None:
+    global _all_tools_cache, _schema_cache
+    _all_tools_cache = None
+    _schema_cache.clear()
+
+
 def list_tools(user_perm: int | None = None) -> dict[str, str]:
-    """
-    用处： 列出所有工具名称与描述；若提供 user_perm 则只返回可调用的
-
-    参数：
-        user_perm: int | None // 调用方权限，None 表示不过滤
-
-    返回：
-        dict[str, str] // {工具名: 描述}
-    """
+    global _all_tools_cache
+    if _all_tools_cache is None:
+        _all_tools_cache = {**SYSTEM_TOOL, **SPARE_TOOL}
     result: dict[str, str] = {}
-    for name, info in {**SYSTEM_TOOL, **SPARE_TOOL}.items():
+    for name, info in _all_tools_cache.items():
         if user_perm is None or (user_perm & info["perm"]) == info["perm"]:
             result[name] = info["des"]
     return result
 
 
 def build_agent_tool_schemas(user_perm: int) -> list[dict[str, Any]]:
-    """
-    用处：构建供模型调用的工具 schema（OpenAI Chat Completions tools 格式）
-    """
+    cached = _schema_cache.get(user_perm)
+    if cached is not None:
+        return cached
     tools = list_tools(user_perm)
     tool_hint = ", ".join(sorted(tools.keys())) if tools else "无"
-
     schemas: list[dict[str, Any]] = [
         {
             "type": "function",
             "function": {
                 "name": AGENT_LIST_TOOLS_NAME,
                 "description": "列出当前会话可调用的后端工具及用途。",
-                "parameters": {
-                    "type": "object",
-                    "properties": {},
-                    "additionalProperties": False,
-                },
+                "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
             },
         },
         {
@@ -331,22 +331,9 @@ def build_agent_tool_schemas(user_perm: int) -> list[dict[str, Any]]:
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "tool_name": {
-                            "type": "string",
-                            "description": "目标工具名称",
-                        },
-                        "args": {
-                            "type": "array",
-                            "description": "传给工具的位置参数列表（字符串）",
-                            "items": {"type": "string"},
-                            "default": [],
-                        },
-                        "kwargs": {
-                            "type": "object",
-                            "description": "传给工具的具名参数（值会按字符串处理）",
-                            "additionalProperties": {"type": "string"},
-                            "default": {},
-                        },
+                        "tool_name": {"type": "string", "description": "目标工具名称"},
+                        "args": {"type": "array", "description": "传给工具的位置参数列表（字符串）", "items": {"type": "string"}, "default": []},
+                        "kwargs": {"type": "object", "description": "传给工具的具名参数（值会按字符串处理）", "additionalProperties": {"type": "string"}, "default": {}},
                     },
                     "required": ["tool_name"],
                     "additionalProperties": False,
@@ -354,6 +341,7 @@ def build_agent_tool_schemas(user_perm: int) -> list[dict[str, Any]]:
             },
         },
     ]
+    _schema_cache[user_perm] = schemas
     return schemas
 
 

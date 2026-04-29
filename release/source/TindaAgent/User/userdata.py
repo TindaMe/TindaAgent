@@ -10,8 +10,40 @@ from TindaAgent.Process.Architecture.paths import get_users_file
 from TindaAgent.Process.Observability import audit_event
 
 _user_registry: list["UserManager"] = []
+_by_uid: dict[str, "UserManager"] = {}
+_by_name: dict[str, "UserManager"] = {}
+_by_token: dict[str, "UserManager"] = {}
 _USERS_FILE = get_users_file()
 _THIS_FILE = str(Path(__file__).resolve())
+
+
+def _rebuild_indexes() -> None:
+    _by_uid.clear()
+    _by_name.clear()
+    _by_token.clear()
+    for u in _user_registry:
+        _by_uid[u.uid] = u
+        _by_name[u.name] = u
+        t = str(getattr(u, "_token", "") or "").strip()
+        if t:
+            _by_token[t] = u
+
+
+def _index_add(u: "UserManager") -> None:
+    _by_uid[u.uid] = u
+    _by_name[u.name] = u
+    t = str(getattr(u, "_token", "") or "").strip()
+    if t:
+        _by_token[t] = u
+
+
+def _index_remove(u: "UserManager") -> None:
+    _by_uid.pop(u.uid, None)
+    if _by_name.get(u.name) is u:
+        _by_name.pop(u.name, None)
+    t = str(getattr(u, "_token", "") or "").strip()
+    if _by_token.get(t) is u:
+        _by_token.pop(t, None)
 
 
 def _ensure_data_dir() -> None:
@@ -74,6 +106,7 @@ def _build_user(
     obj.perm = userperm
     obj.token = usertoken
     _user_registry.append(obj)
+    _index_add(obj)
     if persist:
         _persist_users()
     return obj
@@ -111,6 +144,7 @@ def _load_users_from_disk() -> None:
         users_data = []
 
     _user_registry.clear()
+    _rebuild_indexes()
     UserManager._uid = 0
     for item in users_data:
         if not isinstance(item, dict):
@@ -143,7 +177,7 @@ def _load_users_from_disk() -> None:
 
 
 def _ensure_seed_user() -> None:
-    if any(u.name == "Tinda" for u in _user_registry):
+    if "Tinda" in _by_name:
         audit_event(
             op_type="SYSTEM_READ",
             subsystem="user",
@@ -171,30 +205,18 @@ def _ensure_seed_user() -> None:
 
 
 def get_user_from_name(name: str) -> UserManager | None:
-    for user in _user_registry:
-        if user.get_name() == name:
-            return user
-    return None
+    return _by_name.get(name)
 
 
 def get_user_from_uid(uid: str) -> UserManager | None:
-    for user in _user_registry:
-        if user.get_uid() == uid:
-            return user
-    return None
+    return _by_uid.get(uid)
 
 
 def get_user_from_token(token: str) -> UserManager | None:
     needle = str(token or "").strip()
     if not needle:
         return None
-    for user in _user_registry:
-        try:
-            if str(user.get_token()) == needle:
-                return user
-        except Exception:
-            continue
-    return None
+    return _by_token.get(needle)
 
 
 def ensure_default_user(name: str = "Tinda") -> "UserManager":
@@ -249,12 +271,12 @@ def user_name_exists(name: str, *, exclude_uid: str | None = None) -> bool:
     if not check:
         return False
     exclude = _normalize_uid(exclude_uid or "")
-    for u in _user_registry:
-        if exclude and u.get_uid() == exclude:
-            continue
-        if u.get_name() == check:
-            return True
-    return False
+    u = _by_name.get(check)
+    if u is None:
+        return False
+    if exclude and u.get_uid() == exclude:
+        return False
+    return True
 
 
 def _ensure_manage_users_perm(actor: "UserManager" | None) -> None:
@@ -408,6 +430,7 @@ def delete_user(uid: str, *, actor: "UserManager" | None = None) -> bool:
     for idx, user in enumerate(_user_registry):
         if user.get_uid() == key:
             _user_registry.pop(idx)
+            _index_remove(user)
             _persist_users()
             audit_event(
                 op_type="SYSTEM_WRITE",
@@ -448,6 +471,7 @@ def cleanup_system_users(*, persist: bool = True) -> int:
     before = len(_user_registry)
     _user_registry = [u for u in _user_registry if not is_system_user(u)]
     removed = before - len(_user_registry)
+    _rebuild_indexes()
     if removed > 0 and persist:
         _persist_users()
     audit_event(
