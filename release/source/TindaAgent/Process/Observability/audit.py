@@ -80,7 +80,7 @@ class GlobalAuditEngine:
         self._counter_file = self._files.root / "id_counter.txt"
         self._current_id = self._load_counter()
         self._pending: list[tuple[dict, str, str]] = []
-        self._pending_last_flush: float = 0.0
+        self._pending_last_flush: float = time.monotonic()
         atexit.register(self.flush)
 
     @staticmethod
@@ -276,7 +276,7 @@ class GlobalAuditEngine:
             return
         now = time.monotonic()
         count_ok = len(self._pending) >= self._BATCH_SIZE
-        age_ok = self._pending_last_flush > 0 and (now - self._pending_last_flush) >= self._BATCH_MAX_AGE_S
+        age_ok = (now - self._pending_last_flush) >= self._BATCH_MAX_AGE_S
         if count_ok or age_ok:
             self.flush()
 
@@ -320,8 +320,6 @@ class GlobalAuditEngine:
         try:
             with self._lock:
                 self._pending.append((record, text_line, record["subsystem"]))
-                if not self._pending_last_flush:
-                    self._pending_last_flush = time.monotonic()
                 self._maybe_flush()
         except Exception as e:
             self._safe_record_error(
