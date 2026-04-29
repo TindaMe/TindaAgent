@@ -222,14 +222,44 @@
       white-space: pre-wrap;
       word-break: break-word;
       min-height: 1em;
-      margin: 4px 0;
-      padding: 6px 8px;
-      border-radius: 12px;
-      background: rgba(255,255,255,0.85);
-      border: 1px solid rgba(251,113,133,0.14);
-      box-shadow: 0 1px 3px rgba(251,113,133,0.06);
+      margin: 8px 0;
+      padding: 0;
+      border-radius: 14px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.95) 0%, rgba(255,245,249,0.9) 100%);
+      border: 1.5px solid rgba(251,113,133,0.25);
+      box-shadow: 0 2px 10px rgba(251,113,133,0.08);
+      overflow: hidden;
     }
-    .term-prompt { color: #db2777; font-weight: 700; user-select: none; }
+    .term-line-head {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 10px;
+      background: linear-gradient(90deg, rgba(255,110,180,0.08), rgba(192,132,252,0.06));
+      border-bottom: 1px solid rgba(251,113,133,0.14);
+    }
+    .term-line-dots {
+      display: flex; gap: 5px; flex-shrink: 0;
+    }
+    .term-line-dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      box-shadow: 0 1px 3px rgba(61,31,47,0.12);
+    }
+    .term-line-dot:nth-child(1) { background: #fb7185; }
+    .term-line-dot:nth-child(2) { background: #f59e0b; }
+    .term-line-dot:nth-child(3) { background: #34d399; }
+    .term-line-label {
+      font-size: 10px; font-weight: 700;
+      color: #9d174d; letter-spacing: 0.2px;
+      opacity: 0.6;
+    }
+    .term-line-body {
+      padding: 6px 10px 8px;
+      font-family: "JetBrains Mono","Fira Code","SF Mono",Consolas,monospace;
+      font-size: 12.5px; line-height: 1.65; font-weight: 500;
+      display: flex;
+    }
+    .term-prompt { color: #db2777; font-weight: 700; user-select: none; flex-shrink: 0; }
     .term-out-normal { color: #166534; }
     .term-out-err { color: #dc2626; font-weight: 600; }
     .term-out-info { color: #2563eb; font-weight: 600; }
@@ -334,16 +364,24 @@
     if (!text) return '<span style="color:var(--text-dim);padding:16px;">(空文件)</span>';
     const isJson = text.trim().startsWith("{") || text.trim().startsWith("[");
     if (isJson) {
+      const dots = '<span class="term-line-dots"><span class="term-line-dot"></span><span class="term-line-dot"></span><span class="term-line-dot"></span></span>';
       const escaped = text.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
-      return `<div class="term-line"><span class="term-prompt">tinda@agent ~ % </span><span class="term-out-json">${escaped}</span></div>`;
+      return `<div class="term-line">
+        <div class="term-line-head">${dots}<span class="term-line-label">audit result</span></div>
+        <div class="term-line-body"><span class="term-prompt">tinda@agent ~ % </span><span class="term-out-json">${escaped}</span></div>
+      </div>`;
     }
     const lines = text.split("\n");
     if (lines.length > 2000) lines.length = 2000;
-    return lines.map(line => {
+    const dots = '<span class="term-line-dots"><span class="term-line-dot"></span><span class="term-line-dot"></span><span class="term-line-dot"></span></span>';
+    return lines.map((line, i) => {
       const cls = classifyLine(line);
       const escaped = line.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
       const colorClass = cls === "err" ? "term-out-err" : cls === "info" ? "term-out-info" : cls === "dim" ? "term-out-dim" : "term-out-normal";
-      return `<div class="term-line"><span class="term-prompt">tinda@agent ~ % </span><span class="${colorClass}">${escaped || " "}</span></div>`;
+      return `<div class="term-line">
+        <div class="term-line-head">${dots}<span class="term-line-label">log #${i + 1}</span></div>
+        <div class="term-line-body"><span class="term-prompt">tinda@agent ~ % </span><span class="${colorClass}">${escaped || " "}</span></div>
+      </div>`;
     }).join("");
   }
 
