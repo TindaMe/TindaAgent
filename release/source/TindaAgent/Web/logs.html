@@ -192,7 +192,7 @@
       font-size: 11px;
       font-weight: 700;
     }
-    .term-body {
+    pre {
       margin: 0;
       min-height: 0;
       flex: 1;
@@ -211,30 +211,13 @@
         radial-gradient(circle at -12% 0%, rgba(192,132,252,0.16) 0%, rgba(192,132,252,0) 58%),
         #fff9fc;
     }
-    .term-body::-webkit-scrollbar { width: 6px; }
-    .term-body::-webkit-scrollbar-track { background: transparent; }
-    .term-body::-webkit-scrollbar-thumb {
+    pre::-webkit-scrollbar { width: 6px; }
+    pre::-webkit-scrollbar-track { background: transparent; }
+    pre::-webkit-scrollbar-thumb {
       background: rgba(251,113,133,0.38);
       border-radius: 999px;
     }
-    .term-body::-webkit-scrollbar-thumb:hover { background: rgba(251,113,133,0.56); }
-    .term-line {
-      white-space: pre-wrap;
-      word-break: break-word;
-      min-height: 1em;
-      margin: 4px 0;
-      padding: 6px 8px;
-      border-radius: 12px;
-      background: rgba(255,255,255,0.85);
-      border: 1px solid rgba(251,113,133,0.14);
-      box-shadow: 0 1px 3px rgba(251,113,133,0.06);
-    }
-    .term-prompt { color: #db2777; font-weight: 700; user-select: none; }
-    .term-out-normal { color: #166534; }
-    .term-out-err { color: #dc2626; font-weight: 600; }
-    .term-out-info { color: #2563eb; font-weight: 600; }
-    .term-out-dim { color: #94a3b8; }
-    .term-out-json { color: #7c3aed; }
+    pre::-webkit-scrollbar-thumb:hover { background: rgba(251,113,133,0.56); }
     .empty {
       color: var(--text-dim);
       font-size: 12px;
@@ -285,7 +268,7 @@
         <span class="term-dots"><span class="term-dot"></span><span class="term-dot"></span><span class="term-dot"></span></span>
         <span class="term-title" id="termTitle">tinda@agent ~ log</span>
       </div>
-      <div id="logText" class="term-body"><span style="color:var(--text-dim);padding:16px;">请选择左侧日志文件。</span></div>
+      <pre id="logText">请选择左侧日志文件。</pre>
     </section>
   </div>
 <script>
@@ -318,33 +301,6 @@
     const opts = Object.assign({}, options);
     opts.headers = authHeaders(opts.headers || {});
     return fetch(url, opts);
-  }
-
-  function classifyLine(line) {
-    const s = String(line || "").trim();
-    if (!s) return "";
-    if (/^\[error(?:\/[^\]]+)?\]/i.test(s)) return "err";
-    if (/(ERROR|CRITICAL|FATAL|traceback|exception|Traceback|permission denied|请求失败|执行失败|命令解析失败|未知命令|权限不足)/.test(s)) return "err";
-    if (/^\[info/i.test(s) || /^(INFO|WARN|WARNING|NOTICE|tool:|可用工具)/i.test(s)) return "info";
-    if (/^\(已跳过/.test(s) || /^\s*$/.test(s)) return "dim";
-    return "";
-  }
-
-  function renderTermLines(text) {
-    if (!text) return '<span style="color:var(--text-dim);padding:16px;">(空文件)</span>';
-    const isJson = text.trim().startsWith("{") || text.trim().startsWith("[");
-    if (isJson) {
-      const escaped = text.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
-      return `<div class="term-line"><span class="term-prompt">tinda@agent ~ % </span><span class="term-out-json">${escaped}</span></div>`;
-    }
-    const lines = text.split("\n");
-    if (lines.length > 2000) lines.length = 2000;
-    return lines.map(line => {
-      const cls = classifyLine(line);
-      const escaped = line.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
-      const colorClass = cls === "err" ? "term-out-err" : cls === "info" ? "term-out-info" : cls === "dim" ? "term-out-dim" : "term-out-normal";
-      return `<div class="term-line"><span class="term-prompt">tinda@agent ~ % </span><span class="${colorClass}">${escaped || " "}</span></div>`;
-    }).join("");
   }
 
   function fmtBytes(n) {
@@ -418,13 +374,13 @@
       if (activeFile) await readActiveFile();
       else {
         titleEl.textContent = "未选择文件";
-        logTextEl.innerHTML = '<span style="color:var(--text-dim);padding:16px;">请选择左侧日志文件。</span>';
+        logTextEl.textContent = "请选择左侧日志文件。";
       }
     } catch (e) {
       filesCache = [];
       renderFiles([]);
       statusEl.textContent = `读取失败: ${String(e?.message || e)}`;
-      logTextEl.innerHTML = '<span class="term-out-err" style="padding:16px;">读取日志列表失败。</span>';
+      logTextEl.textContent = "读取日志列表失败。";
     }
   }
 
@@ -441,11 +397,11 @@
       const data = await res.json().catch(() => ({}));
       if (!res.ok || data?.ok === false) throw new Error(String(data?.error || `HTTP ${res.status}`));
       const text = Array.isArray(data?.lines) ? data.lines.join("\n") : "";
-      logTextEl.innerHTML = renderTermLines(text);
+      logTextEl.textContent = text || "(空文件)";
       statusEl.textContent = `已加载 ${data?.line_count || 0} 行` + (data?.truncated ? "（尾部截断）" : "");
       logTextEl.scrollTop = logTextEl.scrollHeight;
     } catch (e) {
-      logTextEl.innerHTML = '<span class="term-out-err" style="padding:16px;">读取日志失败。</span>';
+      logTextEl.textContent = "读取日志失败。";
       statusEl.textContent = `读取失败: ${String(e?.message || e)}`;
     }
   }
@@ -471,11 +427,11 @@
         source_path: data?.source_path || "",
         event: data?.event || {},
       };
-      logTextEl.innerHTML = renderTermLines(JSON.stringify(payload, null, 2));
+      logTextEl.textContent = JSON.stringify(payload, null, 2);
       statusEl.textContent = `查询成功: #${String(data?.id || "")}`;
       logTextEl.scrollTop = 0;
     } catch (e) {
-      logTextEl.innerHTML = '<span class="term-out-err" style="padding:16px;">按ID查询失败。</span>';
+      logTextEl.textContent = "按ID查询失败。";
       statusEl.textContent = `查询失败: ${String(e?.message || e)}`;
     }
   }
