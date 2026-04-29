@@ -178,6 +178,9 @@ def tool(tool_perm: int, tool_des: str, must: bool = False) -> Callable:
         else:
             SPARE_TOOL[tool_name] = tool_info
         _invalidate_tool_caches()
+        import inspect as _inspect
+        if "_caller_perm" in _inspect.signature(func).parameters:
+            _caller_perm_funcs.add(id(func))
 
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
@@ -264,7 +267,8 @@ def run_tool(tool_name: str, user_perm: int, *args, **kwargs):
         },
     )
     try:
-        kwargs.setdefault("_caller_perm", int(user_perm))
+        if id(tool_info["func"]) in _caller_perm_funcs:
+            kwargs["_caller_perm"] = int(user_perm)
         result = tool_info["func"](*args, **kwargs)
         audit_event(
             op_type="TOOL_EXECUTE",
@@ -289,6 +293,7 @@ def run_tool(tool_name: str, user_perm: int, *args, **kwargs):
 
 _all_tools_cache: dict[str, dict] | None = None
 _schema_cache: dict[int, list[dict]] = {}
+_caller_perm_funcs: set[int] = set()  # id(func) for tools that accept _caller_perm
 
 
 def _invalidate_tool_caches() -> None:
