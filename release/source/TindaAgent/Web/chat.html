@@ -1676,6 +1676,50 @@
       font-size: 11px; color: var(--text-dim); cursor: pointer;
       margin-left: 6px; text-decoration: underline;
     }
+
+    .term-exec-bubble {
+      background: linear-gradient(180deg, #fff7fb 0%, #ffeef6 100%);
+      border: 1.5px solid rgba(251,113,133,0.35);
+      border-radius: 16px;
+      margin: 4px 0;
+      overflow: hidden;
+      box-shadow: 0 2px 12px rgba(251,113,133,0.10);
+    }
+    .term-exec-head {
+      display: flex; align-items: center; gap: 8px;
+      padding: 7px 10px;
+      background: linear-gradient(90deg, rgba(255,110,180,0.08), rgba(192,132,252,0.06));
+      border-bottom: 1px solid rgba(251,113,133,0.14);
+    }
+    .term-exec-dots { display: flex; gap: 5px; flex-shrink: 0; }
+    .term-exec-dot { width: 7px; height: 7px; border-radius: 50%; box-shadow: 0 1px 3px rgba(61,31,47,0.12); }
+    .term-exec-dot:nth-child(1) { background: #fb7185; }
+    .term-exec-dot:nth-child(2) { background: #f59e0b; }
+    .term-exec-dot:nth-child(3) { background: #34d399; }
+    .term-exec-title { font-size: 11px; font-weight: 700; color: #9d174d; letter-spacing: 0.2px; flex: 1; }
+    .term-exec-status { font-size: 10px; font-weight: 700; padding: 1px 8px; border-radius: 999px; flex-shrink: 0; }
+    .term-exec-status.ok { background: #dcfce7; color: #166534; }
+    .term-exec-status.err { background: #fef2f2; color: #dc2626; }
+    .term-exec-cmd {
+      padding: 6px 10px;
+      font-family: "JetBrains Mono", monospace; font-size: 12px;
+      color: #db2777; font-weight: 600;
+      border-bottom: 1px solid rgba(251,113,133,0.10);
+    }
+    .term-exec-output {
+      padding: 6px 10px;
+      font-family: "JetBrains Mono","Fira Code",monospace;
+      font-size: 12px; line-height: 1.55; color: #334155;
+      white-space: pre-wrap; word-break: break-word;
+      max-height: 300px; overflow-y: auto;
+    }
+    .term-exec-output::-webkit-scrollbar { width: 4px; }
+    .term-exec-output::-webkit-scrollbar-thumb { background: rgba(251,113,133,0.3); border-radius: 99px; }
+    .term-exec-foot {
+      padding: 4px 10px; font-size: 10px; font-weight: 600; color: var(--text-dim);
+      border-top: 1px solid rgba(251,113,133,0.10);
+      display: flex; gap: 10px;
+    }
   </style>
 </head>
 <body>
@@ -2874,6 +2918,15 @@
         return;
       }
 
+      if (entryType === "terminal_exec") {
+        clearEmptyState();
+        const execBubble = renderTermExecBubble(entry);
+        const row = createMsgRow("user", execBubble);
+        messagesEl.appendChild(row);
+        hasChatBubble = true;
+        return;
+      }
+
       if (entryType === "terminal_confirm") {
         clearEmptyState();
         const confirmEl = renderTermConfirmEntry(entry);
@@ -3114,6 +3167,44 @@
     row.appendChild(avatar);
     if (contentEl instanceof Node) row.appendChild(contentEl);
     return row;
+  }
+
+  function renderTermExecBubble(entry) {
+    let data;
+    try { data = JSON.parse(entry.content || "{}"); } catch { data = {}; }
+    const cmd = data.cmd || "";
+    const output = data.output || "(no output)";
+    const rc = data.returncode !== null && data.returncode !== undefined ? String(data.returncode) : "-";
+    const ok = data.status === "ok";
+
+    const bubble = document.createElement("div");
+    bubble.className = "term-exec-bubble";
+
+    const head = document.createElement("div");
+    head.className = "term-exec-head";
+    head.innerHTML = `<span class="term-exec-dots"><span class="term-exec-dot"></span><span class="term-exec-dot"></span><span class="term-exec-dot"></span></span>
+      <span class="term-exec-title">终端执行</span>
+      <span class="term-exec-status ${ok ? "ok" : "err"}">${ok ? "完成" : "失败"}</span>`;
+    bubble.appendChild(head);
+
+    if (cmd) {
+      const cmdEl = document.createElement("div");
+      cmdEl.className = "term-exec-cmd";
+      cmdEl.textContent = `tinda@agent ~ % ${cmd}`;
+      bubble.appendChild(cmdEl);
+    }
+
+    const outEl = document.createElement("div");
+    outEl.className = "term-exec-output";
+    outEl.textContent = output;
+    bubble.appendChild(outEl);
+
+    const foot = document.createElement("div");
+    foot.className = "term-exec-foot";
+    foot.innerHTML = `<span>返回码 ${rc}</span>`;
+    bubble.appendChild(foot);
+
+    return bubble;
   }
 
   function renderTermConfirmEntry(entry) {

@@ -1099,6 +1099,32 @@ def _tool_trace_to_terminal_items(tool_trace: list[dict] | None) -> list[dict]:
                 "is_summary": False,
             }
         )
+
+        # run_terminal: 额外生成聊天内联终端气泡
+        inner_tool = ""
+        args = step.get("arguments")
+        if isinstance(args, dict):
+            inner_tool = str(args.get("tool_name", "") or "").strip()
+        if inner_tool == "run_terminal" and isinstance(result, dict):
+            inner = result.get("result")
+            if isinstance(inner, dict):
+                cmd = str(inner.get("cmd", "") or "")
+                output = str(inner.get("output", "") or "(no output)")
+                rc = inner.get("returncode", None)
+                exec_data = json.dumps({
+                    "cmd": cmd,
+                    "output": output,
+                    "returncode": rc,
+                    "status": "ok" if inner.get("ok") else "error",
+                }, ensure_ascii=False)
+                items.append({
+                    "id": f"m_{uuid.uuid4().hex[:16]}",
+                    "role": "user",
+                    "content": exec_data,
+                    "entry_type": "terminal_exec",
+                    "created_at": _now_iso(),
+                    "is_summary": False,
+                })
     return items
 
 
@@ -1988,6 +2014,7 @@ async def delete_session(session_id: str):
     ok = _store.delete_session(session_id)
     _sessions.pop(session_id, None)
     _session_last_access.pop(session_id, None)
+    _tool_runtime.stop_session(session_id)
     if not ok:
         return JSONResponse({"ok": False, "error": "session not found"}, status_code=404)
     return JSONResponse({"ok": True, "session_id": session_id})
@@ -2544,6 +2571,7 @@ async def import_record_compat(req: ImportRecordRequest):
     if not rows:
         return JSONResponse({"ok": False, "error": "记录不存在或不再支持旧格式导入"}, status_code=400)
     _store.delete_session(req.session_id)
+    _tool_runtime.stop_session(req.session_id)
     _store.create_session(req.session_id, title="新对话")
     _store.append_messages(req.session_id, rows)
     return JSONResponse({"ok": True, "session_id": req.session_id, "entries": rows})

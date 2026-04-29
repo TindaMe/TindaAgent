@@ -18,7 +18,7 @@ class SessionStoreError(ValueError):
 
 
 ROLE_SET = {"user", "assistant", "system"}
-ENTRY_TYPES = {"chat", "notice", "tool_marker", "terminal", "attachment", "terminal_confirm"}
+ENTRY_TYPES = {"chat", "notice", "tool_marker", "terminal", "attachment", "terminal_confirm", "terminal_exec"}
 TERMINAL_KINDS = {"", "cmd", "out", "sep"}
 TERMINAL_CLASSES = {"", "err", "info", "dim"}
 MAX_MSG_CHARS = 64000
@@ -165,10 +165,12 @@ class SessionStore:
         if self._meta_write_count >= self._META_FLUSH_EVERY:
             self._sessions_dirty = True
         if self._sessions_dirty and self._sessions_cache is not None:
-            payload = {"sessions": sorted(
-                list(self._sessions_cache.values()),
-                key=lambda x: str(x.get("updated_at", "")), reverse=True)}
-            self._write_sessions(payload)
+            with self._lock:
+                if self._sessions_dirty and self._sessions_cache is not None:
+                    payload = {"sessions": sorted(
+                        list(self._sessions_cache.values()),
+                        key=lambda x: str(x.get("updated_at", "")), reverse=True)}
+                    self._write_sessions(payload)
 
     def _messages_path(self, session_id: str) -> Path:
         sid = _safe_session_id(session_id)
@@ -177,12 +179,13 @@ class SessionStore:
         return self.messages_dir / f"{sid}.jsonl"
 
     def _touch_msg_cache(self, sid: str) -> None:
-        if sid in self._msg_cache_order:
-            self._msg_cache_order.remove(sid)
-        self._msg_cache_order.append(sid)
-        while len(self._msg_cache_order) > self._MSG_CACHE_MAX:
-            evicted = self._msg_cache_order.pop(0)
-            self._msg_cache.pop(evicted, None)
+        with self._lock:
+            if sid in self._msg_cache_order:
+                self._msg_cache_order.remove(sid)
+            self._msg_cache_order.append(sid)
+            while len(self._msg_cache_order) > self._MSG_CACHE_MAX:
+                evicted = self._msg_cache_order.pop(0)
+                self._msg_cache.pop(evicted, None)
 
     def _load_messages(self, session_id: str) -> list[dict[str, Any]]:
         sid = _safe_session_id(session_id)
@@ -445,6 +448,8 @@ class SessionStore:
             if cached is not None:
                 cached.extend(additions)
                 self._touch_msg_cache(sid)
+            else:
+                self._load_messages(sid)
 
             # 只从缓存取计数，避免全量读取
             meta = self._sessions_cache.get(sid) if self._sessions_cache else None
