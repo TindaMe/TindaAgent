@@ -259,9 +259,12 @@
       font-size: 12.5px; line-height: 1.65; font-weight: 500;
       display: flex;
     }
-    .term-out-msg { color: #166534; }
+    .term-prompt { color: #db2777; font-weight: 700; user-select: none; flex-shrink: 0; }
+    .term-out-normal { color: #166534; }
     .term-out-err { color: #dc2626; font-weight: 600; }
-    .term-out-warn { color: #f97316; font-weight: 600; }
+    .term-out-info { color: #2563eb; font-weight: 600; }
+    .term-out-dim { color: #94a3b8; }
+    .term-out-json { color: #7c3aed; }
     .empty {
       color: var(--text-dim);
       font-size: 12px;
@@ -349,32 +352,35 @@
 
   function classifyLine(line) {
     const s = String(line || "").trim();
-    if (!s) return "msg";
+    if (!s) return "";
+    if (/^\[error(?:\/[^\]]+)?\]/i.test(s)) return "err";
     if (/(ERROR|CRITICAL|FATAL|traceback|exception|Traceback|permission denied|请求失败|执行失败|命令解析失败|未知命令|权限不足)/.test(s)) return "err";
-    if (/(WARN|WARNING|警告)/i.test(s)) return "warn";
-    return "msg";
+    if (/^\[info/i.test(s) || /^(INFO|WARN|WARNING|NOTICE|tool:|可用工具)/i.test(s)) return "info";
+    if (/^\(已跳过/.test(s) || /^\s*$/.test(s)) return "dim";
+    return "";
   }
 
   function renderTermLines(text) {
     if (!text) return '<span style="color:var(--text-dim);padding:16px;">(空文件)</span>';
     const isJson = text.trim().startsWith("{") || text.trim().startsWith("[");
-    const dots = '<span class="term-line-dots"><span class="term-line-dot"></span><span class="term-line-dot"></span><span class="term-line-dot"></span></span>';
     if (isJson) {
+      const dots = '<span class="term-line-dots"><span class="term-line-dot"></span><span class="term-line-dot"></span><span class="term-line-dot"></span></span>';
       const escaped = text.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
       return `<div class="term-line">
         <div class="term-line-head">${dots}<span class="term-line-label">audit result</span></div>
-        <div class="term-line-body"><span class="term-out-msg">${escaped}</span></div>
+        <div class="term-line-body"><span class="term-prompt">tinda@agent ~ % </span><span class="term-out-json">${escaped}</span></div>
       </div>`;
     }
     const lines = text.split("\n");
     if (lines.length > 2000) lines.length = 2000;
+    const dots = '<span class="term-line-dots"><span class="term-line-dot"></span><span class="term-line-dot"></span><span class="term-line-dot"></span></span>';
     return lines.map((line, i) => {
       const cls = classifyLine(line);
       const escaped = line.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
-      const colorClass = cls === "err" ? "term-out-err" : cls === "warn" ? "term-out-warn" : "term-out-msg";
+      const colorClass = cls === "err" ? "term-out-err" : cls === "info" ? "term-out-info" : cls === "dim" ? "term-out-dim" : "term-out-normal";
       return `<div class="term-line">
         <div class="term-line-head">${dots}<span class="term-line-label">log #${i + 1}</span></div>
-        <div class="term-line-body"><span class="${colorClass}">${escaped || " "}</span></div>
+        <div class="term-line-body"><span class="term-prompt">tinda@agent ~ % </span><span class="${colorClass}">${escaped || " "}</span></div>
       </div>`;
     }).join("");
   }
