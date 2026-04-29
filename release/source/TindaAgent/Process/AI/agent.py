@@ -51,7 +51,7 @@ class Agent:
         self._fewshot = _build_fewshot(_VERSION)
         self._max_turns = max(1, int(max_turns))
         self.max_context_tokens = max(100, min(10_000_000, int(max_context_tokens)))
-        self.history: list[dict] = self._build_base_history()
+        self.history: list[dict] = self._get_cached_base()
         self._client = client
         self.total_estimated_tokens: int = 0
 
@@ -62,6 +62,17 @@ class Agent:
 
     def _build_base_history(self) -> list[dict]:
         return [{"role": "system", "content": self._compose_system_prompt()}] + [m.copy() for m in self._fewshot]
+
+    def _get_cached_base(self) -> list[dict]:
+        """惰性缓存：仅在 system_prompt 或 memory_context 变化时重建。"""
+        new_key = self._compose_system_prompt()
+        cached = getattr(self, "_cached_base", None)
+        cached_key = getattr(self, "_cached_base_key", None)
+        if cached is not None and cached_key == new_key:
+            return cached
+        self._cached_base = self._get_cached_base()
+        self._cached_base_key = new_key
+        return self._cached_base
 
     def set_memory_context(self, memory_payload: dict) -> None:
         """
@@ -83,7 +94,7 @@ class Agent:
         """
         用处：限制历史长度，降低 token 开销并避免长上下文漂移
         """
-        base = self._build_base_history()
+        base = self._get_cached_base()
         base_len = len(base)
         if len(self.history) <= base_len:
             return
@@ -106,14 +117,14 @@ class Agent:
         """
         用处：导出当前对话消息（不含 system/fewshot 基座）
         """
-        base_len = len(self._build_base_history())
+        base_len = len(self._get_cached_base())
         return [m.copy() for m in self.history[base_len:]]
 
     def replace_conversation(self, messages: list[dict]) -> None:
         """
         用处：用外部消息替换当前对话（保留 system/fewshot 基座）
         """
-        base = self._build_base_history()
+        base = self._get_cached_base()
         conversation: list[dict] = []
         for msg in messages:
             if not isinstance(msg, dict):
@@ -230,4 +241,4 @@ class Agent:
         """
         用处： 清空对话历史，保留系统提示
         """
-        self.history = self._build_base_history()
+        self.history = self._get_cached_base()

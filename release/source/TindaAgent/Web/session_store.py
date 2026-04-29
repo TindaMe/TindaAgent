@@ -69,6 +69,10 @@ class SessionStore:
 
         self._lock = threading.RLock()
         self._session_locks: dict[str, threading.Lock] = {}
+        self._sessions_cache: dict[str, dict] | None = None
+        self._sessions_dirty = False
+        self._meta_write_count = 0
+        self._META_FLUSH_EVERY = 8
 
         if not self.sessions_file.exists():
             self._write_sessions({"sessions": []})
@@ -107,9 +111,15 @@ class SessionStore:
             return lock
 
     def _read_sessions(self) -> dict[str, Any]:
+        if self._sessions_cache is not None:
+            return {"sessions": list(self._sessions_cache.values())}
         try:
             data = json.loads(self.sessions_file.read_text(encoding="utf-8"))
             if isinstance(data, dict) and isinstance(data.get("sessions"), list):
+                cache: dict[str, dict] = {}
+                for it in data["sessions"]:
+                    cache[str(it.get("id", ""))] = it
+                self._sessions_cache = cache
                 return data
         except Exception:
             pass
@@ -117,6 +127,10 @@ class SessionStore:
             try:
                 data = json.loads(self.legacy_sessions_file.read_text(encoding="utf-8"))
                 if isinstance(data, dict) and isinstance(data.get("sessions"), list):
+                    cache: dict[str, dict] = {}
+                    for it in data["sessions"]:
+                        cache[str(it.get("id", ""))] = it
+                    self._sessions_cache = cache
                     audit_event(
                         op_type="SYSTEM_READ",
                         subsystem="storage_migration",
@@ -128,12 +142,30 @@ class SessionStore:
                     return data
             except Exception:
                 pass
+        self._sessions_cache = {}
         return {"sessions": []}
 
     def _write_sessions(self, payload: dict[str, Any]) -> None:
+        self._sessions_dirty = False
+        self._meta_write_count = 0
         temp = self.sessions_file.with_suffix(".json.tmp")
         temp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         temp.replace(self.sessions_file)
+        # sync cache
+        cache: dict[str, dict] = {}
+        for it in payload.get("sessions", []):
+            cache[str(it.get("id", ""))] = it
+        self._sessions_cache = cache
+
+    def _maybe_flush_sessions(self) -> None:
+        self._meta_write_count += 1
+        if self._meta_write_count >= self._META_FLUSH_EVERY:
+            self._sessions_dirty = True
+        if self._sessions_dirty and self._sessions_cache is not None:
+            payload = {"sessions": sorted(
+                list(self._sessions_cache.values()),
+                key=lambda x: str(x.get("updated_at", "")), reverse=True)}
+            self._write_sessions(payload)
 
     def _messages_path(self, session_id: str) -> Path:
         sid = _safe_session_id(session_id)
@@ -195,31 +227,19 @@ class SessionStore:
         if not sid:
             raise SessionStoreError("session_id 非法")
 
-        payload = self._read_sessions()
-        sessions = payload.get("sessions", [])
         now = _now_iso()
-        idx = -1
-        for i, it in enumerate(sessions):
-            if str(it.get("id", "")) == sid:
-                idx = i
-                break
-
-        if idx < 0:
-            item = {
-                "id": sid,
-                "title": "新对话",
-                "created_at": now,
-                "updated_at": now,
-                "message_count": 0,
-                "reset_anchor_msg_id": "",
-                "summary_anchor_msg_id": "",
-                "latest_summary_message_id": "",
-                "max_context_tokens": 16000,
+        cache = self._sessions_cache if self._sessions_cache is not None else {}
+        if sid in cache:
+            row = cache[sid]
+        else:
+            row = {
+                "id": sid, "title": "新对话", "created_at": now,
+                "updated_at": now, "message_count": 0,
+                "reset_anchor_msg_id": "", "summary_anchor_msg_id": "",
+                "latest_summary_message_id": "", "max_context_tokens": 16000,
             }
-            sessions.append(item)
-            idx = len(sessions) - 1
+            cache[sid] = row
 
-        row = dict(sessions[idx])
         row.setdefault("reset_anchor_msg_id", "")
         row.setdefault("summary_anchor_msg_id", "")
         row.setdefault("latest_summary_message_id", "")
@@ -238,11 +258,9 @@ class SessionStore:
             row["message_count"] = max(0, int(message_count))
         if max_context_tokens is not None:
             row["max_context_tokens"] = max(100, min(10_000_000, int(max_context_tokens)))
-        sessions[idx] = row
 
-        sessions.sort(key=lambda x: str(x.get("updated_at", "")), reverse=True)
-        payload["sessions"] = sessions
-        self._write_sessions(payload)
+        self._sessions_cache = cache
+        self._maybe_flush_sessions()
         return row
 
     def create_session(self, session_id: str | None = None, title: str = "新对话") -> dict[str, Any]:
@@ -386,36 +404,26 @@ class SessionStore:
         lock = self._get_session_lock(sid)
         with lock:
             self.ensure_session(sid)
-            old = self._load_messages(sid)
             additions: list[dict[str, Any]] = []
             for item in messages:
                 n = self._normalize_message(item)
                 if n is not None:
                     additions.append(n)
             if not additions:
-                audit_event(
-                    op_type="PUBLIC_WRITE",
-                    subsystem="session",
-                    func="SessionStore.append_messages",
-                    file_path=_THIS_FILE,
-                    content=f"append_messages_skipped session_id={sid}",
-                    extra={"added": 0, "message_count": len(old), "session_id": sid},
-                )
-                return {"session_id": sid, "added": 0, "message_count": len(old)}
-            merged = old + additions
-            merged.sort(key=lambda x: str(x.get("created_at", "")))
-            self._write_messages(sid, merged)
-            self._touch_session_meta(sid, message_count=len(merged))
-            self._render_exports_for_session(sid)
-            audit_event(
-                op_type="PUBLIC_WRITE",
-                subsystem="session",
-                func="SessionStore.append_messages",
-                file_path=_THIS_FILE,
-                content=f"append_messages_done session_id={sid}",
-                extra={"added": len(additions), "message_count": len(merged), "session_id": sid},
-            )
-            return {"session_id": sid, "added": len(additions), "message_count": len(merged)}
+                return {"session_id": sid, "added": 0}
+
+            # 增量追加：只写新行，不重写整个文件
+            path = self._messages_path(sid)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            lines = [json.dumps(item, ensure_ascii=False) for item in additions]
+            with path.open("a", encoding="utf-8") as fp:
+                fp.write("\n".join(lines) + "\n")
+
+            # 只从缓存取计数，避免全量读取
+            meta = self._sessions_cache.get(sid) if self._sessions_cache else None
+            new_count = max(0, int(meta.get("message_count", 0) if meta else 0)) + len(additions)
+            self._touch_session_meta(sid, message_count=new_count)
+            return {"session_id": sid, "added": len(additions), "message_count": new_count}
 
     def set_session_title(self, session_id: str, title: str) -> dict[str, Any]:
         sid = _safe_session_id(session_id)

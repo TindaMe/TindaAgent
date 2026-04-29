@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import atexit
 import gzip
 import json
 import os
 import shutil
 import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -67,6 +69,9 @@ class GlobalAuditEngine:
     用处：全局唯一审计引擎（线程安全、跨重启自增ID、JSONL+文本镜像）。
     """
 
+    _BATCH_SIZE = 16
+    _BATCH_MAX_AGE_S = 3.0
+
     def __init__(self, log_root: Path | None = None) -> None:
         self._lock = threading.RLock()
         self._thread_local = threading.local()
@@ -74,6 +79,9 @@ class GlobalAuditEngine:
         self._files = self._build_files(log_root)
         self._counter_file = self._files.root / "id_counter.txt"
         self._current_id = self._load_counter()
+        self._pending: list[tuple[dict, str, str]] = []
+        self._pending_last_flush: float = 0.0
+        atexit.register(self.flush)
 
     @staticmethod
     def _build_files(log_root: Path | None) -> _AuditFiles:
@@ -213,6 +221,65 @@ class GlobalAuditEngine:
         with subsystem_file.open("a", encoding="utf-8") as fp:
             fp.write(text_line + "\n")
 
+    def flush(self) -> None:
+        with self._lock:
+            pending = self._pending
+            self._pending = []
+            self._pending_last_flush = 0.0
+        if not pending:
+            return
+        try:
+            self._write_batch(pending)
+        except Exception as e:
+            self._safe_record_error("batch_flush_failed", {"count": len(pending), "error": str(e)})
+
+    def _write_batch(self, records: list[tuple[dict, str, str]]) -> None:
+        self._rotate_if_needed()
+        idx: dict[str, int] = {}
+        try:
+            idx_text = self._files.total_idx.read_text(encoding="utf-8")
+            idx = json.loads(idx_text) if idx_text.strip() else {}
+            if not isinstance(idx, dict):
+                idx = {}
+        except Exception:
+            idx = {}
+        offset = self._files.total_jsonl.stat().st_size if self._files.total_jsonl.exists() else 0
+
+        jsonl_lines: list[str] = []
+        text_lines: list[str] = []
+        subsystem_buf: dict[str, list[str]] = {}
+
+        for json_event, text_line, subsystem in records:
+            eid = int(json_event["id"])
+            jsonl_lines.append(json.dumps(json_event, ensure_ascii=False, default=str))
+            text_lines.append(text_line)
+            idx[str(eid)] = int(offset)
+            offset += len(jsonl_lines[-1].encode("utf-8")) + 1
+            subsystem_buf.setdefault(subsystem, []).append(text_line)
+
+        with self._files.total_jsonl.open("a", encoding="utf-8") as fp:
+            fp.write("\n".join(jsonl_lines) + "\n")
+        with self._files.total_text.open("a", encoding="utf-8") as fp:
+            fp.write("\n".join(text_lines) + "\n")
+        idx["_write_count"] = int(idx.get("_write_count", 0)) + len(records)
+        try:
+            self._files.total_idx.write_text(json.dumps(idx, ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            pass
+        for subsystem, lines in subsystem_buf.items():
+            sfile = self._files.root / self._subsystem_file_name(subsystem)
+            with sfile.open("a", encoding="utf-8") as fp:
+                fp.write("\n".join(lines) + "\n")
+
+    def _maybe_flush(self) -> None:
+        if not self._pending:
+            return
+        now = time.monotonic()
+        count_ok = len(self._pending) >= self._BATCH_SIZE
+        age_ok = self._pending_last_flush > 0 and (now - self._pending_last_flush) >= self._BATCH_MAX_AGE_S
+        if count_ok or age_ok:
+            self.flush()
+
     def event(
         self,
         *,
@@ -252,20 +319,14 @@ class GlobalAuditEngine:
         text_line = self._format_text_line(record)
         try:
             with self._lock:
-                self._write_lines(
-                    json_event=record,
-                    text_line=text_line,
-                    subsystem=record["subsystem"],
-                )
+                self._pending.append((record, text_line, record["subsystem"]))
+                if not self._pending_last_flush:
+                    self._pending_last_flush = time.monotonic()
+                self._maybe_flush()
         except Exception as e:
             self._safe_record_error(
                 "write_event_failed",
-                {
-                    "id": eid,
-                    "error": str(e),
-                    "subsystem": record["subsystem"],
-                    "func": record["func"],
-                },
+                {"id": eid, "error": str(e), "subsystem": record["subsystem"], "func": record["func"]},
             )
         return eid
 
