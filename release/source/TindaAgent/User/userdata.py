@@ -24,7 +24,7 @@ def _rebuild_indexes() -> None:
     for u in _user_registry:
         _by_uid[u.uid] = u
         _by_name[u.name] = u
-        t = str(getattr(u, "_token", "") or "").strip()
+        t = str(u.token or "").strip()
         if t:
             _by_token[t] = u
 
@@ -32,7 +32,7 @@ def _rebuild_indexes() -> None:
 def _index_add(u: "UserManager") -> None:
     _by_uid[u.uid] = u
     _by_name[u.name] = u
-    t = str(getattr(u, "_token", "") or "").strip()
+    t = str(u.token or "").strip()
     if t:
         _by_token[t] = u
 
@@ -41,7 +41,7 @@ def _index_remove(u: "UserManager") -> None:
     _by_uid.pop(u.uid, None)
     if _by_name.get(u.name) is u:
         _by_name.pop(u.name, None)
-    t = str(getattr(u, "_token", "") or "").strip()
+    t = str(u.token or "").strip()
     if _by_token.get(t) is u:
         _by_token.pop(t, None)
 
