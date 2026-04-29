@@ -70,7 +70,7 @@ class Agent:
         cached_key = getattr(self, "_cached_base_key", None)
         if cached is not None and cached_key == new_key:
             return cached
-        self._cached_base = self._get_cached_base()
+        self._cached_base = self._build_base_history()
         self._cached_base_key = new_key
         return self._cached_base
 
