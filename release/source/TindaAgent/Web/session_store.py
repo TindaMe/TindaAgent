@@ -73,6 +73,9 @@ class SessionStore:
         self._sessions_dirty = False
         self._meta_write_count = 0
         self._META_FLUSH_EVERY = 8
+        self._msg_cache: dict[str, list[dict]] = {}
+        self._msg_cache_order: list[str] = []
+        self._MSG_CACHE_MAX = 50
 
         if not self.sessions_file.exists():
             self._write_sessions({"sessions": []})
@@ -173,10 +176,23 @@ class SessionStore:
             raise SessionStoreError("session_id 非法")
         return self.messages_dir / f"{sid}.jsonl"
 
+    def _touch_msg_cache(self, sid: str) -> None:
+        if sid in self._msg_cache_order:
+            self._msg_cache_order.remove(sid)
+        self._msg_cache_order.append(sid)
+        while len(self._msg_cache_order) > self._MSG_CACHE_MAX:
+            evicted = self._msg_cache_order.pop(0)
+            self._msg_cache.pop(evicted, None)
+
     def _load_messages(self, session_id: str) -> list[dict[str, Any]]:
-        path = self._messages_path(session_id)
-        legacy_path = None
         sid = _safe_session_id(session_id)
+        # 热缓存命中
+        cached = self._msg_cache.get(sid)
+        if cached is not None:
+            self._touch_msg_cache(sid)
+            return list(cached)
+        path = self._messages_path(sid)
+        legacy_path = None
         if self.legacy_messages_dir is not None and sid:
             legacy_path = self.legacy_messages_dir / f"{sid}.jsonl"
         if (not path.exists()) and legacy_path is not None and legacy_path.exists():
@@ -202,6 +218,8 @@ class SessionStore:
                 continue
             if isinstance(item, dict):
                 rows.append(item)
+        self._msg_cache[sid] = list(rows)
+        self._touch_msg_cache(sid)
         return rows
 
     def _write_messages(self, session_id: str, rows: list[dict[str, Any]]) -> None:
@@ -211,6 +229,10 @@ class SessionStore:
         temp = path.with_suffix(".jsonl.tmp")
         temp.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
         temp.replace(path)
+        sid = _safe_session_id(session_id)
+        if sid:
+            self._msg_cache[sid] = list(rows)
+            self._touch_msg_cache(sid)
 
     def _touch_session_meta(
         self,
@@ -418,6 +440,11 @@ class SessionStore:
             lines = [json.dumps(item, ensure_ascii=False) for item in additions]
             with path.open("a", encoding="utf-8") as fp:
                 fp.write("\n".join(lines) + "\n")
+            # 同步到热缓存
+            cached = self._msg_cache.get(sid)
+            if cached is not None:
+                cached.extend(additions)
+                self._touch_msg_cache(sid)
 
             # 只从缓存取计数，避免全量读取
             meta = self._sessions_cache.get(sid) if self._sessions_cache else None
