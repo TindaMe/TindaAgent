@@ -2062,6 +2062,76 @@ async def patch_session_config(session_id: str, req: SessionConfigRequest):
         return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
 
 
+class TerminalConfirmRequest(BaseModel):
+    session_id: str
+    confirm_id: str
+    action: str  # "allow" | "deny"
+
+
+@app.post("/terminal/confirm")
+async def terminal_confirm(req: TerminalConfirmRequest):
+    current = _require_login()
+    sid = str(req.session_id or "").strip()
+    cid = str(req.confirm_id or "").strip()
+    action = str(req.action or "").strip()
+    if not sid or not cid or action not in ("allow", "deny"):
+        return JSONResponse({"ok": False, "error": "invalid params"}, status_code=400)
+    if (int(current.get_perm()) & 511) != 511:
+        return JSONResponse({"ok": False, "error": "permission denied"}, status_code=403)
+
+    # 寻找并更新确认条目
+    rows = _store.load_messages(sid)
+    updated = False
+    for row in rows:
+        if row.get("id") == cid and row.get("entry_type") == "terminal_confirm":
+            row["content"] = json.dumps({
+                "status": action,
+                "cmd": json.loads(row.get("content", "{}")).get("cmd", ""),
+            }, ensure_ascii=False)
+            updated = True
+            break
+    if not updated:
+        return JSONResponse({"ok": False, "error": "confirm entry not found"}, status_code=404)
+
+    _store._write_messages(sid, rows)
+    return JSONResponse({"ok": True, "confirm_id": cid, "action": action})
+
+
+@app.get("/terminal/settings")
+async def get_terminal_settings():
+    current = _require_login()
+    if (int(current.get_perm()) & 511) != 511:
+        return JSONResponse({"ok": False, "error": "permission denied"}, status_code=403)
+    from TindaAgent.Process.Security.terminal_policy import load_settings
+    s = load_settings()
+    return JSONResponse({"ok": True, "whitelist": s.get("whitelist", []),
+                         "blacklist": s.get("blacklist", []),
+                         "bypass_terminal_confirm": s.get("bypass_terminal_confirm", False)})
+
+
+class TerminalSettingsRequest(BaseModel):
+    whitelist: list[str] | None = None
+    blacklist: list[str] | None = None
+    bypass_terminal_confirm: bool | None = None
+
+
+@app.put("/terminal/settings")
+async def update_terminal_settings(req: TerminalSettingsRequest):
+    current = _require_login()
+    if (int(current.get_perm()) & 511) != 511:
+        return JSONResponse({"ok": False, "error": "permission denied"}, status_code=403)
+    from TindaAgent.Process.Security.terminal_policy import load_settings, save_settings
+    s = load_settings()
+    if req.whitelist is not None:
+        s["whitelist"] = [str(x).strip() for x in req.whitelist if str(x).strip()]
+    if req.blacklist is not None:
+        s["blacklist"] = [str(x).strip() for x in req.blacklist if str(x).strip()]
+    if req.bypass_terminal_confirm is not None:
+        s["bypass_terminal_confirm"] = bool(req.bypass_terminal_confirm)
+    save_settings(s)
+    return JSONResponse({"ok": True, **s})
+
+
 @app.post("/chat")
 async def chat(req: ChatRequest):
     current = _require_login()

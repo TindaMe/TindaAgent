@@ -1625,6 +1625,57 @@
       color: #fff;
     }
     .config-dialog .btn.save:hover { color: #fff; opacity: 0.88; }
+
+    .term-confirm {
+      background: linear-gradient(180deg, #fffbeb 0%, #fef3c7 100%);
+      border: 1.5px solid rgba(245,158,11,0.4);
+      border-radius: 16px;
+      padding: 12px 14px;
+      margin: 6px 0;
+      box-shadow: 0 2px 12px rgba(245,158,11,0.10);
+    }
+    .term-confirm.collapsed .term-confirm-body { display: none; }
+    .term-confirm-head {
+      display: flex; align-items: center; gap: 8px;
+      font-size: 12px; font-weight: 700; color: #92400e;
+    }
+    .term-confirm-head .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .term-confirm-head .dot.pending { background: #f59e0b; }
+    .term-confirm-head .dot.allowed { background: #22c55e; }
+    .term-confirm-head .dot.denied { background: #ef4444; }
+    .term-confirm-body { margin-top: 8px; }
+    .term-confirm-cmd {
+      background: #1e1b2e; color: #e2e8f0;
+      font-family: "JetBrains Mono", monospace;
+      font-size: 12px; padding: 8px 10px; border-radius: 8px;
+      white-space: pre-wrap; word-break: break-all; max-height: 120px; overflow-y: auto;
+    }
+    .term-confirm-actions {
+      display: flex; gap: 8px; margin-top: 8px;
+    }
+    .term-confirm-btn {
+      padding: 5px 14px; border-radius: 999px;
+      font-size: 12px; font-weight: 700; font-family: inherit;
+      cursor: pointer; border: 1.5px solid transparent;
+      transition: all 0.15s;
+    }
+    .term-confirm-btn.allow {
+      background: #22c55e; color: #fff; border-color: #16a34a;
+    }
+    .term-confirm-btn.allow:hover { filter: brightness(0.92); }
+    .term-confirm-btn.deny {
+      background: #fff; color: #dc2626; border-color: #fca5a5;
+    }
+    .term-confirm-btn.deny:hover { background: #fef2f2; }
+    .term-confirm-result {
+      font-size: 12px; font-weight: 600; margin-top: 6px;
+    }
+    .term-confirm-result.allowed { color: #166534; }
+    .term-confirm-result.denied { color: #dc2626; }
+    .term-confirm-result .toggle-expand {
+      font-size: 11px; color: var(--text-dim); cursor: pointer;
+      margin-left: 6px; text-decoration: underline;
+    }
   </style>
 </head>
 <body>
@@ -2823,6 +2874,15 @@
         return;
       }
 
+      if (entryType === "terminal_confirm") {
+        clearEmptyState();
+        const confirmEl = renderTermConfirmEntry(entry);
+        const row = createMsgRow("user", confirmEl);
+        messagesEl.appendChild(row);
+        hasChatBubble = true;
+        return;
+      }
+
       if (entryType === "attachment") {
         clearEmptyState();
         addFileChipBubble(content);
@@ -3041,6 +3101,92 @@
     const m = text.match(/^\[文件: [^\n]+\]\n```[^\n]*\n[\s\S]*?\n```\n?/);
     if (m) return text.slice(m[0].length).trim();
     return text;
+  }
+
+  function createMsgRow(role, contentEl) {
+    const row = document.createElement("div");
+    row.className = "msg " + role;
+    const avatar = document.createElement("div");
+    avatar.className = "avatar";
+    avatar.innerHTML = role === "bot"
+      ? `<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"></circle><path d="M12 2.8v4.2M12 17v4.2M2.8 12h4.2M17 12h4.2M5.3 5.3l3 3M15.7 15.7l3 3M18.7 5.3l-3 3M8.3 15.7l-3 3"></path></svg>`
+      : `<svg viewBox="0 0 24 24"><path d="M20 21a8 8 0 0 0-16 0"></path><circle cx="12" cy="8" r="3.2"></circle></svg>`;
+    row.appendChild(avatar);
+    if (contentEl instanceof Node) row.appendChild(contentEl);
+    return row;
+  }
+
+  function renderTermConfirmEntry(entry) {
+    const content = entry.content || "{}";
+    let data;
+    try { data = JSON.parse(content); } catch { data = {}; }
+    const cmd = data.cmd || "";
+    const status = data.status || "pending";
+
+    const wrapper = document.createElement("div");
+    wrapper.className = "term-confirm" + (status !== "pending" ? " collapsed" : "");
+    wrapper.dataset.confirmId = entry.id || "";
+
+    const head = document.createElement("div");
+    head.className = "term-confirm-head";
+    const dotClass = status === "allowed" ? "allowed" : status === "denied" ? "denied" : "pending";
+    head.innerHTML = `<span class="dot ${dotClass}"></span><span>终端命令${status === "pending" ? "请求确认" : status === "allowed" ? "已允许" : "已拒绝"}</span>`;
+    wrapper.appendChild(head);
+
+    const body = document.createElement("div");
+    body.className = "term-confirm-body";
+    body.innerHTML = `<div class="term-confirm-cmd">${escapeHtml(cmd)}</div>`;
+
+    if (status === "pending") {
+      const actions = document.createElement("div");
+      actions.className = "term-confirm-actions";
+      const allowBtn = document.createElement("button");
+      allowBtn.className = "term-confirm-btn allow"; allowBtn.textContent = "允许执行";
+      allowBtn.onclick = () => confirmTerminalAction(entry.id, "allow", wrapper);
+      const denyBtn = document.createElement("button");
+      denyBtn.className = "term-confirm-btn deny"; denyBtn.textContent = "拒绝";
+      denyBtn.onclick = () => confirmTerminalAction(entry.id, "deny", wrapper);
+      actions.appendChild(allowBtn); actions.appendChild(denyBtn);
+      body.appendChild(actions);
+    } else {
+      const result = document.createElement("div");
+      result.className = "term-confirm-result " + status;
+      result.innerHTML = status === "allowed" ? "已允许执行"
+        : "已拒绝执行" + `<span class="toggle-expand" onclick="this.closest('.term-confirm').classList.toggle('collapsed')">展开</span>`;
+      body.appendChild(result);
+    }
+    wrapper.appendChild(body);
+    return wrapper;
+  }
+
+  async function confirmTerminalAction(confirmId, action, wrapperEl) {
+    const sid = getSessionId();
+    if (!sid) return;
+    try {
+      const res = await apiFetch("/terminal/confirm", {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({ session_id: sid, confirm_id: confirmId, action }),
+      });
+      const data = await res.json();
+      if (!res.ok || data?.ok === false) throw new Error(data?.error || "failed");
+      showToast(action === "allow" ? "命令已允许" : "命令已拒绝");
+      if (wrapperEl) {
+        wrapperEl.classList.add("collapsed");
+        const head = wrapperEl.querySelector(".term-confirm-head span:last-child");
+        if (head) head.textContent = action === "allow" ? "已允许" : "已拒绝";
+        const dot = wrapperEl.querySelector(".dot");
+        if (dot) { dot.classList.remove("pending"); dot.classList.add(action === "allow" ? "allowed" : "denied"); }
+        const body = wrapperEl.querySelector(".term-confirm-body");
+        if (body) {
+          body.innerHTML = `<div class="term-confirm-result ${action === "allow" ? "allowed" : "denied"}">${
+            action === "allow" ? "已允许执行" : "已拒绝执行"
+          }<span class="toggle-expand" onclick="this.closest('.term-confirm').classList.toggle('collapsed')">展开</span></div>`;
+        }
+      }
+    } catch(e) {
+      showToast(`操作失败：${String(e?.message || e)}`, "error");
+    }
   }
 
   function appendMarkdownToBotBubble(bubbleEl, extraText) {

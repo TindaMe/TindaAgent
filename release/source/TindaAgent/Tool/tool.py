@@ -3,6 +3,7 @@ import contextlib
 import io
 import json
 import re
+import subprocess
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
@@ -12,6 +13,7 @@ from TindaAgent.Process.Architecture import perm
 from TindaAgent.Process.Architecture.paths import get_memory_file
 from TindaAgent.Process.Observability import audit_event
 from TindaAgent.Process.Architecture.paths import get_log_root, get_legacy_log_root
+from TindaAgent.Process.Security import terminal_policy
 from TindaAgent.Permission import (
     has_perm,
     validate_registered_tool_perm,
@@ -262,6 +264,7 @@ def run_tool(tool_name: str, user_perm: int, *args, **kwargs):
         },
     )
     try:
+        kwargs.setdefault("_caller_perm", int(user_perm))
         result = tool_info["func"](*args, **kwargs)
         audit_event(
             op_type="TOOL_EXECUTE",
@@ -879,3 +882,47 @@ def get_log_event_by_id(id: str) -> dict[str, Any]:
         except Exception:
             continue
     return {"ok": False, "id": parsed_id, "error": "id not found"}
+
+
+@tool(perm.TOOL_EXECUTE | perm.PUBLIC_EXECUTE, "在终端执行一条 shell 命令（参数: cmd=命令字符串, timeout=超时秒数默认30, cwd=工作目录可选）。系统级操作(rm/mv/chmod等)需额外SYSTEM权限。", must=True)
+def run_terminal(cmd: str, timeout: int = 30, cwd: str | None = None, _caller_perm: int = 0) -> dict[str, Any]:
+    command = str(cmd or "").strip()
+    if not command:
+        return {"ok": False, "error": "cmd 不能为空"}
+
+    blacklisted = terminal_policy.check_blacklist(command)
+    if blacklisted:
+        return {"ok": False, "error": f"命令被黑名单拦截: {', '.join(blacklisted)}"}
+
+    sys_ops = terminal_policy.detect_system_operations(command)
+    if sys_ops and (_caller_perm & perm.SYSTEM_EXECUTE) != perm.SYSTEM_EXECUTE:
+        return {"ok": False, "error": f"命令涉及系统操作({', '.join(sys_ops)})，需要 SYSTEM_EXECUTE 权限，当前权限不足"}
+
+    try:
+        work_dir = str(cwd).strip() if cwd else None
+        if work_dir and not Path(work_dir).is_dir():
+            work_dir = None
+        result = subprocess.run(
+            command,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=max(1, min(int(timeout), 120)),
+            cwd=work_dir,
+            env={**os.environ, "PYTHONUNBUFFERED": "1"},
+        )
+        out = (result.stdout or "") + (result.stderr or "")
+        if len(out) > 8000:
+            out = out[:8000] + "\n...(output truncated)"
+        return {
+            "ok": True,
+            "cmd": command,
+            "stdout": result.stdout or "",
+            "stderr": result.stderr or "",
+            "returncode": result.returncode,
+            "output": out.strip() or "(no output)",
+        }
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": f"命令超时（>{timeout}s）: {command[:120]}"}
+    except Exception as e:
+        return {"ok": False, "error": str(e), "cmd": command[:120]}
