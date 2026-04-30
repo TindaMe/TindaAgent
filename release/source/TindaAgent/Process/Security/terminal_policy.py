@@ -75,6 +75,9 @@ def is_bypass_enabled(user_perm: int) -> bool:
     if (user_perm & 511) != 511:
         return False
     s = load_settings()
+    # 默认开启 bypass（未配置时直接允许执行）
+    if "bypass_terminal_confirm" not in s:
+        return True
     return bool(s.get("bypass_terminal_confirm", False))
 
 
