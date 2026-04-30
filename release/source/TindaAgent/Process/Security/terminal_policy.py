@@ -2,6 +2,7 @@
 终端命令执行策略：白名单/黑名单 + 系统操作检测 + bypass逻辑。
 """
 
+import json
 import re
 from pathlib import Path
 from typing import Any
@@ -55,7 +56,6 @@ def load_settings() -> dict[str, Any]:
 
 
 def save_settings(data: dict[str, Any]) -> None:
-    import json
     path = Path("~/.tinda/agent/terminal_settings.json").expanduser()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
