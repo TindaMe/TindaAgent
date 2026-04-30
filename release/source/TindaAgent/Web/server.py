@@ -2106,22 +2106,45 @@ async def terminal_confirm(req: TerminalConfirmRequest):
     if (int(current.get_perm()) & 511) != 511:
         return JSONResponse({"ok": False, "error": "permission denied"}, status_code=403)
 
-    # 寻找并更新确认条目
     rows = _store.load_messages(sid)
-    updated = False
+    confirm_row = None
     for row in rows:
         if row.get("id") == cid and row.get("entry_type") == "terminal_confirm":
-            row["content"] = json.dumps({
-                "status": action,
-                "cmd": json.loads(row.get("content", "{}")).get("cmd", ""),
-            }, ensure_ascii=False)
-            updated = True
+            confirm_row = row
             break
-    if not updated:
+    if confirm_row is None:
         return JSONResponse({"ok": False, "error": "confirm entry not found"}, status_code=404)
 
+    try:
+        data = json.loads(confirm_row.get("content", "{}"))
+    except Exception:
+        data = {}
+    cmd = str(data.get("cmd", "") or "").strip()
+
+    result = {"cmd": cmd, "status": action}
+    if action == "allow" and cmd:
+        import subprocess
+        try:
+            r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30,
+                               env={**os.environ, "PYTHONUNBUFFERED": "1"})
+            out = (r.stdout or "") + (r.stderr or "")
+            if len(out) > 8000:
+                out = out[:8000] + "\n...(output truncated)"
+            result["output"] = out.strip() or "(no output)"
+            result["returncode"] = r.returncode
+            result["executed"] = True
+        except subprocess.TimeoutExpired:
+            result["output"] = f"(命令超时 >30s)"
+            result["returncode"] = -1
+            result["executed"] = True
+        except Exception as e:
+            result["output"] = f"(执行失败: {e})"
+            result["returncode"] = -1
+            result["executed"] = True
+
+    confirm_row["content"] = json.dumps(result, ensure_ascii=False)
     _store._write_messages(sid, rows)
-    return JSONResponse({"ok": True, "confirm_id": cid, "action": action})
+    return JSONResponse({"ok": True, "confirm_id": cid, **result})
 
 
 @app.get("/terminal/settings")

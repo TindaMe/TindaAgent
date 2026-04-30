@@ -891,7 +891,7 @@ def get_log_event_by_id(id: str) -> dict[str, Any]:
 
 
 @tool(perm.TOOL_EXECUTE | perm.PUBLIC_EXECUTE, "在终端执行一条 shell 命令（参数: cmd=命令字符串, timeout=超时秒数默认30, cwd=工作目录可选）。系统级操作(rm/mv/chmod等)需额外SYSTEM权限。", must=True)
-def run_terminal(cmd: str, timeout: int = 30, cwd: str | None = None, _caller_perm: int = 0) -> dict[str, Any]:
+def run_terminal(cmd: str, timeout: int = 30, cwd: str | None = None, _caller_perm: int = 0, _confirmed: bool = False) -> dict[str, Any]:
     command = str(cmd or "").strip()
     if not command:
         return {"ok": False, "error": "cmd 不能为空"}
@@ -903,6 +903,15 @@ def run_terminal(cmd: str, timeout: int = 30, cwd: str | None = None, _caller_pe
     sys_ops = terminal_policy.detect_system_operations(command)
     if sys_ops and (_caller_perm & perm.SYSTEM_EXECUTE) != perm.SYSTEM_EXECUTE:
         return {"ok": False, "error": f"命令涉及系统操作({', '.join(sys_ops)})，需要 SYSTEM_EXECUTE 权限，当前权限不足"}
+
+    # 确认流程：bypass 关闭且未确认时，拒绝执行并提示需要确认
+    if not terminal_policy.is_bypass_enabled(_caller_perm) and not _confirmed:
+        return {
+            "ok": False,
+            "needs_confirmation": True,
+            "cmd": command,
+            "error": "终端命令需要用户确认后才能执行。请在设置中开启 bypass 模式或通过前端确认。",
+        }
 
     try:
         work_dir = str(cwd).strip() if cwd else None
