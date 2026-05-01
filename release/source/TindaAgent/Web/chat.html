@@ -129,6 +129,11 @@
       box-shadow: 0 0 0 3px rgba(34,197,94,0.18);
       animation: statusPulse 2.1s ease-in-out infinite;
     }
+    .status-dot.offline {
+      background: #ef4444;
+      box-shadow: 0 0 0 3px rgba(239,68,68,0.18);
+      animation: none;
+    }
     @keyframes statusPulse {
       0%, 100% { transform: scale(1); box-shadow: 0 0 0 3px rgba(34,197,94,0.18); }
       50%      { transform: scale(0.88); box-shadow: 0 0 0 6px rgba(34,197,94,0.05); }
@@ -1737,7 +1742,7 @@
   <div class="header-center">
     <span id="statusPill" class="status-pill">
       <span class="status-dot"></span>
-      <span class="status-text">AI Agent · 在线</span>
+      <span class="status-text">在线 · 新对话 · 0</span>
     </span>
   </div>
   <div class="header-right" id="headerRight">
@@ -1893,6 +1898,9 @@
   const recordsListEl = document.getElementById("recordsList");
   const recordsSearchInputEl = document.getElementById("recordsSearchInput");
   const toastEl = document.getElementById("tindaToast");
+  const statusPillEl = document.getElementById("statusPill");
+  const statusDotEl = statusPillEl ? statusPillEl.querySelector(".status-dot") : null;
+  const statusTextEl = statusPillEl ? statusPillEl.querySelector(".status-text") : null;
   const timeModeBtnEl = document.getElementById("timeModeBtn");
   const timeModePanelEl = document.getElementById("timeModePanel");
   const timeCustomBoxEl = document.getElementById("timeCustomBox");
@@ -1967,6 +1975,9 @@
   let recordsPanelOpen = false;
   let sessionsCache = [];
   let activeSessionTitle = "新对话";
+  let statusContextUsageLength = 0;
+  let gatewayOnline = true;
+  let gatewayHeartbeatTimer = 0;
   let toolPollTimer = 0;
   let toolLastSeq = 0;
   const processedTerminalSeq = new Set();
@@ -1993,6 +2004,7 @@
   let terminalConfirmPendingCount = 0;
   const TOOL_EVENTS_ERROR_REPORT_INTERVAL_MS = 15000;
   const TOOL_EVENTS_ERROR_AUTO_PAUSE_STREAK = 12;
+  const GATEWAY_HEARTBEAT_INTERVAL_MS = 12000;
   const TERM_MAX_LINES = 500;
   const TERM_FLUSH_BATCH = 120;
   const INPUT_PLACEHOLDER_DEFAULT = "跟 Tinda 说说话吧 ...";
@@ -2018,6 +2030,77 @@
       toastEl.classList.remove("show");
       toastTimer = 0;
     }, 2400);
+  }
+
+  function normalizeStatusCount(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n) || n < 0) return 0;
+    return Math.floor(n);
+  }
+
+  function renderHeaderStatus() {
+    const onlineText = gatewayOnline ? "在线" : "离线";
+    const sessionText = String(activeSessionTitle || "无会话").trim() || "无会话";
+    const usageText = String(normalizeStatusCount(statusContextUsageLength));
+    if (statusTextEl) {
+      statusTextEl.textContent = `${onlineText} · ${sessionText} · ${usageText}`;
+    }
+    if (statusDotEl) {
+      statusDotEl.classList.toggle("offline", !gatewayOnline);
+    }
+  }
+
+  function setGatewayOnlineState(isOnline) {
+    gatewayOnline = !!isOnline;
+    renderHeaderStatus();
+  }
+
+  async function probeGatewayOnline() {
+    try {
+      const res = await fetch("/system/version", {
+        method: "GET",
+        headers: authHeaders({ "Cache-Control": "no-cache" }),
+        cache: "no-store",
+      });
+      if (!res.ok) throw new Error(`http ${res.status}`);
+      setGatewayOnlineState(true);
+    } catch {
+      setGatewayOnlineState(false);
+    }
+  }
+
+  function startGatewayHeartbeat() {
+    if (gatewayHeartbeatTimer) {
+      clearInterval(gatewayHeartbeatTimer);
+      gatewayHeartbeatTimer = 0;
+    }
+    probeGatewayOnline();
+    gatewayHeartbeatTimer = setInterval(() => {
+      probeGatewayOnline();
+    }, GATEWAY_HEARTBEAT_INTERVAL_MS);
+  }
+
+  async function refreshContextUsageLength(sessionId = getSessionId()) {
+    const sid = String(sessionId || "").trim();
+    if (!sid) {
+      statusContextUsageLength = 0;
+      renderHeaderStatus();
+      return;
+    }
+    try {
+      const res = await apiFetch(`/sessions/${encodeURIComponent(sid)}/context-usage`, { method: "GET" });
+      if (!res.ok) throw new Error(`http ${res.status}`);
+      const data = await res.json();
+      const nextTitle = String(data?.title || "").trim();
+      if (nextTitle && nextTitle !== activeSessionTitle) {
+        activeSessionTitle = nextTitle;
+      }
+      statusContextUsageLength = normalizeStatusCount(data?.usage_length);
+      renderHeaderStatus();
+      setGatewayOnlineState(true);
+    } catch {
+      // 网关探测由独立心跳负责；这里保持上一次可用值，避免 UI 抖动。
+    }
   }
 
   function refreshComposerDisabledState() {
@@ -2505,8 +2588,8 @@
     if (!sid) return;
     localStorage.setItem(SESSION_KEY, sid);
     activeSessionTitle = String(title || "新对话");
-    const statusText = document.querySelector(".status-text");
-    if (statusText) statusText.textContent = `会话：${activeSessionTitle}`;
+    renderHeaderStatus();
+    refreshContextUsageLength(sid).catch(() => {});
     if (!silent) showToast(`已切换会话：${activeSessionTitle}`);
     toolLastSeq = 0;
     processedTerminalSeq.clear();
@@ -2817,8 +2900,8 @@
       } else {
         localStorage.removeItem(SESSION_KEY);
         activeSessionTitle = "无会话";
-        const statusText = document.querySelector(".status-text");
-        if (statusText) statusText.textContent = "会话：无会话";
+        statusContextUsageLength = 0;
+        renderHeaderStatus();
         toolLastSeq = 0;
         processedTerminalSeq.clear();
         stopToolPolling();
@@ -3077,6 +3160,7 @@
       const data = await res.json();
       const entries = Array.isArray(data.entries) ? data.entries : [];
       renderImportedEntries(entries);
+      await refreshContextUsageLength(sid);
     } catch (e) {
       reportErrorToTerminal(`读取当前会话记录失败：${String(e?.message || e)}`, { source: "session_record" });
     }
@@ -4699,6 +4783,7 @@
       }
     } finally {
       setMessageSendInFlight(false);
+      refreshContextUsageLength(sid).catch(() => {});
       inputEl.focus();
       removeFile();
     }
@@ -4822,6 +4907,8 @@
   if (!getAuthToken()) {
     location.href = "/";
   }
+  renderHeaderStatus();
+  startGatewayHeartbeat();
   const savedWidth = Number(localStorage.getItem(TERM_WIDTH_KEY));
   if (Number.isFinite(savedWidth) && savedWidth >= 180) {
     termWidth = Math.min(savedWidth, Math.max(180, Math.floor(window.innerWidth * 0.65)));

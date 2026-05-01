@@ -582,13 +582,27 @@ class SessionStore:
 
     def maybe_first_round_messages(self, session_id: str) -> tuple[str, str] | None:
         rows = self._load_messages(session_id)
-        user = [x for x in rows if x.get("role") == "user" and x.get("entry_type") == "chat"]
-        assistant = [x for x in rows if x.get("role") == "assistant" and x.get("entry_type") == "chat"]
-        if len(user) < 1 or len(assistant) < 1:
+        if not rows:
             return None
-        # 只在 exactly 1+1 初次命中时触发，避免后续反复改标题
-        if len(user) == 1 and len(assistant) == 1:
-            return str(user[0].get("content", "")), str(assistant[0].get("content", ""))
+        pending_user = ""
+        first_user = ""
+        for item in rows:
+            if str(item.get("entry_type", "")) != "chat":
+                continue
+            role = str(item.get("role", ""))
+            content = str(item.get("content", "")).strip()
+            if not content:
+                continue
+            if role == "user":
+                if not first_user:
+                    first_user = content
+                pending_user = content
+                continue
+            if role == "assistant" and pending_user:
+                return pending_user, content
+        # 仅有用户消息时也给标题生成留兜底输入（例如首轮是命令或工具链路异常）。
+        if first_user:
+            return first_user, ""
         return None
 
     def compress_context(self, session_id: str, summary_text: str) -> dict[str, Any]:

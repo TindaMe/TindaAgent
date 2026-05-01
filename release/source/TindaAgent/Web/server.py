@@ -43,6 +43,7 @@ from TindaAgent.Process.Architecture.paths import (
     get_sessions_root,
 )
 from TindaAgent.Process.Observability import audit_event
+from TindaAgent.Process.Observability.audit import redact_sensitive_text
 from TindaAgent.Web import records_store
 from TindaAgent.Web.session_store import SessionStore, SessionStoreError, cleanup_legacy_chat_records
 from TindaAgent.Web.tool_runtime import ToolRuntimeManager
@@ -91,6 +92,8 @@ if not _cleanup_flag_file.exists():
 
 _sessions: dict[str, Agent] = {}
 _session_last_access: dict[str, float] = {}
+_title_generation_lock = threading.Lock()
+_title_generation_inflight: set[str] = set()
 _MAX_SESSIONS = 300
 _LLM_EXECUTE_PERM = int(perm.PUBLIC_EXECUTE)
 
@@ -912,7 +915,7 @@ def _parse_llm_context_payload(content: str) -> dict | None:
 
 
 def _truncate_context_preview(content: str, max_chars: int = _CONTEXT_INJECTION_PREVIEW_MAX_CHARS) -> str:
-    text = str(content or "").replace("\r", "")
+    text = redact_sensitive_text(str(content or "")).replace("\r", "")
     text = re.sub(r"\n{3,}", "\n\n", text).strip().replace("\n", "\\n")
     if len(text) <= max_chars:
         return text
@@ -1907,16 +1910,27 @@ def _generate_title_from_first_round(session_id: str) -> None:
         )
         return
 
+    with _title_generation_lock:
+        if session_id in _title_generation_inflight:
+            _audit_web(
+                "SYSTEM_EXECUTE",
+                "_generate_title_from_first_round",
+                f"skip_generate_title_inflight session_id={session_id}",
+                {"session_id": session_id},
+            )
+            return
+        _title_generation_inflight.add(session_id)
+
     user_msg, assistant_msg = pair
 
     def run() -> None:
-        prompt = (
-            "请根据以下对话生成一个不超过 15 字的简洁标题，"
-            "直接返回标题文本，不要加引号或说明。\n\n"
-            f"用户：{user_msg}\n"
-            f"助手：{assistant_msg}"
-        )
         try:
+            prompt = (
+                "请根据以下对话生成一个不超过 15 字的简洁标题，"
+                "直接返回标题文本，不要加引号或说明。\n\n"
+                f"用户：{user_msg}\n"
+                f"助手：{assistant_msg}"
+            )
             title = _title_client.chat(
                 [
                     {"role": "system", "content": "你是对话标题生成助手。"},
@@ -1941,8 +1955,16 @@ def _generate_title_from_first_round(session_id: str) -> None:
                 f"generate_title_failed session_id={session_id} err={e}",
                 {"session_id": session_id, "ok": False, "error": str(e)},
             )
+        finally:
+            with _title_generation_lock:
+                _title_generation_inflight.discard(session_id)
 
-    threading.Thread(target=run, daemon=True, name=f"title-gen-{session_id}").start()
+    try:
+        threading.Thread(target=run, daemon=True, name=f"title-gen-{session_id}").start()
+    except Exception:
+        with _title_generation_lock:
+            _title_generation_inflight.discard(session_id)
+        raise
 
 
 def _compress_messages_with_llm(rows: list[dict]) -> str:
@@ -2790,10 +2812,15 @@ async def get_session_context_usage(session_id: str):
     context_rows = _store.get_context_messages(sid)
     agent_rows, _ = _store_to_agent_messages(context_rows)
     usage = _estimate_context_usage_length(agent_rows)
+    meta = _store.get_session(sid) or {}
+    title = str(meta.get("title", "") or "新对话")
+    if title in {"", "新对话"}:
+        _generate_title_from_first_round(sid)
     return JSONResponse(
         {
             "ok": True,
             "session_id": sid,
+            "title": title,
             "usage_length": int(usage),
             "context_rows": len(context_rows),
             "agent_rows": len(agent_rows),
@@ -3600,7 +3627,25 @@ async def chat_stream(
             )
             _generate_title_from_first_round(sid)
         except Exception as e:
-            yield _sse_event("error", {"message": str(e)})
+            err_code = str(getattr(e, "tinda_error_code", "") or "").strip()
+            user_message = str(getattr(e, "tinda_user_message", "") or "").strip()
+            msg = user_message or str(e)
+            _audit_web(
+                "SYSTEM_EXECUTE",
+                "chat_stream",
+                f"chat_stream_failed session_id={sid}",
+                {
+                    "session_id": sid,
+                    "ok": False,
+                    "error": str(e),
+                    "error_code": err_code,
+                    "error_type": type(e).__name__,
+                },
+            )
+            payload = {"message": msg}
+            if err_code:
+                payload["error_code"] = err_code
+            yield _sse_event("error", payload)
 
     from starlette.responses import StreamingResponse
 

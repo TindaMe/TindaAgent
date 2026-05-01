@@ -5,6 +5,7 @@ import json
 import os
 import re
 import subprocess
+import gzip
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
@@ -13,6 +14,7 @@ from typing import Any, Callable
 from TindaAgent.Process.Architecture import perm
 from TindaAgent.Process.Architecture.paths import get_memory_file
 from TindaAgent.Process.Observability import audit_event
+from TindaAgent.Process.Observability.audit import redact_sensitive_text
 from TindaAgent.Process.Architecture.paths import get_log_root, get_legacy_log_root
 from TindaAgent.Process.Security import terminal_policy
 from TindaAgent.Permission import (
@@ -841,17 +843,61 @@ def _parse_event_id(raw: str | int | None) -> int | None:
 
 def _iter_total_jsonl_candidates() -> list[Path]:
     paths: list[Path] = []
-    primary = get_log_root() / "total.jsonl"
-    if primary.exists() and primary.is_file():
-        paths.append(primary)
-    legacy = get_legacy_log_root() / "total.jsonl"
-    if legacy.exists() and legacy.is_file():
+    seen: set[str] = set()
+    roots: list[Path] = []
+    active_log_root = str(os.getenv("TINDA_ACTIVE_LOG_ROOT", "")).strip()
+    primary_root = get_log_root()
+    if primary_root.exists():
+        roots.append(primary_root)
+    if active_log_root:
+        active_root = Path(active_log_root).expanduser()
+        if active_root.exists():
+            roots.append(active_root)
+    legacy_root = get_legacy_log_root()
+    if legacy_root.exists():
         try:
-            if legacy.resolve() != primary.resolve():
-                paths.append(legacy)
+            if legacy_root.resolve() != primary_root.resolve():
+                roots.append(legacy_root)
         except Exception:
-            paths.append(legacy)
+            roots.append(legacy_root)
+
+    def _append(path: Path) -> None:
+        try:
+            key = str(path.resolve())
+        except Exception:
+            key = str(path)
+        if key in seen:
+            return
+        if not path.exists() or not path.is_file():
+            return
+        seen.add(key)
+        paths.append(path)
+
+    for root in roots:
+        _append(root / "total.jsonl")
+        for arc in sorted(root.glob("total.*.jsonl.gz"), reverse=True):
+            _append(arc)
     return paths
+
+
+def _iter_audit_rows(path: Path):
+    opener = gzip.open if str(path).lower().endswith(".gz") else open
+    with opener(path, "rt", encoding="utf-8", errors="replace") as fp:
+        for line_no, line in enumerate(fp, start=1):
+            row_text = str(line).strip()
+            if not row_text:
+                continue
+            try:
+                row = json.loads(row_text)
+            except Exception:
+                continue
+            try:
+                rid = int(row.get("id", -1))
+            except Exception:
+                continue
+            if rid <= 0:
+                continue
+            yield line_no, rid, row
 
 
 @tool(perm.PUBLIC_READ, "按审计ID查询日志事件（id 支持纯数字或 tc_ 前缀）", must=True)
@@ -865,28 +911,16 @@ def get_log_event_by_id(id: str) -> dict[str, Any]:
 
     for path in _iter_total_jsonl_candidates():
         try:
-            with path.open("r", encoding="utf-8") as fp:
-                for line_no, line in enumerate(fp, start=1):
-                    row_text = str(line).strip()
-                    if not row_text:
-                        continue
-                    try:
-                        row = json.loads(row_text)
-                    except Exception:
-                        continue
-                    try:
-                        rid = int(row.get("id", -1))
-                    except Exception:
-                        continue
-                    if rid != parsed_id:
-                        continue
-                    return {
-                        "ok": True,
-                        "id": parsed_id,
-                        "source_file": str(path.name),
-                        "source_line": int(line_no),
-                        "event": row,
-                    }
+            for line_no, rid, row in _iter_audit_rows(path):
+                if rid != parsed_id:
+                    continue
+                return {
+                    "ok": True,
+                    "id": parsed_id,
+                    "source_file": str(path.name),
+                    "source_line": int(line_no),
+                    "event": row,
+                }
         except Exception:
             continue
     return {"ok": False, "id": parsed_id, "error": "id not found"}
@@ -931,17 +965,22 @@ def run_terminal(cmd: str = "", timeout: int = 30, cwd: str | None = None, comma
             cwd=work_dir,
             env={**os.environ, "PYTHONUNBUFFERED": "1"},
         )
-        out = (result.stdout or "") + (result.stderr or "")
+        stdout_raw = result.stdout or ""
+        stderr_raw = result.stderr or ""
+        out = stdout_raw + stderr_raw
         if len(out) > 8000:
             out = out[:8000] + "\n...(output truncated)"
+        safe_stdout = redact_sensitive_text(stdout_raw)
+        safe_stderr = redact_sensitive_text(stderr_raw)
+        safe_output = redact_sensitive_text(out.strip() or "(no output)")
         return {
             "ok": True,
             "cmd": command,
             "cwd": exec_cwd,
-            "stdout": result.stdout or "",
-            "stderr": result.stderr or "",
+            "stdout": safe_stdout,
+            "stderr": safe_stderr,
             "returncode": result.returncode,
-            "output": out.strip() or "(no output)",
+            "output": safe_output,
         }
     except subprocess.TimeoutExpired:
         return {"ok": False, "error": f"命令超时（>{timeout}s）: {command[:120]}"}

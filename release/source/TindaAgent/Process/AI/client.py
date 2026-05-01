@@ -1,9 +1,10 @@
 import os
 import json
 import re
+import time
 from pathlib import Path
 from typing import Any, Iterator
-from openai import OpenAI
+from openai import OpenAI, APIConnectionError, APITimeoutError, APIStatusError, RateLimitError
 from dotenv import load_dotenv
 from TindaAgent.Tool import tool as tool_registry
 from TindaAgent.Process.Observability import audit_event
@@ -11,6 +12,48 @@ from TindaAgent.Process.Observability import audit_event
 _ENV_PATH = Path(__file__).resolve().parent.parent.parent / ".env"
 load_dotenv(dotenv_path=_ENV_PATH)
 _THIS_FILE = str(Path(__file__).resolve())
+_LLM_RETRYABLE_STATUS = {408, 409, 425, 429, 500, 502, 503, 504}
+
+
+def _is_retryable_llm_error(err: Exception) -> bool:
+    if isinstance(err, (APIConnectionError, APITimeoutError, RateLimitError)):
+        return True
+    if isinstance(err, APIStatusError):
+        try:
+            status = int(getattr(err, "status_code", 0) or 0)
+        except Exception:
+            status = 0
+        return status in _LLM_RETRYABLE_STATUS
+    return False
+
+
+def _format_llm_error(err: Exception) -> tuple[str, str]:
+    """
+    返回 (error_code, user_message)
+    """
+    if isinstance(err, APIConnectionError):
+        return "upstream_connection_error", "模型服务连接失败，请稍后重试。"
+    if isinstance(err, APITimeoutError):
+        return "upstream_timeout", "模型服务响应超时，请稍后重试。"
+    if isinstance(err, RateLimitError):
+        return "upstream_rate_limited", "模型服务限流，请稍后重试。"
+    if isinstance(err, APIStatusError):
+        try:
+            status = int(getattr(err, "status_code", 0) or 0)
+        except Exception:
+            status = 0
+        if status == 401:
+            return "upstream_auth_failed", "模型服务鉴权失败，请检查 API Key。"
+        if status == 403:
+            return "upstream_forbidden", "模型服务拒绝访问，请检查账号权限。"
+        if status == 404:
+            return "upstream_model_not_found", "模型配置不存在，请检查模型名称。"
+        if status == 429:
+            return "upstream_rate_limited", "模型服务限流，请稍后重试。"
+        if status in {500, 502, 503, 504}:
+            return "upstream_server_error", "模型服务暂时不可用，请稍后重试。"
+        return "upstream_http_error", f"模型服务返回异常状态码：{status}。"
+    return "llm_runtime_error", f"模型调用失败：{type(err).__name__}。"
 
 
 def _parse_args(raw: str | None) -> dict[str, Any]:
@@ -215,23 +258,69 @@ class LLMClient:
         self.api_key = api_key or os.getenv("DEEPSEEK_API_KEY")
         self.base_url = base_url or os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
         self.model = model or os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
+        self.max_retries = max(0, int(os.getenv("DEEPSEEK_MAX_RETRIES", "2")))
+        self.retry_backoff_sec = max(0.05, float(os.getenv("DEEPSEEK_RETRY_BACKOFF_SEC", "0.6")))
         if not self.api_key:
             raise ValueError("缺少 DEEPSEEK_API_KEY，请在 .env 中配置")
         self._client = OpenAI(api_key=self.api_key, base_url=self.base_url)
+
+    def _create_chat_completion_with_retry(self, *, func: str, stream: bool, **req):
+        max_attempts = 1 + int(self.max_retries)
+        attempt = 0
+        last_err: Exception | None = None
+        if "stream" not in req:
+            req["stream"] = bool(stream)
+        while attempt < max_attempts:
+            attempt += 1
+            try:
+                return self._client.chat.completions.create(**req)
+            except Exception as e:
+                last_err = e
+                retryable = _is_retryable_llm_error(e)
+                will_retry = retryable and attempt < max_attempts
+                audit_event(
+                    "SYSTEM_EXECUTE",
+                    "ai",
+                    func,
+                    _THIS_FILE,
+                    "llm_request_error",
+                    extra={
+                        "model": self.model,
+                        "stream": bool(stream),
+                        "attempt": attempt,
+                        "max_attempts": max_attempts,
+                        "retryable": bool(retryable),
+                        "will_retry": bool(will_retry),
+                        "error_type": type(e).__name__,
+                        "error": str(e),
+                    },
+                )
+                if not will_retry:
+                    break
+                sleep_s = self.retry_backoff_sec * (2 ** (attempt - 1))
+                time.sleep(sleep_s)
+        if last_err is not None:
+            raise last_err
+        raise RuntimeError("llm request failed without exception")
 
     def chat(self, messages: list[dict], temperature: float = 0.7) -> str:
         audit_event("SYSTEM_EXECUTE", "ai", "LLMClient.chat", _THIS_FILE, "llm_chat_start",
                      extra={"model": self.model, "messages_count": len(messages), "temperature": temperature})
         try:
-            resp = self._client.chat.completions.create(
+            resp = self._create_chat_completion_with_retry(
+                func="LLMClient.chat",
+                stream=False,
                 model=self.model, messages=messages, temperature=temperature)
             text = resp.choices[0].message.content
             audit_event("SYSTEM_EXECUTE", "ai", "LLMClient.chat", _THIS_FILE, "llm_chat_done",
                          extra={"model": self.model, "ok": True, "reply_len": len(text or "")})
             return text
         except Exception as e:
-            audit_event("SYSTEM_EXECUTE", "ai", "LLMClient.chat", _THIS_FILE, f"llm_chat_failed err={e}",
-                         extra={"model": self.model, "ok": False, "error": str(e)})
+            code, user_message = _format_llm_error(e)
+            audit_event("SYSTEM_EXECUTE", "ai", "LLMClient.chat", _THIS_FILE, f"llm_chat_failed code={code}",
+                         extra={"model": self.model, "ok": False, "error": str(e), "error_code": code})
+            setattr(e, "tinda_error_code", code)
+            setattr(e, "tinda_user_message", user_message)
             raise
 
     def _run_tools(self, tool_calls: list[dict], user_perm: int,
@@ -294,7 +383,11 @@ class LLMClient:
             if allow_tools:
                 req["tools"] = tools
                 req["tool_choice"] = "none" if force_finalize else "auto"
-            resp = self._client.chat.completions.create(**req)
+            resp = self._create_chat_completion_with_retry(
+                func=func,
+                stream=False,
+                **req,
+            )
             msg = resp.choices[0].message
             rc = _concat_reasoning(getattr(msg, "reasoning_content", None))
             content = msg.content or ""
@@ -356,10 +449,12 @@ class LLMClient:
 
         while True:
             force_finalize = steps >= max_tool_steps - 1 and len(trace) > 0
-            stream = self._client.chat.completions.create(
+            stream = self._create_chat_completion_with_retry(
+                func="LLMClient.stream_chat_with_tools",
+                stream=True,
                 model=self.model, messages=msgs, temperature=temperature,
                 tools=tools, tool_choice="none" if force_finalize else "auto",
-                stream=True)
+            )
             content_parts = []
             reasoning_parts = []
             tool_calls_map = {}
