@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 from pathlib import Path
 
@@ -47,16 +48,16 @@ def _pick_app_import(app_dir: Path | None) -> str:
     return "TindaAgent.Web.server:app"
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="TindaAgent 启动器")
+    parser.add_argument("--port", type=int, default=8000, help="监听端口 (默认 8000)")
+    parser.add_argument("--host", type=str, default="0.0.0.0", help="监听地址 (默认 0.0.0.0)")
+    parser.add_argument("--no-reload", action="store_true", help="禁用热重载")
+    args = parser.parse_args()
+
     app_dir = _load_selected_app_dir()
     app_import = _pick_app_import(app_dir)
+    uvicorn_kw = {"host": args.host, "port": args.port, "reload": not args.no_reload}
     if app_dir is not None:
-        uvicorn.run(
-            app_import,
-            host="0.0.0.0",
-            port=8000,
-            reload=True,
-            app_dir=str(app_dir),
-            reload_dirs=[str(app_dir)],
-        )
-    else:
-        uvicorn.run(app_import, host="0.0.0.0", port=8000, reload=True)
+        uvicorn_kw["app_dir"] = str(app_dir)
+        uvicorn_kw["reload_dirs"] = [str(app_dir)]
+    uvicorn.run(app_import, **uvicorn_kw)
