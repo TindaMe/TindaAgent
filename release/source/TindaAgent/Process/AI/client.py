@@ -78,6 +78,16 @@ def _build_done(reply, working_msgs, base_len, steps, tool_trace) -> dict:
     }
 
 
+def _trace_has_pending_confirmation(trace: list[dict]) -> bool:
+    for step in trace:
+        r = step.get("result")
+        if isinstance(r, dict):
+            inner = r.get("result")
+            if isinstance(inner, dict) and inner.get("pending_confirmation") is True:
+                return True
+    return False
+
+
 def _detect_dsml_tool_calls(content: str, *, prefix: str) -> list[dict]:
     """从文本中提取 DSML 格式的工具调用（DeepSeek 偶发行为兼容）"""
     text = content or ""
@@ -168,6 +178,34 @@ def _build_tool_limit_fallback(tool_trace: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _require_user_last_message(messages: list[dict], *, func: str) -> None:
+    rows = messages if isinstance(messages, list) else []
+    count = len(rows)
+    if count <= 0:
+        audit_event(
+            "SYSTEM_EXECUTE",
+            "ai",
+            func,
+            _THIS_FILE,
+            "invalid_messages_empty",
+            extra={"ok": False, "reason": "empty_messages"},
+        )
+        raise ValueError("messages empty: last role must be user")
+
+    last = rows[-1] if isinstance(rows[-1], dict) else {}
+    role = str(last.get("role", "")).strip().lower()
+    if role != "user":
+        audit_event(
+            "SYSTEM_EXECUTE",
+            "ai",
+            func,
+            _THIS_FILE,
+            "invalid_messages_last_role",
+            extra={"ok": False, "reason": "last_role_not_user", "last_role": role, "messages_count": count},
+        )
+        raise ValueError(f"invalid messages: last role must be user, got '{role or 'unknown'}'")
+
+
 class LLMClient:
     """
     用处：封装 LLM 调用，支持工具循环与自动纠正假调用。
@@ -244,24 +282,33 @@ class LLMClient:
         tools = tool_registry.build_agent_tool_schemas(user_perm)
         steps = 0
         trace = []
+        allow_tools = int(max_tool_steps) > 0
 
         while True:
-            force_finalize = steps >= max_tool_steps - 1 and len(trace) > 0
-            resp = self._client.chat.completions.create(
-                model=self.model, messages=msgs, temperature=temperature,
-                tools=tools, tool_choice="none" if force_finalize else "auto")
+            force_finalize = allow_tools and steps >= max_tool_steps - 1 and len(trace) > 0
+            req: dict[str, Any] = {
+                "model": self.model,
+                "messages": msgs,
+                "temperature": temperature,
+            }
+            if allow_tools:
+                req["tools"] = tools
+                req["tool_choice"] = "none" if force_finalize else "auto"
+            resp = self._client.chat.completions.create(**req)
             msg = resp.choices[0].message
             rc = _concat_reasoning(getattr(msg, "reasoning_content", None))
             content = msg.content or ""
 
-            calls = [_normalize_tool_call(
-                call_id=getattr(c, "id", None), call_type=getattr(c, "type", None),
-                function_name=getattr(c.function, "name", ""),
-                function_arguments=getattr(c.function, "arguments", None),
-                fallback_id=f"call_{steps}_{i}")
-                for i, c in enumerate(msg.tool_calls or [])]
-            if not calls:
-                calls = _detect_dsml_tool_calls(content, prefix=f"dsml_{steps}")
+            calls = []
+            if allow_tools:
+                calls = [_normalize_tool_call(
+                    call_id=getattr(c, "id", None), call_type=getattr(c, "type", None),
+                    function_name=getattr(c.function, "name", ""),
+                    function_arguments=getattr(c.function, "arguments", None),
+                    fallback_id=f"call_{steps}_{i}")
+                    for i, c in enumerate(msg.tool_calls or [])]
+                if not calls:
+                    calls = _detect_dsml_tool_calls(content, prefix=f"dsml_{steps}")
 
             if not calls:
                 msg_out = _attach_reasoning({"role": "assistant", "content": content}, rc)
@@ -272,8 +319,11 @@ class LLMClient:
                 {"role": "assistant", "content": content, "tool_calls": calls}, rc)
             msgs.append(msg_out)
             self._run_tools(calls, user_perm, msgs, trace, func)
-
             steps += 1
+
+            if _trace_has_pending_confirmation(trace):
+                return "", msgs[base_len:], steps, trace
+
             if steps >= max_tool_steps:
                 fallback = _build_tool_limit_fallback(trace)
                 msgs.append({"role": "assistant", "content": fallback})
@@ -282,6 +332,7 @@ class LLMClient:
     def chat_with_tools(self, messages: list[dict], user_perm: int,
                         temperature: float = 0.7, max_tool_steps: int = 6) -> dict:
         """支持工具调用的对话，自动纠正模型假调用。"""
+        _require_user_last_message(messages, func="LLMClient.chat_with_tools")
         base_len = len(messages)
         reply, delta, steps, trace = self._process_tool_loop(
             messages, user_perm, temperature, max_tool_steps, False, base_len, "LLMClient.chat_with_tools")
@@ -293,6 +344,7 @@ class LLMClient:
     def stream_chat_with_tools(self, messages: list[dict], user_perm: int,
                                temperature: float = 0.7, max_tool_steps: int = 6) -> Iterator[dict]:
         """流式对话（支持工具调用循环），自动纠正模型假调用。"""
+        _require_user_last_message(messages, func="LLMClient.stream_chat_with_tools")
         msgs = [m.copy() for m in messages]
         tools = tool_registry.build_agent_tool_schemas(user_perm)
         base_len = len(msgs)
@@ -375,6 +427,14 @@ class LLMClient:
                 yield {"type": "tool_step", "trace": step_trace}
 
             steps += 1
+
+            if _trace_has_pending_confirmation(trace):
+                audit_event("SYSTEM_EXECUTE", "ai", "LLMClient.stream_chat_with_tools", _THIS_FILE,
+                             "stream_pending_confirmation",
+                             extra={"model": self.model, "tool_steps": steps, "tool_trace_len": len(trace)})
+                yield {"type": "done", **(_build_done("", msgs, base_len, steps, trace))}
+                return
+
             if steps >= max_tool_steps:
                 fallback = _build_tool_limit_fallback(trace)
                 msgs.append({"role": "assistant", "content": fallback})

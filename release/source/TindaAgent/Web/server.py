@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import threading
 import time
@@ -40,6 +41,7 @@ from TindaAgent.Process.Architecture.paths import (
     get_sessions_root,
 )
 from TindaAgent.Process.Observability import audit_event
+from TindaAgent.Web import records_store
 from TindaAgent.Web.session_store import SessionStore, SessionStoreError, cleanup_legacy_chat_records
 from TindaAgent.Web.tool_runtime import ToolRuntimeManager
 
@@ -324,6 +326,18 @@ def _now_iso() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
 
 
+def _new_turn_id() -> str:
+    return f"turn_{uuid.uuid4().hex[:16]}"
+
+
+def _normalize_turn_id(raw: str | None) -> str:
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    text = re.sub(r"[^A-Za-z0-9._:-]+", "_", text)
+    return text[:80]
+
+
 def _normalize_model_choice(raw: str | None) -> str | None:
     key = str(raw or "").strip().lower()
     if not key:
@@ -508,29 +522,501 @@ def _build_user_message_with_meta(
     meta_time_iso: str | None,
     meta_time_text: str | None,
 ) -> str:
-    message = str(raw_message or "")
+    message = str(raw_message or "").strip()
     if "[USER_META]" in message and "[/USER_META]" in message:
         return message
 
-    block = (
-        "\n\n---\n"
+    values = {
+        "name": _sanitize_meta_value(meta_user_name),
+        "uid": _sanitize_meta_value(meta_user_id),
+        "perm": _sanitize_meta_value(meta_user_perm),
+        "time_iso": _sanitize_meta_value(meta_time_iso),
+        "time_text": _sanitize_meta_value(meta_time_text),
+    }
+    has_meta = any(str(v or "").strip() not in {"", "N/A"} for v in values.values())
+    if not has_meta:
+        return message
+
+    meta_block = (
+        "---\n"
         "[USER_META]\n"
-        f"name: {_sanitize_meta_value(meta_user_name)}\n"
-        f"uid: {_sanitize_meta_value(meta_user_id)}\n"
-        f"perm: {_sanitize_meta_value(meta_user_perm)}\n"
-        f"time_iso: {_sanitize_meta_value(meta_time_iso)}\n"
-        f"time_text: {_sanitize_meta_value(meta_time_text)}\n"
+        f"name={values['name']}\n"
+        f"uid={values['uid']}\n"
+        f"perm={values['perm']}\n"
+        f"time_iso={values['time_iso']}\n"
+        f"time_text={values['time_text']}\n"
         "[/USER_META]"
     )
-    return f"{message}{block}" if message else block.strip()
+    if not message:
+        return meta_block
+    return f"{message}\n\n{meta_block}"
 
 
 def _strip_user_meta_block(content: str) -> str:
     text = str(content or "")
-    marker_start = text.find("\n\n---\n[USER_META]")
-    if marker_start >= 0:
-        return text[:marker_start].rstrip()
-    return text
+    try:
+        parsed = json.loads(text)
+    except Exception:
+        parsed = None
+    if isinstance(parsed, dict) and str(parsed.get("format", "")).strip() == _LLM_CONTEXT_PAYLOAD_FORMAT:
+        return str(parsed.get("content", "") or "").strip()
+    return records_store.strip_user_meta_block(text)
+
+
+def _trim_terminal_followup_output(raw: str) -> str:
+    text = str(raw or "").strip()
+    if not text:
+        return "(no output)"
+    if len(text) <= _TERMINAL_FOLLOWUP_OUTPUT_MAX_CHARS:
+        return text
+    return text[:_TERMINAL_FOLLOWUP_OUTPUT_MAX_CHARS] + "\n...(output truncated)"
+
+
+def _extract_terminal_confirm_origin_user_intent(rows: list[dict], confirm_id: str) -> str:
+    pos = -1
+    cid = str(confirm_id or "").strip()
+    for idx, row in enumerate(rows or []):
+        if str(row.get("id", "") or "").strip() == cid and str(row.get("entry_type", "")).strip() == "terminal_confirm":
+            pos = idx
+            break
+    if pos < 0:
+        pos = len(rows or [])
+
+    for idx in range(pos - 1, -1, -1):
+        row = rows[idx] if isinstance(rows[idx], dict) else {}
+        if str(row.get("role", "")).strip() != "user":
+            continue
+        if str(row.get("entry_type", "")).strip() != "chat":
+            continue
+        content = _strip_user_meta_block(str(row.get("content", "") or "")).strip()
+        if not content:
+            continue
+        if _is_tool_command_text(content):
+            continue
+        return content
+    return ""
+
+
+def _build_terminal_followup_user_input_json(
+    *,
+    confirm_id: str,
+    cmd: str,
+    result: dict,
+    origin_user_intent: str,
+) -> str:
+    intent = str(origin_user_intent or "").strip() or "（未提供明确诉求）"
+    rc = result.get("returncode", "")
+    output_text = _trim_terminal_followup_output(str(result.get("output", "") or ""))
+    content = (
+        "[TERMINAL_FOLLOWUP]\n"
+        "你正在处理一条已确认执行的终端命令。请仅围绕本次执行结果回复，不要输出身份介绍或底层模型信息。\n"
+        f"用户原始诉求: {intent}\n"
+        f"命令: {str(cmd or '').strip()}\n"
+        f"返回码: {rc}\n"
+        "输出:\n"
+        f"{output_text}\n\n"
+        "回答要求:\n"
+        "1) 明确命令是否成功。\n"
+        "2) 给出关键输出结论。\n"
+        "3) 若失败，给出下一步建议。"
+    )
+    return content
+
+
+def _build_terminal_confirm_fallback_reply(cmd: str, result: dict) -> str:
+    rc = result.get("returncode", "")
+    output_text = _trim_terminal_followup_output(str(result.get("output", "") or ""))
+    status_text = "成功" if str(rc) == "0" else "失败"
+    return (
+        f"命令 `{cmd}` 已执行（返回码 {rc}，{status_text}）。\n\n"
+        f"输出结果：\n\n```\n{output_text}\n```"
+    )
+
+
+def _is_terminal_followup_reply_relevant(reply: str, *, cmd: str, origin_user_intent: str) -> bool:
+    text = str(reply or "").strip()
+    if not text:
+        return False
+    low = text.lower()
+    if "底层技术信息保密" in text:
+        return False
+    if "我是 tindaagent" in low and ("命令" not in text and "输出" not in text):
+        return False
+
+    cmd_head = str(cmd or "").strip().split(" ", 1)[0].strip().lower()
+    if cmd_head and cmd_head in low:
+        return True
+
+    intent_tokens = [tok for tok in re.findall(r"[a-zA-Z0-9_./:-]+", str(origin_user_intent or "").lower()) if len(tok) >= 2]
+    for tok in intent_tokens[:4]:
+        if tok in low:
+            return True
+
+    for kw in ("命令", "执行", "输出", "返回码", "成功", "失败", "超时", "确认", "完成", "result", "stdout", "stderr", "error"):
+        if kw in text or kw in low:
+            return True
+    return False
+
+
+def _normalize_terminal_confirm_status(raw: str | None) -> str:
+    text = str(raw or "").strip().lower()
+    if text in {"allow", "allowed"}:
+        return "allowed"
+    if text in {"deny", "denied"}:
+        return "denied"
+    return "pending"
+
+
+def _parse_terminal_confirm_row_payload(row: dict) -> dict:
+    raw = row.get("content", "{}") if isinstance(row, dict) else "{}"
+    try:
+        data = json.loads(raw)
+    except Exception:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    payload = dict(data)
+    payload["cmd"] = str(payload.get("cmd", "") or "").strip()
+    payload["status"] = _normalize_terminal_confirm_status(str(payload.get("status", "pending") or "pending"))
+    action = str(payload.get("action", "") or "").strip().lower()
+    if not action:
+        if payload["status"] == "allowed":
+            action = "allow"
+        elif payload["status"] == "denied":
+            action = "deny"
+    if action:
+        payload["action"] = action
+    return payload
+
+
+def _collect_pending_terminal_confirms(rows: list[dict], *, turn_id: str | None = None) -> list[dict]:
+    tid_filter = _normalize_turn_id(turn_id) if turn_id is not None else ""
+    out: list[dict] = []
+    seen: set[str] = set()
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("entry_type", "") or "").strip() != "terminal_confirm":
+            continue
+        row_tid = _normalize_turn_id(str(row.get("turn_id", "") or ""))
+        if tid_filter and row_tid != tid_filter:
+            continue
+        cid = str(row.get("id", "") or "").strip()
+        if not cid or cid in seen:
+            continue
+        payload = _parse_terminal_confirm_row_payload(row)
+        if str(payload.get("status", "pending")) != "pending":
+            continue
+        seen.add(cid)
+        out.append(
+            {
+                "confirm_id": cid,
+                "cmd": str(payload.get("cmd", "") or ""),
+                "turn_id": row_tid,
+            }
+        )
+    return out
+
+
+def _collect_turn_terminal_confirm_results(rows: list[dict], *, turn_id: str) -> list[dict]:
+    tid = _normalize_turn_id(turn_id)
+    if not tid:
+        return []
+    out: list[dict] = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("entry_type", "") or "").strip() != "terminal_confirm":
+            continue
+        row_tid = _normalize_turn_id(str(row.get("turn_id", "") or ""))
+        if row_tid != tid:
+            continue
+        payload = _parse_terminal_confirm_row_payload(row)
+        status = str(payload.get("status", "pending"))
+        if status not in {"allowed", "denied"}:
+            continue
+        out.append(
+            {
+                "confirm_id": str(row.get("id", "") or "").strip(),
+                "cmd": str(payload.get("cmd", "") or "").strip(),
+                "status": status,
+                "action": str(payload.get("action", "") or ""),
+                "executed": bool(payload.get("executed") is True),
+                "returncode": payload.get("returncode", None),
+                "output": str(payload.get("output", "") or ""),
+            }
+        )
+    return out
+
+
+def _build_terminal_batch_followup_user_input_json(
+    *,
+    confirm_results: list[dict],
+    origin_user_intent: str,
+) -> str:
+    intent = str(origin_user_intent or "").strip() or "（未提供明确诉求）"
+    lines = [
+        "[TERMINAL_FOLLOWUP_BATCH]",
+        "你正在处理一批已确认的终端命令。请仅围绕这批执行结果回复，不要输出身份介绍或底层模型信息。",
+        f"用户原始诉求: {intent}",
+        "本轮确认结果：",
+    ]
+    for idx, item in enumerate(confirm_results[:8], start=1):
+        cmd = str(item.get("cmd", "") or "").strip()
+        status = str(item.get("status", "pending") or "pending").strip().lower()
+        if status == "denied":
+            lines.append(f"{idx}) [已拒绝] 命令: {cmd}")
+            continue
+        rc = item.get("returncode", "")
+        lines.append(f"{idx}) [已执行] 命令: {cmd} | 返回码: {rc}")
+        out = _trim_terminal_followup_output(str(item.get("output", "") or "(no output)"))
+        lines.append(f"输出:\n{out}")
+    lines.extend(
+        [
+            "",
+            "回答要求:",
+            "1) 逐条说明命令是否成功；",
+            "2) 提炼关键信息（避免复读全部输出）；",
+            "3) 若存在失败项，给出下一步建议。",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _build_terminal_confirm_batch_fallback_reply(confirm_results: list[dict]) -> str:
+    if not confirm_results:
+        return "本轮终端确认已完成。"
+    lines = ["本轮终端确认已完成："]
+    for idx, item in enumerate(confirm_results[:8], start=1):
+        cmd = str(item.get("cmd", "") or "").strip()
+        status = str(item.get("status", "") or "").strip().lower()
+        if status == "denied":
+            lines.append(f"{idx}. 已拒绝：`{cmd}`")
+            continue
+        rc = item.get("returncode", "")
+        out = _trim_terminal_followup_output(str(item.get("output", "") or "(no output)"))
+        lines.append(f"{idx}. 已执行：`{cmd}`（返回码 {rc}）")
+        lines.append(f"输出：`{out}`")
+    return "\n".join(lines)
+
+
+_TOOL_MARKER_BLOCK_RE = re.compile(
+    r"(?:[ \t]*>\s*>_<[ \t]*\n[ \t]*>\s*--调用工具中--[ \t]*(?:\n[ \t]*>\s*--(?:call_id:\s*)?[^\n]+--[ \t]*)*\n?)+",
+    re.MULTILINE,
+)
+_SYSTEM_SUMMARY_PREFIX_RE = re.compile(r"(?im)^\s*\[系统摘要\]\s*")
+_LLM_TERMINAL_CONTEXT_MAX_ROWS = 40
+_LLM_CONTEXT_PAYLOAD_VERSION = 1
+_LLM_CONTEXT_PAYLOAD_FORMAT = "tinda_llm_json_input"
+_CONTEXT_INJECTION_PREVIEW_MAX_ITEMS = 6
+_CONTEXT_INJECTION_PREVIEW_HEAD_ITEMS = 3
+_CONTEXT_INJECTION_PREVIEW_TAIL_ITEMS = 2
+_CONTEXT_INJECTION_PREVIEW_MAX_CHARS = 240
+_TERMINAL_FOLLOWUP_OUTPUT_MAX_CHARS = 3200
+
+
+def _strip_tool_marker_noise(content: str) -> str:
+    text = str(content or "")
+    if not text:
+        return text
+    cleaned = _TOOL_MARKER_BLOCK_RE.sub("\n", text)
+    cleaned = _SYSTEM_SUMMARY_PREFIX_RE.sub("", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
+
+
+def _inject_tool_call_ids_into_marker_text(content: str, tool_trace: list[dict] | None) -> str:
+    text = str(content or "")
+    if not text.strip():
+        return text
+    if "调用工具中" not in text:
+        return text
+    if re.search(r"(?im)^\s*>\s*--call_id:\s*[^\n]+--\s*$", text):
+        return text
+
+    call_ids = _extract_tool_trace_call_ids(tool_trace)
+    if not call_ids:
+        return text
+
+    marker_re = re.compile(r"(?im)^([ \t]*>\s*--调用工具中--[ \t]*)$")
+    idx = 0
+
+    def _repl(m: re.Match) -> str:
+        nonlocal idx
+        line = str(m.group(1) or "").rstrip()
+        if idx >= len(call_ids):
+            return line
+        cid = str(call_ids[idx] or "").strip()
+        idx += 1
+        if not cid:
+            return line
+        return f"{line}\n> --call_id: {cid}--"
+
+    out = marker_re.sub(_repl, text)
+    if idx <= 0:
+        return text
+    return out
+
+
+def _to_llm_context_role(*, role: str, entry_type: str) -> str:
+    et = str(entry_type or "").strip()
+    if et in {"terminal", "terminal_exec", "terminal_confirm", "tool_marker"}:
+        return "system"
+    r = str(role or "").strip()
+    if r == "user":
+        return "user"
+    if r == "assistant":
+        return "llm"
+    return "system"
+
+
+def _build_llm_system_input_json(
+    *,
+    input_role: str,
+    entry_type: str,
+    content: str,
+    message_id: str,
+    created_at: str,
+) -> str:
+    payload = {
+        "format": _LLM_CONTEXT_PAYLOAD_FORMAT,
+        "version": _LLM_CONTEXT_PAYLOAD_VERSION,
+        "input_role": str(input_role or "system"),
+        "entry_type": str(entry_type or "chat"),
+        "content": str(content or ""),
+        "meta": {
+            "id": str(message_id or ""),
+            "created_at": str(created_at or ""),
+        },
+    }
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def _parse_llm_context_payload(content: str) -> dict | None:
+    raw = str(content or "")
+    if not raw.strip():
+        return None
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    if str(parsed.get("format", "")).strip() != _LLM_CONTEXT_PAYLOAD_FORMAT:
+        return None
+    return parsed
+
+
+def _truncate_context_preview(content: str, max_chars: int = _CONTEXT_INJECTION_PREVIEW_MAX_CHARS) -> str:
+    text = str(content or "").replace("\r", "")
+    text = re.sub(r"\n{3,}", "\n\n", text).strip().replace("\n", "\\n")
+    if len(text) <= max_chars:
+        return text
+    return text[: max(0, int(max_chars) - 3)] + "..."
+
+
+def _summarize_context_injection_messages(
+    messages: list[dict],
+    *,
+    max_preview_items: int = _CONTEXT_INJECTION_PREVIEW_MAX_ITEMS,
+) -> dict:
+    rows = messages if isinstance(messages, list) else []
+    role_counts: dict[str, int] = {}
+    legacy_input_role_counts: dict[str, int] = {}
+    entry_type_counts: dict[str, int] = {}
+
+    def _inc(bucket: dict[str, int], key: str) -> None:
+        k = str(key or "").strip() or "unknown"
+        bucket[k] = int(bucket.get(k, 0)) + 1
+
+    parsed_cache: list[dict | None] = []
+    for row in rows:
+        item = row if isinstance(row, dict) else {}
+        role = str(item.get("role", "")).strip() or "unknown"
+        _inc(role_counts, role)
+        parsed = _parse_llm_context_payload(str(item.get("content", "")))
+        parsed_cache.append(parsed)
+        raw_entry_type = str(item.get("entry_type", "")).strip()
+        payload_entry_type = str(parsed.get("entry_type", "")).strip() if isinstance(parsed, dict) else ""
+        entry_type = raw_entry_type or payload_entry_type
+        if entry_type:
+            _inc(entry_type_counts, entry_type)
+        if parsed is not None:
+            _inc(legacy_input_role_counts, str(parsed.get("input_role", "")).strip() or "unknown")
+
+    total = len(rows)
+    sample_indexes: list[int]
+    max_items = max(0, int(max_preview_items))
+    if total <= max_items:
+        sample_indexes = list(range(total))
+    else:
+        head = min(_CONTEXT_INJECTION_PREVIEW_HEAD_ITEMS, max_items, total)
+        remaining = max(0, max_items - head)
+        tail = min(_CONTEXT_INJECTION_PREVIEW_TAIL_ITEMS, remaining, max(0, total - head))
+        sample_indexes = list(range(head))
+        if tail > 0:
+            sample_indexes.extend(list(range(total - tail, total)))
+
+    preview_rows: list[dict] = []
+    for idx in sample_indexes:
+        row = rows[idx] if isinstance(rows[idx], dict) else {}
+        payload = parsed_cache[idx]
+        role = str(row.get("role", "")).strip() or "unknown"
+        row_entry_type = str(row.get("entry_type", "")).strip()
+        if payload is not None:
+            preview_content = str(payload.get("content", ""))
+            entry_type = row_entry_type or (str(payload.get("entry_type", "")).strip() or "chat")
+        else:
+            preview_content = str(row.get("content", ""))
+            entry_type = row_entry_type
+        preview_rows.append(
+            {
+                "idx": int(idx),
+                "role": role,
+                "entry_type": entry_type,
+                "is_legacy_json_payload": bool(payload is not None),
+                "content_preview": _truncate_context_preview(preview_content),
+            }
+        )
+
+    legacy_json_payload_count = int(sum(1 for item in parsed_cache if item is not None))
+    return {
+        "message_count": total,
+        "legacy_json_payload_count": legacy_json_payload_count,
+        # backward-compat: 老字段保留，便于旧前端/脚本平滑过渡
+        "json_payload_count": legacy_json_payload_count,
+        "preview_count": len(preview_rows),
+        "preview_omitted_count": max(0, total - len(preview_rows)),
+        "role_counts": role_counts,
+        "legacy_input_role_counts": legacy_input_role_counts,
+        # backward-compat: 老字段保留，便于旧前端/脚本平滑过渡
+        "input_role_counts": legacy_input_role_counts,
+        "entry_type_counts": entry_type_counts,
+        "preview": preview_rows,
+    }
+
+
+def _audit_context_injection(
+    phase: str,
+    session_id: str,
+    messages: list[dict],
+    *,
+    op_type: str = "SYSTEM_EXECUTE",
+    extra: dict | None = None,
+) -> int:
+    sid = str(session_id or "").strip()
+    summary = _summarize_context_injection_messages(messages)
+    payload = {"phase": str(phase or ""), "session_id": sid, **summary}
+    if isinstance(extra, dict) and extra:
+        payload.update(extra)
+    return audit_event(
+        op_type=op_type,
+        subsystem="context_injection",
+        func="_audit_context_injection",
+        file_path=_THIS_FILE,
+        content=f"{phase} session_id={sid} message_count={summary.get('message_count', 0)}",
+        extra=payload,
+    )
 
 
 def _perm_label(p: int) -> str:
@@ -753,6 +1239,7 @@ def _is_tool_command_text(content: str) -> bool:
 
 def _store_to_agent_messages(rows: list[dict]) -> tuple[list[dict], dict[str, int]]:
     out: list[dict] = []
+    staged: list[dict] = []
     stats = {
         "input_rows": int(len(rows or [])),
         "skipped_entry_type": 0,
@@ -761,11 +1248,14 @@ def _store_to_agent_messages(rows: list[dict]) -> tuple[list[dict], dict[str, in
         "skipped_tool_cmd": 0,
         "included_chat": 0,
         "included_notice": 0,
+        "included_terminal": 0,
+        "dropped_terminal": 0,
     }
+    allowed_entry_types = {"chat", "notice", "terminal", "terminal_exec", "terminal_confirm", "tool_marker"}
     for item in rows:
         entry_type = str(item.get("entry_type", "chat")).strip() or "chat"
-        # 严格过滤：仅 chat/notice 允许进入 LLM 上下文
-        if entry_type not in {"chat", "notice"}:
+        # 统一上下文输入：chat/notice + 工具上下文（terminal*）
+        if entry_type not in allowed_entry_types:
             stats["skipped_entry_type"] += 1
             continue
         role = str(item.get("role", "")).strip()
@@ -773,6 +1263,8 @@ def _store_to_agent_messages(rows: list[dict]) -> tuple[list[dict], dict[str, in
             stats["skipped_role"] += 1
             continue
         content = str(item.get("content", ""))
+        # 历史里可能混入大量工具占位标记，回灌给 LLM 前做噪声清理，避免复读刷屏。
+        content = _strip_tool_marker_noise(content)
         if not content.strip():
             stats["skipped_empty"] += 1
             continue
@@ -780,16 +1272,42 @@ def _store_to_agent_messages(rows: list[dict]) -> tuple[list[dict], dict[str, in
         if role == "user" and entry_type == "chat" and _is_tool_command_text(content):
             stats["skipped_tool_cmd"] += 1
             continue
-        if role == "system":
-            # Agent 不接受上下文里额外 system 角色，降级为 assistant 上下文提示
-            out.append({"role": "assistant", "content": f"[系统摘要] {content}"})
+        inject_role = role
+        if entry_type in {"notice", "terminal", "terminal_exec", "terminal_confirm", "tool_marker"}:
+            inject_role = "system"
+        is_terminal = entry_type in {"terminal", "terminal_exec", "terminal_confirm"}
+        staged.append(
+            {
+                "role": inject_role,
+                "content": content,
+                "entry_type": entry_type,
+                "_is_terminal": is_terminal,
+            }
+        )
+        if entry_type == "notice":
             stats["included_notice"] += 1
+        elif is_terminal:
+            stats["included_terminal"] += 1
         else:
-            out.append({"role": role, "content": content})
-            if entry_type == "notice":
-                stats["included_notice"] += 1
-            else:
-                stats["included_chat"] += 1
+            stats["included_chat"] += 1
+
+    terminal_positions = [i for i, x in enumerate(staged) if bool(x.get("_is_terminal"))]
+    overflow = len(terminal_positions) - _LLM_TERMINAL_CONTEXT_MAX_ROWS
+    drop_pos_set: set[int] = set()
+    if overflow > 0:
+        drop_pos_set = set(terminal_positions[:overflow])
+        stats["dropped_terminal"] = int(overflow)
+
+    for idx, item in enumerate(staged):
+        if idx in drop_pos_set:
+            continue
+        out.append(
+            {
+                "role": str(item.get("role", "system") or "system"),
+                "content": str(item.get("content", "")),
+                "entry_type": str(item.get("entry_type", "") or "chat"),
+            }
+        )
     return out, stats
 
 
@@ -966,6 +1484,10 @@ def _get_agent(session_id: str):
                 agent.user.change_perm(current_perm)
             except Exception:
                 pass
+    try:
+        agent.refresh_model_identity(_client.model)
+    except Exception:
+        pass
     _touch_session_cache(sid)
 
     # 同步会话级阈值到 agent
@@ -976,6 +1498,18 @@ def _get_agent(session_id: str):
     rows = _store.get_context_messages(sid)
     agent_rows, filter_stats = _store_to_agent_messages(rows)
     _sessions[sid].replace_conversation(agent_rows)
+    _audit_context_injection(
+        "get_agent.rebuild_context",
+        sid,
+        agent_rows,
+        extra={
+            "source_context_rows": len(rows),
+            "context_filter": filter_stats,
+            "model": _client.model,
+            "estimated_tokens": agent.estimate_current_tokens(),
+            "max_context_tokens": agent.max_context_tokens,
+        },
+    )
     _audit_web(
         "SYSTEM_EXECUTE",
         "_get_agent",
@@ -1010,10 +1544,40 @@ def _stringify_trace_value(value) -> str:
         return str(value)
 
 
-def _tool_trace_to_terminal_items(tool_trace: list[dict] | None) -> list[dict]:
+def _extract_call_id_from_trace_step(step: dict) -> str:
+    if not isinstance(step, dict):
+        return ""
+    result = step.get("result")
+    if isinstance(result, dict):
+        cid = str(result.get("call_id", "") or "").strip()
+        if cid:
+            return cid
+    for key in ("call_id", "tool_call_id"):
+        cid = str(step.get(key, "") or "").strip()
+        if cid:
+            return cid
+    return ""
+
+
+def _extract_tool_trace_call_ids(tool_trace: list[dict] | None) -> list[str]:
+    if not isinstance(tool_trace, list) or not tool_trace:
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for step in tool_trace:
+        cid = _extract_call_id_from_trace_step(step)
+        if not cid or cid in seen:
+            continue
+        seen.add(cid)
+        out.append(cid)
+    return out
+
+
+def _tool_trace_to_terminal_items(tool_trace: list[dict] | None, *, turn_id: str = "") -> list[dict]:
     if not isinstance(tool_trace, list) or not tool_trace:
         return []
 
+    tid = _normalize_turn_id(turn_id)
     items: list[dict] = []
     for step in tool_trace:
         if not isinstance(step, dict):
@@ -1022,13 +1586,7 @@ def _tool_trace_to_terminal_items(tool_trace: list[dict] | None) -> list[dict]:
         name = str(step.get("agent_tool", "") or "unknown_tool")
         args_text = _stringify_trace_value(step.get("arguments", {}))
         result = step.get("result")
-        call_id = ""
-        if isinstance(result, dict):
-            call_id = str(result.get("call_id", "") or "").strip()
-        if not call_id:
-            call_id = str(step.get("call_id", "") or "").strip()
-        if not call_id:
-            call_id = str(step.get("tool_call_id", "") or "").strip()
+        call_id = _extract_call_id_from_trace_step(step)
         call_suffix = f" #{call_id}" if call_id else ""
         items.append(
             {
@@ -1039,6 +1597,7 @@ def _tool_trace_to_terminal_items(tool_trace: list[dict] | None) -> list[dict]:
                 "terminal_kind": "cmd",
                 "created_at": _now_iso(),
                 "is_summary": False,
+                "turn_id": tid,
             }
         )
 
@@ -1085,6 +1644,7 @@ def _tool_trace_to_terminal_items(tool_trace: list[dict] | None) -> list[dict]:
                     "terminal_kind": "out",
                     "created_at": _now_iso(),
                     "is_summary": False,
+                    "turn_id": tid,
                 }
             )
 
@@ -1097,6 +1657,7 @@ def _tool_trace_to_terminal_items(tool_trace: list[dict] | None) -> list[dict]:
                 "terminal_kind": "sep",
                 "created_at": _now_iso(),
                 "is_summary": False,
+                "turn_id": tid,
             }
         )
 
@@ -1108,23 +1669,40 @@ def _tool_trace_to_terminal_items(tool_trace: list[dict] | None) -> list[dict]:
         if inner_tool == "run_terminal" and isinstance(result, dict):
             inner = result.get("result")
             if isinstance(inner, dict):
-                cmd = str(inner.get("cmd", "") or "")
-                output = str(inner.get("output", "") or "(no output)")
-                rc = inner.get("returncode", None)
-                exec_data = json.dumps({
-                    "cmd": cmd,
-                    "output": output,
-                    "returncode": rc,
-                    "status": "ok" if inner.get("ok") else "error",
-                }, ensure_ascii=False)
-                items.append({
-                    "id": f"m_{uuid.uuid4().hex[:16]}",
-                    "role": "user",
-                    "content": exec_data,
-                    "entry_type": "terminal_exec",
-                    "created_at": _now_iso(),
-                    "is_summary": False,
-                })
+                if inner.get("pending_confirmation") is True:
+                    confirm_id = str(inner.get("confirm_id", "") or "").strip() or f"m_{uuid.uuid4().hex[:16]}"
+                    confirm_data = json.dumps({
+                        "cmd": str(inner.get("cmd", "") or ""),
+                        "status": "pending",
+                    }, ensure_ascii=False)
+                    items.append({
+                        "id": confirm_id,
+                        "role": "user",
+                        "content": confirm_data,
+                        "entry_type": "terminal_confirm",
+                        "created_at": _now_iso(),
+                        "is_summary": False,
+                        "turn_id": tid,
+                    })
+                else:
+                    cmd = str(inner.get("cmd", "") or "")
+                    output = str(inner.get("output", "") or "(no output)")
+                    rc = inner.get("returncode", None)
+                    exec_data = json.dumps({
+                        "cmd": cmd,
+                        "output": output,
+                        "returncode": rc,
+                        "status": "ok" if inner.get("ok") else "error",
+                    }, ensure_ascii=False)
+                    items.append({
+                        "id": f"m_{uuid.uuid4().hex[:16]}",
+                        "role": "user",
+                        "content": exec_data,
+                        "entry_type": "terminal_exec",
+                        "created_at": _now_iso(),
+                        "is_summary": False,
+                        "turn_id": tid,
+                    })
     return items
 
 
@@ -1135,7 +1713,10 @@ def _save_chat_messages(
     *,
     tool_marker: bool = False,
     tool_trace: list[dict] | None = None,
-) -> None:
+    turn_id: str | None = None,
+) -> str:
+    tid = _normalize_turn_id(turn_id) or _new_turn_id()
+    assistant_content = _inject_tool_call_ids_into_marker_text(str(assistant_text or ""), tool_trace)
     items = [
         {
             "id": f"m_{uuid.uuid4().hex[:16]}",
@@ -1144,28 +1725,35 @@ def _save_chat_messages(
             "entry_type": "chat",
             "created_at": _now_iso(),
             "is_summary": False,
+            "turn_id": tid,
         },
         {
             "id": f"m_{uuid.uuid4().hex[:16]}",
             "role": "assistant",
-            "content": assistant_text,
+            "content": assistant_content,
             "entry_type": "chat",
             "created_at": _now_iso(),
             "is_summary": False,
+            "turn_id": tid,
         },
     ]
     if tool_marker:
+        call_ids = _extract_tool_trace_call_ids(tool_trace)
+        marker = "> >_<\n> --调用工具中--\n"
+        if call_ids:
+            marker += "\n".join(f"> --call_id: {cid}--" for cid in call_ids) + "\n"
         items.append(
             {
                 "id": f"m_{uuid.uuid4().hex[:16]}",
                 "role": "assistant",
-                "content": "> --调用工具中--",
+                "content": marker.rstrip("\n"),
                 "entry_type": "tool_marker",
                 "created_at": _now_iso(),
                 "is_summary": False,
+                "turn_id": tid,
             }
         )
-    items.extend(_tool_trace_to_terminal_items(tool_trace))
+    items.extend(_tool_trace_to_terminal_items(tool_trace, turn_id=tid))
     _store.append_messages(session_id, items)
     _audit_web(
         "PUBLIC_WRITE",
@@ -1176,8 +1764,10 @@ def _save_chat_messages(
             "items_count": len(items),
             "tool_marker": bool(tool_marker),
             "tool_trace_count": len(tool_trace or []),
+            "turn_id": tid,
         },
     )
+    return tid
 
 
 def _persist_terminal_events(session_id: str, events: list[dict]) -> None:
@@ -1185,6 +1775,7 @@ def _persist_terminal_events(session_id: str, events: list[dict]) -> None:
     for e in events:
         if e.get("type") != "terminal":
             continue
+        turn_id = _normalize_turn_id(str(e.get("turn_id", "") or ""))
         kind = str(e.get("kind", "out")).strip() or "out"
         if kind not in {"cmd", "out", "sep"}:
             kind = "out"
@@ -1198,6 +1789,7 @@ def _persist_terminal_events(session_id: str, events: list[dict]) -> None:
                 "terminal_class": str(e.get("class", "") or "").strip().lower(),
                 "created_at": str(e.get("ts", "")) or _now_iso(),
                 "is_summary": False,
+                "turn_id": turn_id,
             }
         )
     if rows:
@@ -2014,7 +2606,15 @@ async def delete_session(session_id: str):
     ok = _store.delete_session(session_id)
     _sessions.pop(session_id, None)
     _session_last_access.pop(session_id, None)
-    _tool_runtime.stop_session(session_id)
+    try:
+        _tool_runtime.stop_session(session_id)
+    except Exception as e:
+        _audit_web(
+            "SYSTEM_EXECUTE",
+            "delete_session",
+            f"stop_tool_runtime_failed session_id={session_id}",
+            {"session_id": session_id, "ok": False, "error": str(e)},
+        )
     if not ok:
         return JSONResponse({"ok": False, "error": "session not found"}, status_code=404)
     return JSONResponse({"ok": True, "session_id": session_id})
@@ -2091,8 +2691,9 @@ async def patch_session_config(session_id: str, req: SessionConfigRequest):
 
 class TerminalConfirmRequest(BaseModel):
     session_id: str
-    confirm_id: str
+    confirm_id: str | None = None
     action: str  # "allow" | "deny"
+    cmd: str | None = None  # 前端直接传命令，避免依赖异步落盘后的 confirm_entry 查询
 
 
 @app.post("/terminal/confirm")
@@ -2100,29 +2701,101 @@ async def terminal_confirm(req: TerminalConfirmRequest):
     current = _require_login()
     sid = str(req.session_id or "").strip()
     cid = str(req.confirm_id or "").strip()
-    action = str(req.action or "").strip()
-    if not sid or not cid or action not in ("allow", "deny"):
+    action = str(req.action or "").strip().lower()
+    cmd = str(req.cmd or "").strip()
+
+    if not sid or action not in ("allow", "deny"):
         return JSONResponse({"ok": False, "error": "invalid params"}, status_code=400)
+    if not cid and not cmd:
+        return JSONResponse({"ok": False, "error": "confirm_id or cmd required"}, status_code=400)
     if (int(current.get_perm()) & 511) != 511:
         return JSONResponse({"ok": False, "error": "permission denied"}, status_code=403)
 
     rows = _store.load_messages(sid)
     confirm_row = None
-    for row in rows:
-        if row.get("id") == cid and row.get("entry_type") == "terminal_confirm":
-            confirm_row = row
-            break
+
+    if cid:
+        for row in rows:
+            if row.get("id") == cid and row.get("entry_type") == "terminal_confirm":
+                confirm_row = row
+                break
+
+    if confirm_row is None and cmd:
+        for row in reversed(rows):
+            if row.get("entry_type") != "terminal_confirm":
+                continue
+            try:
+                row_data = json.loads(row.get("content", "{}"))
+            except Exception:
+                row_data = {}
+            row_cmd = str(row_data.get("cmd", "") or "").strip()
+            row_status = str(row_data.get("status", "pending") or "pending").strip().lower()
+            if row_cmd == cmd and row_status == "pending":
+                confirm_row = row
+                cid = str(row.get("id", "") or cid).strip()
+                break
+
     if confirm_row is None:
-        return JSONResponse({"ok": False, "error": "confirm entry not found"}, status_code=404)
+        return JSONResponse({"ok": False, "error": "confirm entry not found or already handled"}, status_code=404)
+    turn_id = _normalize_turn_id(str(confirm_row.get("turn_id", "") or "")) or _new_turn_id()
 
     try:
-        data = json.loads(confirm_row.get("content", "{}"))
+        row_data = json.loads(confirm_row.get("content", "{}"))
     except Exception:
-        data = {}
-    cmd = str(data.get("cmd", "") or "").strip()
+        row_data = {}
 
-    result = {"cmd": cmd, "status": action}
-    if action == "allow" and cmd:
+    row_cmd = str(row_data.get("cmd", "") or "").strip()
+    row_status = str(row_data.get("status", "pending") or "pending").strip().lower()
+    cmd = cmd or row_cmd
+
+    if not cmd:
+        return JSONResponse({"ok": False, "error": "empty command"}, status_code=400)
+
+    # 幂等：已处理过的确认请求直接返回，不重复执行命令与落盘 notice。
+    if row_status in {"allow", "deny", "allowed", "denied"}:
+        replay = dict(row_data)
+        replay.setdefault("cmd", cmd)
+        normalized = str(replay.get("status", row_status)).strip().lower()
+        if normalized == "allow":
+            replay["status"] = "allowed"
+            replay["action"] = "allow"
+        elif normalized == "deny":
+            replay["status"] = "denied"
+            replay["action"] = "deny"
+        elif normalized == "allowed":
+            replay["action"] = "allow"
+        elif normalized == "denied":
+            replay["action"] = "deny"
+
+        replay_action = str(replay.get("action", "") or "").strip().lower()
+        reply = ""
+        if replay_action == "allow":
+            if replay.get("executed") is True or ("output" in replay):
+                out_text = str(replay.get("output", "(no output)"))
+                reply = (
+                    f"已执行命令 `{cmd}`。\n\n"
+                    f"输出结果：\n\n```\n{out_text}\n```"
+                )
+            else:
+                reply = f"命令 `{cmd}` 已允许执行。"
+        elif replay_action == "deny":
+            reply = f"已拒绝执行命令 `{cmd}`。"
+
+        return JSONResponse(
+            {
+                "ok": True,
+                "confirm_id": cid,
+                "already_processed": True,
+                "reply": reply,
+                "tool_trace": [],
+                "turn_id": turn_id,
+                **replay,
+            }
+        )
+
+    status = "allowed" if action == "allow" else "denied"
+    result = {"cmd": cmd, "status": status, "action": action}
+    if action == "allow":
         import subprocess
         try:
             r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30,
@@ -2142,9 +2815,233 @@ async def terminal_confirm(req: TerminalConfirmRequest):
             result["returncode"] = -1
             result["executed"] = True
 
+    confirm_row["turn_id"] = turn_id
     confirm_row["content"] = json.dumps(result, ensure_ascii=False)
     _store._write_messages(sid, rows)
-    return JSONResponse({"ok": True, "confirm_id": cid, **result})
+
+    action_text = "允许" if action == "allow" else "拒绝"
+    exec_summary = f"[终端确认] 用户已{action_text}执行命令: {cmd}"
+    if result.get("executed"):
+        exec_summary += f"\n输出:\n{result.get('output', '(no output)')}"
+    _store.append_messages(sid, [{
+        "id": f"m_{uuid.uuid4().hex[:16]}",
+        "role": "system",
+        "content": exec_summary,
+        "entry_type": "notice",
+        "created_at": _now_iso(),
+        "is_summary": False,
+        "turn_id": turn_id,
+    }])
+
+    pending_turn_confirms = _collect_pending_terminal_confirms(rows, turn_id=turn_id)
+    if pending_turn_confirms:
+        return JSONResponse(
+            {
+                "ok": True,
+                "confirm_id": cid,
+                "reply": "",
+                "tool_trace": [],
+                "turn_id": turn_id,
+                "awaiting_other_confirmations": True,
+                "pending_confirm_count": len(pending_turn_confirms),
+                "pending_confirmations": pending_turn_confirms,
+                **result,
+            }
+        )
+
+    turn_confirm_results = _collect_turn_terminal_confirm_results(rows, turn_id=turn_id)
+    is_batch_confirm = len(turn_confirm_results) > 1
+
+    tool_trace = []
+    reply = ""
+    if is_batch_confirm:
+        any_allowed_executed = any(
+            (str(it.get("status", "")).strip().lower() == "allowed") and bool(it.get("executed") is True)
+            for it in turn_confirm_results
+        )
+        if any_allowed_executed:
+            origin_confirm_id = str(turn_confirm_results[0].get("confirm_id", "") or cid).strip()
+            origin_cmd = str(turn_confirm_results[0].get("cmd", "") or "")
+            origin_user_intent = _extract_terminal_confirm_origin_user_intent(rows, origin_confirm_id)
+            fallback_reply = _build_terminal_confirm_batch_fallback_reply(turn_confirm_results)
+            try:
+                agent = _get_agent(sid)
+                continuation_messages = list(agent.history)
+                followup_user_input = _build_terminal_batch_followup_user_input_json(
+                    confirm_results=turn_confirm_results,
+                    origin_user_intent=origin_user_intent,
+                )
+                continuation_messages.append({"role": "user", "content": followup_user_input})
+                _audit_context_injection(
+                    "terminal_confirm.batch_allow_continue",
+                    sid,
+                    continuation_messages,
+                    extra={
+                        "confirm_id": cid,
+                        "action": action,
+                        "cmd": cmd,
+                        "user_perm": int(current.get_perm()),
+                        "origin_user_intent": origin_user_intent,
+                        "followup_injected": True,
+                        "followup_entry_type": "terminal_followup_batch",
+                        "confirm_count": len(turn_confirm_results),
+                    },
+                )
+                llm_result = _client.chat_with_tools(
+                    continuation_messages,
+                    user_perm=int(current.get_perm()),
+                    max_tool_steps=0,
+                )
+                reply = str(llm_result.get("reply", "") or "").strip()
+                tool_trace = _sanitize_tool_trace_for_user(llm_result.get("tool_trace", []))
+                delta = llm_result.get("history_delta", [])
+                if delta:
+                    agent.history.extend(delta)
+                    agent._trim_history()
+            except Exception as e:
+                _audit_web(
+                    "SYSTEM_EXECUTE",
+                    "terminal_confirm",
+                    f"batch_allow_continue_failed session_id={sid}",
+                    {
+                        "session_id": sid,
+                        "confirm_id": cid,
+                        "cmd": cmd,
+                        "ok": False,
+                        "error": str(e),
+                    },
+                )
+                reply = ""
+
+            if not _is_terminal_followup_reply_relevant(reply, cmd=origin_cmd, origin_user_intent=origin_user_intent):
+                reason = "empty_or_failed" if not reply else "off_topic"
+                _audit_web(
+                    "SYSTEM_EXECUTE",
+                    "terminal_confirm",
+                    f"batch_allow_continue_fallback session_id={sid} reason={reason}",
+                    {
+                        "session_id": sid,
+                        "confirm_id": cid,
+                        "cmd": cmd,
+                        "reason": reason,
+                        "origin_user_intent": origin_user_intent,
+                        "reply_preview": str(reply or "")[:160],
+                        "confirm_count": len(turn_confirm_results),
+                    },
+                )
+                reply = fallback_reply
+                tool_trace = []
+        else:
+            reply = _build_terminal_confirm_batch_fallback_reply(turn_confirm_results)
+    else:
+        if action == "allow" and result.get("executed"):
+            origin_user_intent = _extract_terminal_confirm_origin_user_intent(rows, cid)
+            fallback_reply = _build_terminal_confirm_fallback_reply(cmd, result)
+            try:
+                # 协议约束：确认后续写必须补一个明确 user 回合，避免模型按历史漂移跑题。
+                agent = _get_agent(sid)
+                continuation_messages = list(agent.history)
+                followup_user_input = _build_terminal_followup_user_input_json(
+                    confirm_id=cid,
+                    cmd=cmd,
+                    result=result,
+                    origin_user_intent=origin_user_intent,
+                )
+                continuation_messages.append({"role": "user", "content": followup_user_input})
+                _audit_context_injection(
+                    "terminal_confirm.allow_continue",
+                    sid,
+                    continuation_messages,
+                    extra={
+                        "confirm_id": cid,
+                        "action": action,
+                        "cmd": cmd,
+                        "user_perm": int(current.get_perm()),
+                        "origin_user_intent": origin_user_intent,
+                        "followup_injected": True,
+                        "followup_entry_type": "terminal_followup",
+                    },
+                )
+                llm_result = _client.chat_with_tools(
+                    continuation_messages,
+                    user_perm=int(current.get_perm()),
+                    max_tool_steps=0,
+                )
+                reply = str(llm_result.get("reply", "") or "").strip()
+                tool_trace = _sanitize_tool_trace_for_user(llm_result.get("tool_trace", []))
+                delta = llm_result.get("history_delta", [])
+                if delta:
+                    agent.history.extend(delta)
+                    agent._trim_history()
+            except Exception as e:
+                _audit_web(
+                    "SYSTEM_EXECUTE",
+                    "terminal_confirm",
+                    f"allow_continue_failed session_id={sid}",
+                    {
+                        "session_id": sid,
+                        "confirm_id": cid,
+                        "cmd": cmd,
+                        "ok": False,
+                        "error": str(e),
+                    },
+                )
+                reply = ""
+
+            if not _is_terminal_followup_reply_relevant(reply, cmd=cmd, origin_user_intent=origin_user_intent):
+                reason = "empty_or_failed" if not reply else "off_topic"
+                _audit_web(
+                    "SYSTEM_EXECUTE",
+                    "terminal_confirm",
+                    f"allow_continue_fallback session_id={sid} reason={reason}",
+                    {
+                        "session_id": sid,
+                        "confirm_id": cid,
+                        "cmd": cmd,
+                        "reason": reason,
+                        "origin_user_intent": origin_user_intent,
+                        "reply_preview": str(reply or "")[:160],
+                    },
+                )
+                reply = fallback_reply
+                tool_trace = []
+        elif action == "deny":
+            reply = f"已拒绝执行命令 `{cmd}`。"
+
+    if reply:
+        reply = _sanitize_terminal_dump_reply(
+            reply_text=reply,
+            tool_steps=len(tool_trace or []),
+            tool_trace=tool_trace,
+        )
+        reply = _inject_tool_call_ids_into_marker_text(reply, tool_trace)
+        items = [{
+            "id": f"m_{uuid.uuid4().hex[:16]}",
+            "role": "assistant",
+            "content": reply,
+            "entry_type": "chat",
+            "created_at": _now_iso(),
+            "is_summary": False,
+            "turn_id": turn_id,
+        }]
+        items.extend(_tool_trace_to_terminal_items(tool_trace, turn_id=turn_id))
+        _store.append_messages(sid, items)
+
+    return JSONResponse(
+        {
+            "ok": True,
+            "confirm_id": cid,
+            "reply": reply,
+            "tool_trace": tool_trace,
+            "turn_id": turn_id,
+            "awaiting_other_confirmations": False,
+            "pending_confirm_count": 0,
+            "pending_confirmations": [],
+            "resolved_confirm_count": len(turn_confirm_results),
+            "is_batch_confirm": bool(is_batch_confirm),
+            **result,
+        }
+    )
 
 
 @app.get("/terminal/settings")
@@ -2196,6 +3093,17 @@ async def chat(req: ChatRequest):
     message = str(req.message or "").strip()
     if not message:
         return JSONResponse({"reply": "", "tool_trace": [], "tool_steps": 0})
+    pending_confirms = _collect_pending_terminal_confirms(_store.load_messages(sid))
+    if pending_confirms:
+        return JSONResponse(
+            {
+                "error": "存在待确认终端命令，请先全部允许/拒绝后再发送新消息。",
+                "pending_confirm_count": len(pending_confirms),
+                "pending_confirmations": pending_confirms,
+            },
+            status_code=409,
+        )
+    turn_id = _new_turn_id()
 
     if message.startswith("/"):
         profile = _get_web_profile()
@@ -2203,6 +3111,10 @@ async def chat(req: ChatRequest):
             job = _tool_runtime.submit_command(sid, message, profile.perm)
         except Exception as e:
             return JSONResponse({"error": str(e)}, status_code=400)
+        marker = "> >_<\n> --调用工具中--"
+        call_id = str((job or {}).get("call_id", "") or "").strip()
+        if call_id:
+            marker += f"\n> --call_id: {call_id}--"
         # 工具命令也写入 chat 消息（用户气泡独立）
         _store.append_messages(
             sid,
@@ -2214,24 +3126,27 @@ async def chat(req: ChatRequest):
                     "entry_type": "chat",
                     "is_summary": False,
                     "created_at": _now_iso(),
+                    "turn_id": turn_id,
                 },
                 {
                     "id": f"m_{uuid.uuid4().hex[:16]}",
                     "role": "assistant",
-                    "content": "> --调用工具中--",
+                    "content": marker,
                     "entry_type": "tool_marker",
                     "is_summary": False,
                     "created_at": _now_iso(),
+                    "turn_id": turn_id,
                 },
             ],
         )
         return JSONResponse(
             {
-                "reply": "> --调用工具中--",
+                "reply": marker,
                 "tool_trace": [],
                 "tool_steps": 0,
                 "tool_job": job,
                 "tool_async": True,
+                "turn_id": turn_id,
             }
         )
 
@@ -2242,6 +3157,18 @@ async def chat(req: ChatRequest):
         meta_user_perm=req.meta_user_perm,
         meta_time_iso=req.meta_time_iso,
         meta_time_text=req.meta_time_text,
+    )
+    request_messages = list(agent.history)
+    request_messages.append({"role": "user", "content": llm_message})
+    _audit_context_injection(
+        "chat.request",
+        sid,
+        request_messages,
+        extra={
+            "stream": False,
+            "user_perm": int(current.get_perm()),
+            "message_chars": len(message),
+        },
     )
 
     result = agent.chat_with_meta(llm_message)
@@ -2268,13 +3195,15 @@ async def chat(req: ChatRequest):
             },
         )
         reply = sanitized_reply
+    reply = _inject_tool_call_ids_into_marker_text(reply, tool_trace)
 
-    _save_chat_messages(
+    saved_turn_id = _save_chat_messages(
         sid,
-        llm_message,
+        message,
         reply,
         tool_marker=bool(tool_steps > 0),
         tool_trace=tool_trace,
+        turn_id=turn_id,
     )
     _generate_title_from_first_round(sid)
 
@@ -2283,6 +3212,7 @@ async def chat(req: ChatRequest):
             "reply": reply,
             "tool_trace": tool_trace,
             "tool_steps": tool_steps,
+            "turn_id": saved_turn_id,
         }
     )
 
@@ -2310,8 +3240,32 @@ async def chat_stream(
 
     _store.ensure_session(sid)
     agent = _get_agent(sid)
+    turn_id = _new_turn_id()
 
     text = str(message or "").strip()
+    pending_confirms = _collect_pending_terminal_confirms(_store.load_messages(sid))
+    if pending_confirms:
+        chunks = [
+            _sse_event(
+                "error",
+                {
+                    "message": "存在待确认终端命令，请先全部允许/拒绝后再发送新消息。",
+                    "pending_confirm_count": len(pending_confirms),
+                    "pending_confirmations": pending_confirms,
+                },
+            ),
+            _sse_event(
+                "done",
+                {
+                    "reply": "",
+                    "tool_trace": [],
+                    "tool_steps": 0,
+                    "pending_confirm_count": len(pending_confirms),
+                    "pending_confirmations": pending_confirms,
+                },
+            ),
+        ]
+        return HTMLResponse("".join(chunks), media_type="text/event-stream")
     if text.startswith("/"):
         profile = _get_web_profile()
         try:
@@ -2323,6 +3277,11 @@ async def chat_stream(
             ]
             return HTMLResponse("".join(chunks), media_type="text/event-stream")
 
+        marker = "> >_<\n> --调用工具中--"
+        call_id = str((job or {}).get("call_id", "") or "").strip()
+        if call_id:
+            marker += f"\n> --call_id: {call_id}--"
+
         _store.append_messages(
             sid,
             [
@@ -2333,29 +3292,32 @@ async def chat_stream(
                     "entry_type": "chat",
                     "is_summary": False,
                     "created_at": _now_iso(),
+                    "turn_id": turn_id,
                 },
                 {
                     "id": f"m_{uuid.uuid4().hex[:16]}",
                     "role": "assistant",
-                    "content": "> --调用工具中--",
+                    "content": marker,
                     "entry_type": "tool_marker",
                     "is_summary": False,
                     "created_at": _now_iso(),
+                    "turn_id": turn_id,
                 },
             ],
         )
 
         chunks = [
             _sse_event("reset", {}),
-            _sse_event("delta", {"content": "> --调用工具中--"}),
+            _sse_event("delta", {"content": marker}),
             _sse_event(
                 "done",
                 {
-                    "reply": "> --调用工具中--",
+                    "reply": marker,
                     "tool_trace": [],
                     "tool_steps": 0,
                     "tool_job": job,
                     "tool_async": True,
+                    "turn_id": turn_id,
                 },
             ),
         ]
@@ -2369,6 +3331,18 @@ async def chat_stream(
         meta_time_iso=meta_time_iso,
         meta_time_text=meta_time_text,
     )
+    stream_request_messages = list(agent.history)
+    stream_request_messages.append({"role": "user", "content": llm_message})
+    _audit_context_injection(
+        "chat_stream.request",
+        sid,
+        stream_request_messages,
+        extra={
+            "stream": True,
+            "user_perm": int(current.get_perm()),
+            "message_chars": len(text),
+        },
+    )
 
     def event_iter():
         final_reply = ""
@@ -2381,7 +3355,7 @@ async def chat_stream(
                     yield _sse_event("delta", {"content": event.get("content", "")})
                 elif et == "reset":
                     # 关键：把工具调用标记按流顺序写入持久化文本，确保刷新/导入后仍是 A-标记-B。
-                    final_reply += "\n\n> --调用工具中--\n"
+                    final_reply += "\n\n> >_<\n> --调用工具中--\n"
                     yield _sse_event("reset", {})
                 elif et == "tool_step":
                     yield _sse_event("tool_step", {"trace": event.get("trace", [])})
@@ -2390,10 +3364,11 @@ async def chat_stream(
                         "reply": event.get("reply", ""),
                         "tool_trace": _sanitize_tool_trace_for_user(event.get("tool_trace", [])),
                         "tool_steps": int(event.get("tool_steps", 0)),
+                        "turn_id": turn_id,
                     }
 
             if done_payload is None:
-                done_payload = {"reply": final_reply, "tool_trace": [], "tool_steps": 0}
+                done_payload = {"reply": final_reply, "tool_trace": [], "tool_steps": 0, "turn_id": turn_id}
 
             safe_tool_trace = (
                 done_payload.get("tool_trace", [])
@@ -2406,6 +3381,7 @@ async def chat_stream(
                 "reply": final_reply,
                 "tool_trace": safe_tool_trace,
                 "tool_steps": safe_tool_steps,
+                "turn_id": turn_id,
             }
 
             sanitized_reply = _sanitize_terminal_dump_reply(
@@ -2429,16 +3405,25 @@ async def chat_stream(
                 done_payload["reply"] = sanitized_reply
                 final_reply = sanitized_reply
 
+            decorated_reply = _inject_tool_call_ids_into_marker_text(
+                str(done_payload.get("reply", "")),
+                done_payload.get("tool_trace", []),
+            )
+            if decorated_reply != str(done_payload.get("reply", "")):
+                done_payload["reply"] = decorated_reply
+                final_reply = decorated_reply
+
             yield _sse_event("done", done_payload)
             # 优先持久化带 reset 标记的 final_reply；没有内容时再回退 done_payload.reply
             reply = str(final_reply or done_payload.get("reply", ""))
             _save_chat_messages(
                 sid,
-                llm_message,
+                text,
                 reply,
                 # 流式已把标记内嵌到 assistant 文本，不再额外落一条 tool_marker，避免变成 A-B-标记
                 tool_marker=False,
                 tool_trace=done_payload.get("tool_trace", []),
+                turn_id=turn_id,
             )
             _generate_title_from_first_round(sid)
         except Exception as e:
@@ -2497,6 +3482,7 @@ async def session_events(req: SessionEventsRequest):
                 "terminal_class": str(it.get("terminal_class", it.get("class", ""))),
                 "is_summary": False,
                 "created_at": str(it.get("ts", "")) or _now_iso(),
+                "turn_id": _normalize_turn_id(str(it.get("turn_id", "") or "")),
             }
         )
     try:
@@ -2594,7 +3580,15 @@ async def import_record_compat(req: ImportRecordRequest):
     if not rows:
         return JSONResponse({"ok": False, "error": "记录不存在或不再支持旧格式导入"}, status_code=400)
     _store.delete_session(req.session_id)
-    _tool_runtime.stop_session(req.session_id)
+    try:
+        _tool_runtime.stop_session(req.session_id)
+    except Exception as e:
+        _audit_web(
+            "SYSTEM_EXECUTE",
+            "import_record_compat",
+            f"stop_tool_runtime_failed session_id={req.session_id}",
+            {"session_id": str(req.session_id), "ok": False, "error": str(e)},
+        )
     _store.create_session(req.session_id, title="新对话")
     _store.append_messages(req.session_id, rows)
     return JSONResponse({"ok": True, "session_id": req.session_id, "entries": rows})

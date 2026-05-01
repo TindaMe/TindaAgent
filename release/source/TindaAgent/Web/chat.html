@@ -447,7 +447,7 @@
       flex: 1;
       overflow-y: scroll;
       overflow-x: hidden;
-      overscroll-behavior-y: contain;
+      overscroll-behavior-y: none;
       -webkit-overflow-scrolling: touch;
       scroll-behavior: smooth;
     }
@@ -706,20 +706,6 @@
     }
     .tinda-toast.warn { background: rgba(180,83,9,0.94); }
     .tinda-toast.err  { background: rgba(185,28,28,0.94); }
-
-    /* 橡皮回弹 */
-    @keyframes rubberBottom {
-      0%   { transform: translateY(0); }
-      38%  { transform: translateY(-42px); }
-      100% { transform: translateY(0); }
-    }
-    @keyframes rubberTop {
-      0%   { transform: translateY(0); }
-      38%  { transform: translateY(42px); }
-      100% { transform: translateY(0); }
-    }
-    #messages.rubber-bottom { animation: rubberBottom 0.46s cubic-bezier(0.22, 0.8, 0.28, 1); }
-    #messages.rubber-top    { animation: rubberTop    0.46s cubic-bezier(0.22, 0.8, 0.28, 1); }
 
     /* Typing dots */
     .typing { display: inline-flex; gap: 5px; padding: 3px 2px; align-items: center; }
@@ -1302,6 +1288,13 @@
       gap: 2px;
       background: rgba(255, 255, 255, 0.88);
       border-color: rgba(251, 113, 133, 0.22);
+    }
+    .term-line.term-widget {
+      background: transparent;
+      border: 0;
+      box-shadow: none;
+      padding: 0;
+      margin: 4px 0;
     }
     .term-call-row { display: block; }
     .term-call-row.sep {
@@ -1886,10 +1879,10 @@
   const termBodyEl = document.getElementById("termBody");
   const termPanelEl = document.getElementById("termPanel");
   const resizerEl   = document.getElementById("resizer");
-  const modelSwitchBtnEl = document.getElementById("modelSwitchBtn");
-  const modelPanelEl = document.getElementById("modelPanel");
-  const modelDiagnosticsBtnEl = document.getElementById("modelDiagnosticsBtn");
-  const adminLinkBtnEl = document.getElementById("adminLinkBtn");
+  let modelSwitchBtnEl = document.getElementById("modelSwitchBtn");
+  let modelPanelEl = document.getElementById("modelPanel");
+  let modelDiagnosticsBtnEl = document.getElementById("modelDiagnosticsBtn");
+  let adminLinkBtnEl = document.getElementById("adminLinkBtn");
   const quickBtnsEl = document.getElementById("quickBtns");
   const quickSepEl = document.getElementById("quickSep");
   const accountBtnEl = document.getElementById("accountBtn");
@@ -1993,11 +1986,21 @@
   let appVersionVerified = false;
   let toolEventsFetchErrorStreak = 0;
   let toolEventsLastErrorAt = 0;
+  let toolPollInFlight = false;
+  let toolPollPausedByError = false;
+  let messageSendInFlight = false;
+  let terminalConfirmLockActive = false;
+  let terminalConfirmPendingCount = 0;
+  const TOOL_EVENTS_ERROR_REPORT_INTERVAL_MS = 15000;
+  const TOOL_EVENTS_ERROR_AUTO_PAUSE_STREAK = 12;
   const TERM_MAX_LINES = 500;
   const TERM_FLUSH_BATCH = 120;
+  const INPUT_PLACEHOLDER_DEFAULT = "跟 Tinda 说说话吧 ...";
+  const INPUT_PLACEHOLDER_CONFIRM_LOCK = "存在待确认终端命令，请先在终端全部允许/拒绝";
   let termPersistBuffer = [];
   let termPersistTimer = 0;
   let termRequestGroup = null;
+  const assistantTurnBubbleById = new Map();
 
   // --- Toast ---
   let toastTimer = 0;
@@ -2015,6 +2018,40 @@
       toastEl.classList.remove("show");
       toastTimer = 0;
     }, 2400);
+  }
+
+  function refreshComposerDisabledState() {
+    const hardLocked = terminalConfirmLockActive;
+    if (inputEl) {
+      inputEl.disabled = hardLocked;
+      inputEl.placeholder = hardLocked ? INPUT_PLACEHOLDER_CONFIRM_LOCK : INPUT_PLACEHOLDER_DEFAULT;
+    }
+    if (sendBtn) {
+      sendBtn.disabled = hardLocked || messageSendInFlight;
+    }
+  }
+
+  function setMessageSendInFlight(active) {
+    messageSendInFlight = !!active;
+    refreshComposerDisabledState();
+  }
+
+  function setTerminalConfirmLock(active, pendingCount = 0) {
+    terminalConfirmLockActive = !!active;
+    terminalConfirmPendingCount = Math.max(0, Number(pendingCount) || 0);
+    refreshComposerDisabledState();
+  }
+
+  function syncTerminalConfirmLockFromDom() {
+    if (!termBodyEl) {
+      setTerminalConfirmLock(false, 0);
+      return 0;
+    }
+    const pending = Array.from(termBodyEl.querySelectorAll(".term-confirm"))
+      .filter((node) => String(node?.dataset?.status || "").trim() === "pending")
+      .length;
+    setTerminalConfirmLock(pending > 0, pending);
+    return pending;
   }
 
   function reportErrorToTerminal(message, { source = "", sessionId = getSessionId(), persist = true } = {}) {
@@ -2240,6 +2277,19 @@
     }
   }
 
+  function appendTerminalWidget(contentEl, { noScroll = false } = {}) {
+    if (!(contentEl instanceof Node)) return null;
+    termRequestGroup = null;
+    const line = document.createElement("div");
+    line.className = "term-line term-widget";
+    line.dataset.termKind = "widget";
+    line.appendChild(contentEl);
+    termBodyEl.appendChild(line);
+    trimTerminalLines();
+    if (!noScroll) termBodyEl.scrollTop = termBodyEl.scrollHeight;
+    return line;
+  }
+
   function initTermContent() {
     addTermLine("out", `Tinda Terminal ${getVersionBadgeText()}`, "info", { persist: false });
     addTermLine("out", "使用 /tool echo <文本> 在此输出内容", "dim", { persist: false });
@@ -2344,7 +2394,15 @@
 
       const result = step?.result;
       if (result && typeof result === "object") {
-        if (result.ok === false) {
+        const inner = result.result;
+        if (inner && typeof inner === "object" && inner.pending_confirmation === true) {
+          const confirmId = inner.confirm_id || ("cf_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 8));
+          const confirmData = JSON.stringify({ cmd: String(inner.cmd || ""), status: "pending" });
+          const confirmEntry = { id: confirmId, role: "user", content: confirmData, entry_type: "terminal_confirm" };
+          if (persist) enqueueSessionEntries([confirmEntry], { sessionId });
+          renderTermConfirmInTerminal(confirmEntry, { noScroll: false });
+          addTermLine("out", `[warn] 需要确认: ${String(inner.cmd || "").slice(0, 80)}`, "info", { sessionId, persist });
+        } else if (result.ok === false) {
           if (result.error_code === "permission_denied" && result.expose_to_user === false) {
             addTermLine("out", `[error] ${result.user_message || "该工具当前不可用，请尝试其它方式。"}`, "err", { sessionId, persist });
           } else {
@@ -2474,7 +2532,7 @@
     if (role !== "user" && role !== "assistant") return null;
 
     const entryType = String(raw.entry_type || "chat").trim() || "chat";
-    const allowedTypes = ["chat", "notice", "tool_marker", "terminal", "attachment"];
+    const allowedTypes = ["chat", "notice", "tool_marker", "terminal", "attachment", "terminal_confirm", "terminal_exec"];
     const safeType = allowedTypes.includes(entryType) ? entryType : "chat";
 
     const terminalKindRaw = String(raw.terminal_kind || "").trim();
@@ -2734,7 +2792,15 @@
     if (!sid) return;
     try {
       const res = await apiFetch(`/sessions/${encodeURIComponent(sid)}`, { method: "DELETE" });
-      const data = await res.json();
+      let data = {};
+      const bodyText = await res.text();
+      if (bodyText) {
+        try {
+          data = JSON.parse(bodyText);
+        } catch {
+          data = { ok: false, error: `HTTP ${res.status} ${bodyText.slice(0, 120)}` };
+        }
+      }
       if (!res.ok || data?.ok === false) {
         throw new Error(String(data?.error || `http ${res.status}`));
       }
@@ -2857,9 +2923,12 @@
     resetStageActive = false;
     clearPinnedSpacer();
     messagesEl.innerHTML = "";
+    resetAssistantTurnBubbleMap();
     resetTerminalForReplay();
+    setTerminalConfirmLock(false, 0);
     if (!Array.isArray(entries) || entries.length === 0) {
       showEmptyState();
+      syncTerminalConfirmLockFromDom();
       return;
     }
     let hasChatBubble = false;
@@ -2889,7 +2958,7 @@
 
       const toolMatch = /^\[工具调用\]\s*([\s\S]*)$/u.exec(raw);
       if (toolMatch) {
-        return { kind: "tool_marker", content: String(toolMatch[1] || "").trim() || "> --调用工具中--" };
+        return { kind: "tool_marker", content: String(toolMatch[1] || "").trim() || "> >_<\n> --调用工具中--" };
       }
 
       return null;
@@ -2899,6 +2968,7 @@
       const role = String(entry?.role || "").trim();
       const entryType = String(entry?.entry_type || "chat").trim() || "chat";
       const content = String(entry?.content || "");
+      const turnId = normalizeTurnId(entry?.turn_id || "");
       if (!content.trim()) return;
 
       if (entryType === "terminal") {
@@ -2913,26 +2983,18 @@
 
       if (entryType === "tool_marker") {
         clearEmptyState();
-        addBubble(content, "bot");
-        hasChatBubble = true;
+        const bubble = upsertAssistantTurnBubble(content, { turnId, append: true, isCommand: true });
+        hasChatBubble = Boolean(bubble) || hasChatBubble;
         return;
       }
 
       if (entryType === "terminal_exec") {
-        clearEmptyState();
-        const execBubble = renderTermExecBubble(entry);
-        const row = createMsgRow("user", execBubble);
-        messagesEl.appendChild(row);
-        hasChatBubble = true;
+        hasTerminal = renderTermExecInTerminal(entry) || hasTerminal;
         return;
       }
 
       if (entryType === "terminal_confirm") {
-        clearEmptyState();
-        const confirmEl = renderTermConfirmEntry(entry);
-        const row = createMsgRow("user", confirmEl);
-        messagesEl.appendChild(row);
-        hasChatBubble = true;
+        hasTerminal = renderTermConfirmInTerminal(entry) || hasTerminal;
         return;
       }
 
@@ -2966,19 +3028,20 @@
             }
             if (legacy.kind === "tool_marker") {
               clearEmptyState();
-              addBubble(legacy.content, "bot");
-              hasChatBubble = true;
+              const bubble = upsertAssistantTurnBubble(legacy.content, { turnId, append: true, isCommand: true });
+              hasChatBubble = Boolean(bubble) || hasChatBubble;
               return;
             }
           }
         }
         clearEmptyState();
-        addBubble(content, "bot");
-        hasChatBubble = true;
+        const bubble = upsertAssistantTurnBubble(content, { turnId, append: false });
+        hasChatBubble = Boolean(bubble) || hasChatBubble;
       }
     });
     if (!hasChatBubble) showEmptyState();
     if (hasTerminal) showTerm();
+    syncTerminalConfirmLockFromDom();
     scrollToBottom();
   }
 
@@ -3040,19 +3103,15 @@
     return Math.max(pillTop, contentMax);
   }
 
-  let rubberTimer = 0;
-  function triggerRubberBand(direction) {
-    if (rubberTimer) {
-      clearTimeout(rubberTimer);
-      messagesEl.classList.remove("rubber-bottom", "rubber-top");
+  function clampMessagesScrollWithinBounds() {
+    const maxUseful = getMaxUsefulScroll();
+    if (messagesWrap.scrollTop < 0) {
+      messagesWrap.scrollTop = 0;
+      return;
     }
-    // 强制 reflow 以便重新触发动画
-    void messagesEl.offsetWidth;
-    messagesEl.classList.add(direction === "bottom" ? "rubber-bottom" : "rubber-top");
-    rubberTimer = setTimeout(() => {
-      messagesEl.classList.remove("rubber-bottom", "rubber-top");
-      rubberTimer = 0;
-    }, 480);
+    if (messagesWrap.scrollTop > maxUseful) {
+      messagesWrap.scrollTop = maxUseful;
+    }
   }
 
   function scheduleRecalcPinnedSpacerHeight() {
@@ -3076,7 +3135,7 @@
     messagesEl.querySelectorAll(".sys-pin-spacer").forEach((n) => n.remove());
   }
 
-  function addBubble(text, role, { isCommand = false } = {}) {
+  function addBubble(text, role, { isCommand = false, turnId = "" } = {}) {
     const row = document.createElement("div");
     row.className = "msg " + role;
 
@@ -3098,6 +3157,11 @@
       bubble.classList.add("md");
       bubble.dataset.rawMd = String(text ?? "");
       bubble.innerHTML = renderMarkdown(text);
+      const tid = normalizeTurnId(turnId);
+      if (tid) {
+        bubble.dataset.turnId = tid;
+        rememberAssistantTurnBubble(tid, bubble);
+      }
     } else {
       bubble.textContent = text;
     }
@@ -3156,6 +3220,64 @@
     return text;
   }
 
+  function sanitizeAssistantDisplayText(raw) {
+    const text = String(raw ?? "");
+    if (!text) return "";
+    const cleaned = text
+      .replace(/^\s*\[系统摘要\]\s*/gmu, "")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+    return cleaned;
+  }
+
+  function normalizeTurnId(raw) {
+    const text = String(raw ?? "").trim();
+    if (!text) return "";
+    return text.replace(/[^A-Za-z0-9._:-]+/g, "_").slice(0, 80);
+  }
+
+  function resetAssistantTurnBubbleMap() {
+    assistantTurnBubbleById.clear();
+  }
+
+  function resolveAssistantTurnBubble(turnId) {
+    const tid = normalizeTurnId(turnId);
+    if (!tid) return null;
+    const bubble = assistantTurnBubbleById.get(tid);
+    if (!bubble || !bubble.isConnected) {
+      assistantTurnBubbleById.delete(tid);
+      return null;
+    }
+    return bubble;
+  }
+
+  function rememberAssistantTurnBubble(turnId, bubbleEl) {
+    const tid = normalizeTurnId(turnId);
+    if (!tid || !bubbleEl) return;
+    assistantTurnBubbleById.set(tid, bubbleEl);
+  }
+
+  function upsertAssistantTurnBubble(rawText, { turnId = "", append = false, isCommand = false } = {}) {
+    const text = sanitizeAssistantDisplayText(rawText);
+    if (!text) return null;
+    const tid = normalizeTurnId(turnId);
+    const existing = resolveAssistantTurnBubble(tid);
+    if (existing) {
+      if (append) {
+        const prev = String(existing.dataset.rawMd ?? "");
+        const next = prev ? `${prev}\n\n${text}` : text;
+        existing.dataset.rawMd = next;
+        existing.innerHTML = renderMarkdown(next);
+      } else {
+        existing.dataset.rawMd = text;
+        existing.innerHTML = renderMarkdown(text);
+      }
+      scrollToBottom();
+      return { row: existing.closest(".msg"), bubble: existing };
+    }
+    return addBubble(text, "bot", { isCommand, turnId: tid });
+  }
+
   function createMsgRow(role, contentEl) {
     const row = document.createElement("div");
     row.className = "msg " + role;
@@ -3212,11 +3334,18 @@
     let data;
     try { data = JSON.parse(content); } catch { data = {}; }
     const cmd = data.cmd || "";
-    const status = data.status || "pending";
+    const rawStatus = String(data.status || "pending").toLowerCase();
+    const status = rawStatus === "allow"
+      ? "allowed"
+      : rawStatus === "deny"
+        ? "denied"
+        : (["pending", "allowed", "denied"].includes(rawStatus) ? rawStatus : "pending");
 
     const wrapper = document.createElement("div");
     wrapper.className = "term-confirm" + (status !== "pending" ? " collapsed" : "");
     wrapper.dataset.confirmId = entry.id || "";
+    wrapper.dataset.status = status;
+    wrapper.dataset.turnId = normalizeTurnId(entry?.turn_id || "");
 
     const head = document.createElement("div");
     head.className = "term-confirm-head";
@@ -3233,10 +3362,10 @@
       actions.className = "term-confirm-actions";
       const allowBtn = document.createElement("button");
       allowBtn.className = "term-confirm-btn allow"; allowBtn.textContent = "允许执行";
-      allowBtn.onclick = () => confirmTerminalAction(entry.id, "allow", wrapper);
+      allowBtn.onclick = () => confirmTerminalAction(entry.id, "allow", wrapper, cmd);
       const denyBtn = document.createElement("button");
       denyBtn.className = "term-confirm-btn deny"; denyBtn.textContent = "拒绝";
-      denyBtn.onclick = () => confirmTerminalAction(entry.id, "deny", wrapper);
+      denyBtn.onclick = () => confirmTerminalAction(entry.id, "deny", wrapper, cmd);
       actions.appendChild(allowBtn); actions.appendChild(denyBtn);
       body.appendChild(actions);
     } else {
@@ -3250,20 +3379,51 @@
     return wrapper;
   }
 
-  async function confirmTerminalAction(confirmId, action, wrapperEl) {
+  function renderTermExecInTerminal(entry, { persist = false, sessionId = getSessionId(), noScroll = false } = {}) {
+    if (!entry || typeof entry !== "object") return false;
+    showTerm();
+    const execEl = renderTermExecBubble(entry);
+    appendTerminalWidget(execEl, { noScroll });
+    if (persist) enqueueSessionEntries([entry], { sessionId });
+    return true;
+  }
+
+  function renderTermConfirmInTerminal(entry, { persist = false, sessionId = getSessionId(), noScroll = false } = {}) {
+    if (!entry || typeof entry !== "object") return false;
+    showTerm();
+    const confirmEl = renderTermConfirmEntry(entry);
+    const confirmId = String(entry.id || "").trim();
+    if (confirmId) {
+      const existing = Array.from(termBodyEl.querySelectorAll(".term-confirm"))
+        .find((node) => String(node?.dataset?.confirmId || "").trim() === confirmId);
+      if (existing && existing.parentElement) {
+        existing.parentElement.replaceChild(confirmEl, existing);
+        if (!noScroll) termBodyEl.scrollTop = termBodyEl.scrollHeight;
+        syncTerminalConfirmLockFromDom();
+        return true;
+      }
+    }
+    appendTerminalWidget(confirmEl, { noScroll });
+    if (persist) enqueueSessionEntries([entry], { sessionId });
+    syncTerminalConfirmLockFromDom();
+    return true;
+  }
+
+  async function confirmTerminalAction(confirmId, action, wrapperEl, cmd) {
     const sid = getSessionId();
     if (!sid) return;
     try {
       const res = await apiFetch("/terminal/confirm", {
         method: "POST",
         headers: {"Content-Type":"application/json"},
-        body: JSON.stringify({ session_id: sid, confirm_id: confirmId, action }),
+        body: JSON.stringify({ session_id: sid, confirm_id: confirmId, action, cmd }),
       });
       const data = await res.json();
       if (!res.ok || data?.ok === false) throw new Error(data?.error || "failed");
       showToast(action === "allow" ? "命令已允许" : "命令已拒绝");
       if (wrapperEl) {
         wrapperEl.classList.add("collapsed");
+        wrapperEl.dataset.status = action === "allow" ? "allowed" : "denied";
         const head = wrapperEl.querySelector(".term-confirm-head span:last-child");
         if (head) head.textContent = action === "allow" ? "已允许" : "已拒绝";
         const dot = wrapperEl.querySelector(".dot");
@@ -3274,6 +3434,47 @@
             action === "allow" ? "已允许执行" : "已拒绝执行"
           }<span class="toggle-expand" onclick="this.closest('.term-confirm').classList.toggle('collapsed')">展开</span></div>`;
         }
+      }
+      if (action === "allow") {
+        if (data?.executed) {
+          const cmdText = String(data?.cmd || cmd || "").trim();
+          const outText = String(data?.output || "(no output)");
+          showTerm();
+          addTermLine("cmd", cmdText, "", { sessionId: sid, persist: false });
+          String(outText).split("\n").forEach((line) => addTermLine("out", line, "", { sessionId: sid, persist: false }));
+          if (data?.returncode !== undefined && data?.returncode !== null) {
+            addTermLine("out", `[returncode] ${String(data.returncode)}`, "dim", { sessionId: sid, persist: false });
+          }
+          addTermSep({ sessionId: sid, persist: false });
+        }
+        const replyText = sanitizeAssistantDisplayText(data?.reply || "");
+        if (replyText) {
+          upsertAssistantTurnBubble(replyText, { turnId: data?.turn_id, append: true });
+        } else if (!data?.executed) {
+          const cmdText = String(data?.cmd || cmd || "").trim();
+          if (cmdText) addTermLine("out", `[info] 命令已允许: ${cmdText}`, "info", { sessionId: sid, persist: false });
+        }
+        if (Array.isArray(data.tool_trace) && data.tool_trace.length > 0) {
+          renderToolTraceToTerminal(data.tool_trace, { sessionId: sid, persist: false });
+        }
+      } else if (action === "deny") {
+        const denyReply = sanitizeAssistantDisplayText(data?.reply || "");
+        if (denyReply) {
+          upsertAssistantTurnBubble(denyReply, { turnId: data?.turn_id, append: true });
+        } else {
+          const cmdText = String(data?.cmd || cmd || "").trim();
+          if (cmdText) addTermLine("out", `[info] 已拒绝执行命令: ${cmdText}`, "info", { sessionId: sid, persist: false });
+          addTermSep({ sessionId: sid, persist: false });
+        }
+      }
+      if (data?.awaiting_other_confirmations) {
+        const pendingCount = Math.max(0, Number(data?.pending_confirm_count || 0));
+        setTerminalConfirmLock(true, pendingCount);
+        showToast(`已记录本条确认，仍有 ${pendingCount} 条待处理`, "warn");
+      } else if (Number(data?.pending_confirm_count || 0) <= 0) {
+        syncTerminalConfirmLockFromDom();
+      } else {
+        setTerminalConfirmLock(true, Number(data?.pending_confirm_count || 0));
       }
     } catch(e) {
       showToast(`操作失败：${String(e?.message || e)}`, "error");
@@ -3625,6 +3826,7 @@
   function showEmptyState() {
     resetStageActive = false;
     clearPinnedSpacer();
+    resetAssistantTurnBubbleMap();
     messagesEl.innerHTML = `
       <div class="empty-state">
         <div class="logo-big"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6"></path><path d="M12 3v4"></path><rect x="5" y="7" width="14" height="14" rx="3"></rect><path d="M9 12h.01M15 12h.01M9 16h6"></path></svg></div>
@@ -3989,13 +4191,13 @@
     const newDiagnostics = document.getElementById("modelDiagnosticsBtn");
     const newAdmin = document.getElementById("adminLinkBtn");
     const newCompress = document.getElementById("compressCtxBtn");
-    if (newModel) window.modelSwitchBtnEl = newModel;
-    if (newPanel) window.modelPanelEl = newPanel;
+    if (newModel) modelSwitchBtnEl = newModel;
+    if (newPanel) modelPanelEl = newPanel;
     if (newStream) window.streamToggleBtnEl = newStream;
     if (newTerm) window.termToggleBtnEl = newTerm;
     if (newRecords) window.recordsToggleBtnEl = newRecords;
-    if (newDiagnostics) window.modelDiagnosticsBtnEl = newDiagnostics;
-    if (newAdmin) window.adminLinkBtnEl = newAdmin;
+    if (newDiagnostics) modelDiagnosticsBtnEl = newDiagnostics;
+    if (newAdmin) adminLinkBtnEl = newAdmin;
     // update stream button state
     if (newStream) {
       const offIcon = newStream.querySelector(".stream-off");
@@ -4070,10 +4272,14 @@
   async function pollToolEventsOnce(sessionId) {
     const sid = String(sessionId || getSessionId()).trim();
     if (!sid) return;
+    if (toolPollInFlight) return;
+    toolPollInFlight = true;
     try {
       const params = new URLSearchParams({ after_seq: String(toolLastSeq), limit: "200" });
       const res = await apiFetch(`/sessions/${encodeURIComponent(sid)}/tool-events?${params.toString()}`);
-      if (!res.ok) return;
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
       const data = await res.json();
       const events = Array.isArray(data.events) ? data.events : [];
       if (typeof data.next_seq === "number") toolLastSeq = data.next_seq;
@@ -4159,14 +4365,28 @@
       const now = Date.now();
       const message = String(e?.message || e);
       const isTransient = /Failed to fetch|NetworkError|Load failed|AbortError/i.test(message);
+      const isFirstPersistentTransient = isTransient && toolEventsFetchErrorStreak === 3;
+      const reachedInterval = toolEventsLastErrorAt === 0 || now - toolEventsLastErrorAt >= TOOL_EVENTS_ERROR_REPORT_INTERVAL_MS;
       const shouldReport =
         !isTransient
-        || toolEventsFetchErrorStreak >= 3
-        || (toolEventsLastErrorAt === 0 || now - toolEventsLastErrorAt >= 15000);
+        || isFirstPersistentTransient
+        || reachedInterval;
       if (shouldReport) {
         toolEventsLastErrorAt = now;
         reportErrorToTerminal(`工具事件读取失败：${message}`, { source: "tool_events", sessionId: sid, persist: false });
       }
+      if (isTransient && toolEventsFetchErrorStreak >= TOOL_EVENTS_ERROR_AUTO_PAUSE_STREAK && !toolPollPausedByError) {
+        toolPollPausedByError = true;
+        stopToolPolling();
+        reportErrorToTerminal("工具事件通道连续失败，已自动暂停轮询。发送新消息后会自动恢复。", {
+          source: "tool_events",
+          sessionId: sid,
+          persist: false,
+        });
+        showToast("工具事件通道已自动暂停（连续失败）", "warn");
+      }
+    } finally {
+      toolPollInFlight = false;
     }
   }
 
@@ -4176,12 +4396,14 @@
       toolPollTimer = 0;
     }
     flushTermPersistBuffer();
+    toolPollInFlight = false;
     toolEventsFetchErrorStreak = 0;
     toolEventsLastErrorAt = 0;
   }
 
   function startToolPolling(sessionId) {
     stopToolPolling();
+    toolPollPausedByError = false;
     const sid = String(sessionId || getSessionId()).trim();
     if (!sid) return;
     pollToolEventsOnce(sid);
@@ -4250,6 +4472,11 @@
 
   // --- Actions ---
   async function sendMessage() {
+    if (syncTerminalConfirmLockFromDom() > 0) {
+      showToast("存在待确认终端命令，请先全部允许/拒绝。", "warn");
+      inputEl?.focus();
+      return;
+    }
     const text = inputEl.value.trim();
     const hasFile = importedFile !== null;
     if (!text && !hasFile) return;
@@ -4266,7 +4493,7 @@
     clearEmptyState();
     inputEl.value = "";
     autoResize();
-    sendBtn.disabled = true;
+    setMessageSendInFlight(true);
 
     if (hasFile && fileBackup) {
       addFileChipBubble(fileBackup.name);
@@ -4282,9 +4509,8 @@
     }
     const echo = isEchoCmd(text);
     if (echo) { showTerm(); }
-    const isCommand = text.startsWith("/");
-    // 对普通对话统一走 SSE：即使"非流式显示"，也能实时接收 tool_step 终端事件
-    const useStream = !isCommand;
+    // 所有输入统一走 SSE：命令与普通对话共享同一工具事件工作环。
+    const useStream = true;
     const renderDelta = streamEnabled;
     const typingRow = useStream ? (renderDelta ? null : addTyping()) : addTyping();
     const metaPayload = buildRequestMeta();
@@ -4352,7 +4578,7 @@
                 scrollToBottom();
               }
             } else if (eventName === "reset") {
-              const marker = `\n\n> --调用工具中--\n`;
+              const marker = `\n\n> >_<\n> --调用工具中--\n`;
               streamText += marker;
               if (renderDelta && streamBot) {
                 streamBot.bubble.dataset.rawMd = streamText;
@@ -4367,29 +4593,43 @@
             } else if (eventName === "done") {
               donePayload = payload;
             } else if (eventName === "error") {
+              const pendingCount = Math.max(0, Number(payload?.pending_confirm_count || 0));
+              if (pendingCount > 0) {
+                setTerminalConfirmLock(true, pendingCount);
+              }
               throw new Error(payload.message || "stream failed");
             }
           }
         }
 
         if (donePayload) {
+          const doneTurnId = normalizeTurnId(donePayload?.turn_id || "");
           // 以服务端最终回复为准，避免中途 delta 文本（含误注入工具明细）残留给用户
           if (typeof donePayload.reply === "string") {
-            streamText = String(donePayload.reply || "");
+            streamText = sanitizeAssistantDisplayText(String(donePayload.reply || ""));
             if (renderDelta && streamBot) {
               streamBot.bubble.dataset.rawMd = streamText;
               streamBot.bubble.innerHTML = renderMarkdown(streamText);
+              if (doneTurnId) {
+                streamBot.bubble.dataset.turnId = doneTurnId;
+                rememberAssistantTurnBubble(doneTurnId, streamBot.bubble);
+              }
             }
           } else if (!streamText && donePayload.reply) {
-            streamText = String(donePayload.reply);
+            streamText = sanitizeAssistantDisplayText(String(donePayload.reply));
             if (renderDelta && streamBot) {
               streamBot.bubble.dataset.rawMd = streamText;
               streamBot.bubble.innerHTML = renderMarkdown(streamText);
+              if (doneTurnId) {
+                streamBot.bubble.dataset.turnId = doneTurnId;
+                rememberAssistantTurnBubble(doneTurnId, streamBot.bubble);
+              }
             }
           }
           clearTypingPlaceholder();
           if (!renderDelta) {
-            addBubble(streamText || String(donePayload.reply || "（无回复）"), "bot");
+            const fallbackText = streamText || String(donePayload.reply || "（无回复）");
+            upsertAssistantTurnBubble(fallbackText || "（无回复）", { turnId: doneTurnId });
           }
           if (donePayload.tool_async) {
             startToolPolling(sid);
@@ -4402,7 +4642,7 @@
         } else if (typingRow) {
           clearTypingPlaceholder();
           if (!renderDelta) {
-            addBubble(streamText || "（无回复）", "bot");
+            upsertAssistantTurnBubble(streamText || "（无回复）");
           }
         }
         return;
@@ -4419,12 +4659,16 @@
       });
       const data = await res.json();
       if (!res.ok) {
+        const pendingCount = Math.max(0, Number(data?.pending_confirm_count || 0));
+        if (pendingCount > 0) {
+          setTerminalConfirmLock(true, pendingCount);
+        }
         throw new Error(String(data?.detail || data?.error || `http ${res.status}`));
       }
       clearTypingPlaceholder();
       if (data?.tool_async) {
-        const replyText = String(data.reply || "> --调用工具中--");
-        addBubble(replyText, "bot", { isCommand: true });
+        const replyText = String(data.reply || "> >_<\n> --调用工具中--");
+        upsertAssistantTurnBubble(replyText || "（无回复）", { turnId: data?.turn_id, isCommand: true });
         if (data?.tool_job?.job_id) startToolPolling(sid);
       } else if (echo) {
         const reply = data.reply ?? "";
@@ -4435,7 +4679,7 @@
         }
         showToast("已输出至终端");
       } else {
-        addBubble(data.reply ?? "（无回复）", "bot", { isCommand: text.startsWith("/") });
+        upsertAssistantTurnBubble(String(data.reply ?? "（无回复）"), { turnId: data?.turn_id, isCommand: text.startsWith("/") });
         // 工具轨迹由后端同轮次写入会话，前端这里仅做实时展示（不落盘），避免刷新后位置漂移。
         const traced = renderToolTraceToTerminal(data.tool_trace, { sessionId: sid, persist: false });
         if (data.tool_steps > 0 && !traced) {
@@ -4443,12 +4687,18 @@
         }
       }
     } catch (e) {
+      const errText = String(e?.message || e || "");
       clearTypingPlaceholder();
       clearDraftBotBubble();
-      reportErrorToTerminal(`请求失败：${String(e?.message || e)}`, { source: "chat", sessionId: sid });
-      if (!echo) addBubble("请求失败，请确认服务已启动。", "bot");
+      if (errText.includes("待确认终端命令")) {
+        showToast(errText, "warn");
+        syncTerminalConfirmLockFromDom();
+      } else {
+        reportErrorToTerminal(`请求失败：${errText}`, { source: "chat", sessionId: sid });
+        if (!echo) addBubble("请求失败，请确认服务已启动。", "bot");
+      }
     } finally {
-      sendBtn.disabled = false;
+      setMessageSendInFlight(false);
       inputEl.focus();
       removeFile();
     }
@@ -4544,7 +4794,7 @@
     if (e.propertyName === "width") scheduleRecalcPinnedSpacerHeight();
   });
 
-  // 滚轮越界 → 橡皮回弹（桌面）
+  // 桌面滚轮：到顶/到底后硬边界停止，不再回弹
   messagesWrap.addEventListener("wheel", (e) => {
     const deltaY = e.deltaY;
     if (!deltaY) return;
@@ -4554,36 +4804,18 @@
     if (deltaY > 0 && currentTop >= maxUseful - 0.5) {
       e.preventDefault();
       messagesWrap.scrollTop = maxUseful;
-      triggerRubberBand("bottom");
       return;
     }
     if (deltaY < 0 && currentTop <= 0.5) {
       e.preventDefault();
       messagesWrap.scrollTop = 0;
-      triggerRubberBand("top");
       return;
-    }
-
-    // 未越界但会跨越 maxUseful：让它滚到边界，剩余触发回弹
-    const target = currentTop + deltaY;
-    if (deltaY > 0 && target > maxUseful) {
-      e.preventDefault();
-      messagesWrap.scrollTop = maxUseful;
-      triggerRubberBand("bottom");
     }
   }, { passive: false });
 
-  // 触摸/拖拽滚动越界兜底：停手后若超出 maxUseful，平滑吸回
-  let scrollSettleTimer = 0;
+  // 触摸/拖拽滚动兜底：强制夹紧到有效范围
   messagesWrap.addEventListener("scroll", () => {
-    if (scrollSettleTimer) clearTimeout(scrollSettleTimer);
-    scrollSettleTimer = setTimeout(() => {
-      const maxUseful = getMaxUsefulScroll();
-      if (messagesWrap.scrollTop > maxUseful + 2) {
-        messagesWrap.scrollTo({ top: maxUseful, behavior: "smooth" });
-        triggerRubberBand("bottom");
-      }
-    }, 140);
+    clampMessagesScrollWithinBounds();
   }, { passive: true });
 
   // --- Init ---
@@ -4645,6 +4877,7 @@
     startToolPolling(sid);
   })();
   closeTerm();
+  refreshComposerDisabledState();
   inputEl.focus();
 </script>
 </body>

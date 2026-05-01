@@ -557,6 +557,8 @@ def run_agent_tool(
     if printed:
         payload["stdout"] = printed
     if result is not None:
+        if isinstance(result, dict) and result.get("ok") is not None:
+            payload["ok"] = result["ok"]
         payload["result"] = result
     if not printed and result is None:
         payload["result"] = "工具执行完成"
@@ -890,9 +892,9 @@ def get_log_event_by_id(id: str) -> dict[str, Any]:
     return {"ok": False, "id": parsed_id, "error": "id not found"}
 
 
-@tool(perm.TOOL_EXECUTE | perm.PUBLIC_EXECUTE, "在终端执行一条 shell 命令（参数: cmd=命令字符串, timeout=超时秒数默认30, cwd=工作目录可选）。系统级操作(rm/mv/chmod等)需额外SYSTEM权限。", must=True)
-def run_terminal(cmd: str, timeout: int = 30, cwd: str | None = None, _caller_perm: int = 0, _confirmed: bool = False) -> dict[str, Any]:
-    command = str(cmd or "").strip()
+@tool(perm.TOOL_EXECUTE | perm.PUBLIC_EXECUTE, "在终端执行一条 shell 命令（参数: cmd=命令字符串；兼容 command=...；timeout=超时秒数默认30；cwd=工作目录可选）。系统级操作(rm/mv/chmod等)需额外SYSTEM权限。", must=True)
+def run_terminal(cmd: str = "", timeout: int = 30, cwd: str | None = None, command: str | None = None, _caller_perm: int = 0, _confirmed: bool = False) -> dict[str, Any]:
+    command = str(cmd or command or "").strip()
     if not command:
         return {"ok": False, "error": "cmd 不能为空"}
 
@@ -904,19 +906,22 @@ def run_terminal(cmd: str, timeout: int = 30, cwd: str | None = None, _caller_pe
     if sys_ops and (_caller_perm & perm.SYSTEM_EXECUTE) != perm.SYSTEM_EXECUTE:
         return {"ok": False, "error": f"命令涉及系统操作({', '.join(sys_ops)})，需要 SYSTEM_EXECUTE 权限，当前权限不足"}
 
-    # 确认流程：bypass 关闭且未确认时，拒绝执行并提示需要确认
+    # 确认流程：bypass 关闭且未确认时，返回挂起状态（非失败），等待用户确认
     if not terminal_policy.is_bypass_enabled(_caller_perm) and not _confirmed:
+        import uuid as _uuid
         return {
-            "ok": False,
-            "needs_confirmation": True,
+            "ok": True,
+            "pending_confirmation": True,
+            "confirm_id": f"tcf_{_uuid.uuid4().hex[:16]}",
             "cmd": command,
-            "error": "终端命令需要用户确认后才能执行。请在设置中开启 bypass 模式或通过前端确认。",
+            "message": f"命令 '{command}' 正在等待用户在聊天窗口中确认执行。",
         }
 
     try:
         work_dir = str(cwd).strip() if cwd else None
         if work_dir and not Path(work_dir).is_dir():
             work_dir = None
+        exec_cwd = work_dir or os.getcwd()
         result = subprocess.run(
             command,
             shell=True,
@@ -932,6 +937,7 @@ def run_terminal(cmd: str, timeout: int = 30, cwd: str | None = None, _caller_pe
         return {
             "ok": True,
             "cmd": command,
+            "cwd": exec_cwd,
             "stdout": result.stdout or "",
             "stderr": result.stderr or "",
             "returncode": result.returncode,

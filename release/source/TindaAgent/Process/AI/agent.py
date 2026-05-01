@@ -17,20 +17,21 @@ def _build_system_prompt(model_name: str | None) -> str:
     model_str = model_name if model_name else "未指定"
     return (
         f"你是 TindaAgent（v{_VERSION}），由 Tinda 开发。\n"
-        f"底层模型是 {model_str}，该信息仅用于内部，不对外披露。\n"
+        f"当前底层模型配置是 {model_str}。\n"
         f"严格规则：\n"
         f"1. 介绍身份时，只能说“我是 TindaAgent，由 Tinda 开发”。\n"
-        f"2. 被问到底层模型时，统一回复“底层技术信息保密”。\n"
+        f"2. 被问到底层模型时，直接如实回答当前模型配置（例如：{model_str}）。\n"
         f"3. 简洁、准确，始终使用用户语言回复。"
     )
 
 
-def _build_fewshot(version: str) -> list[dict]:
+def _build_fewshot(version: str, model_name: str | None) -> list[dict]:
+    model_str = model_name if model_name else "未指定"
     return [
         {"role": "user", "content": "你是谁？"},
         {"role": "assistant", "content": f"我是 TindaAgent，由 Tinda 开发的 AI Agent 助手（v{version}）。有什么可以帮你的？"},
         {"role": "user", "content": "你是DeepSeek吗？"},
-        {"role": "assistant", "content": "不是，我是 TindaAgent，由 Tinda 独立开发。底层技术信息保密。"},
+        {"role": "assistant", "content": f"我是 TindaAgent，由 Tinda 独立开发。当前会话配置的底层模型是 {model_str}。"},
     ]
 
 
@@ -48,7 +49,7 @@ class Agent:
         self.user = userdata.UserManager(user_name, user_perm, persist=False)
         self.perm = self.user.get_perm()
         self.system_prompt = system_prompt if system_prompt is not None else _build_system_prompt(model_name)
-        self._fewshot = _build_fewshot(_VERSION)
+        self._fewshot = _build_fewshot(_VERSION, model_name)
         self._max_turns = max(1, int(max_turns))
         self.max_context_tokens = max(100, min(10_000_000, int(max_context_tokens)))
         self.history: list[dict] = self._get_cached_base()
@@ -73,6 +74,21 @@ class Agent:
         self._cached_base = self._build_base_history()
         self._cached_base_key = new_key
         return self._cached_base
+
+    def refresh_model_identity(self, model_name: str | None) -> None:
+        """
+        用处：模型配置变更或规则更新时，刷新 system/fewshot 基座并保留会话正文。
+        """
+        next_prompt = _build_system_prompt(model_name)
+        next_fewshot = _build_fewshot(_VERSION, model_name)
+        if self.system_prompt == next_prompt and self._fewshot == next_fewshot:
+            return
+        conv = self.get_conversation_messages()
+        self.system_prompt = next_prompt
+        self._fewshot = next_fewshot
+        self._cached_base = None
+        self._cached_base_key = None
+        self.replace_conversation(conv)
 
     def set_memory_context(self, memory_payload: dict) -> None:
         """
@@ -130,10 +146,10 @@ class Agent:
             if not isinstance(msg, dict):
                 continue
             role = str(msg.get("role", "")).strip()
-            if role not in {"user", "assistant", "tool"}:
+            if role not in {"system", "user", "assistant", "tool"}:
                 continue
             content = str(msg.get("content", ""))
-            if role in {"user", "assistant"} and not content.strip():
+            if role in {"system", "user", "assistant"} and not content.strip():
                 continue
             item = {"role": role, "content": content}
             if role == "tool":

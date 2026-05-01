@@ -409,9 +409,10 @@ class SessionStore:
         terminal_class = str(raw.get("terminal_class", raw.get("class", ""))).strip().lower()
         if terminal_class not in TERMINAL_CLASSES:
             terminal_class = ""
+        turn_id = re.sub(r"[^A-Za-z0-9._:-]+", "_", str(raw.get("turn_id", "") or "").strip())[:80]
         is_summary = bool(raw.get("is_summary", False))
         created_at = str(raw.get("created_at", "")).strip() or _now_iso()
-        return {
+        out = {
             "id": msg_id,
             "role": role,
             "content": _truncate_text(content, MAX_MSG_CHARS),
@@ -421,6 +422,9 @@ class SessionStore:
             "is_summary": is_summary,
             "created_at": created_at,
         }
+        if turn_id:
+            out["turn_id"] = turn_id
+        return out
 
     def append_messages(self, session_id: str, messages: list[dict[str, Any]]) -> dict[str, Any]:
         sid = _safe_session_id(session_id)

@@ -32,6 +32,7 @@ class ToolJob:
     created_at: str
     updated_at: str
     error: str = ""
+    call_id: str = ""
 
 
 class ToolRuntimeManager:
@@ -75,6 +76,25 @@ class ToolRuntimeManager:
             raise ValueError("仅支持 / 开头命令")
         self._ensure_session_worker(session_id)
 
+        tool_call_id = ""
+        tool_name = ""
+        try:
+            parts = shlex.split(cmd)
+        except Exception:
+            parts = []
+        if parts and str(parts[0]).lower() == "/tool" and len(parts) >= 2:
+            tool_name = str(parts[1] or "").strip()
+            if tool_name:
+                reserve_id = audit_event(
+                    op_type="TOOL_EXECUTE",
+                    subsystem="tool_runtime",
+                    func="ToolRuntimeManager.submit_command",
+                    file_path=_THIS_FILE,
+                    content=f"tool_call_reserved tool={tool_name}",
+                    extra={"session_id": str(session_id), "tool_name": tool_name, "ok": True},
+                )
+                tool_call_id = f"tc_{int(reserve_id):010d}"
+
         job_id = f"j_{uuid.uuid4().hex[:14]}"
         now = _now_iso()
         job = ToolJob(
@@ -84,10 +104,18 @@ class ToolRuntimeManager:
             status="queued",
             created_at=now,
             updated_at=now,
+            call_id=tool_call_id,
         )
         with self._lock:
             self._jobs[session_id][job_id] = job
-            self._queues[session_id].put({"job_id": job_id, "command": cmd, "user_perm": int(user_perm)})
+            self._queues[session_id].put(
+                {
+                    "job_id": job_id,
+                    "command": cmd,
+                    "user_perm": int(user_perm),
+                    "call_id": tool_call_id,
+                }
+            )
             self._append_event_locked(
                 session_id,
                 {
@@ -95,6 +123,7 @@ class ToolRuntimeManager:
                     "status": "queued",
                     "job_id": job_id,
                     "command": cmd,
+                    "call_id": tool_call_id,
                     "ts": now,
                 },
             )
@@ -111,6 +140,7 @@ class ToolRuntimeManager:
             "session_id": session_id,
             "status": "queued",
             "created_at": now,
+            "call_id": tool_call_id,
         }
 
     def _append_event_locked(self, session_id: str, payload: dict[str, Any]) -> None:
@@ -155,21 +185,63 @@ class ToolRuntimeManager:
         q = self._queues[session_id]
         while True:
             task = q.get()
+            if isinstance(task, dict) and task.get("_stop") is True:
+                q.task_done()
+                break
             if not isinstance(task, dict):
                 q.task_done()
                 continue
             job_id = str(task.get("job_id", ""))
             cmd = str(task.get("command", ""))
             user_perm = int(task.get("user_perm", 0))
+            call_id = str(task.get("call_id", "") or "").strip()
             try:
-                self._run_single_job(session_id, job_id, cmd, user_perm)
+                self._run_single_job(session_id, job_id, cmd, user_perm, call_id=call_id)
             except Exception as e:
                 self._set_job_status(session_id, job_id, "failed", str(e))
             finally:
                 q.task_done()
 
-    def _emit_step(self, session_id: str, job_id: str, kind: str, text: str, *, cls: str = "") -> None:
+    def stop_session(self, session_id: str) -> dict[str, Any]:
+        sid = str(session_id or "").strip()
+        if not sid:
+            return {"ok": False, "error": "empty session_id"}
         with self._lock:
+            q = self._queues.get(sid)
+            if q is not None:
+                try:
+                    q.put_nowait({"_stop": True})
+                except Exception:
+                    pass
+            had_queue = sid in self._queues
+            had_thread = sid in self._threads
+            had_events = sid in self._events
+            had_jobs = sid in self._jobs
+            self._queues.pop(sid, None)
+            self._threads.pop(sid, None)
+            self._events.pop(sid, None)
+            self._seq.pop(sid, None)
+            self._jobs.pop(sid, None)
+        audit_event(
+            op_type="TOOL_EXECUTE",
+            subsystem="tool_runtime",
+            func="ToolRuntimeManager.stop_session",
+            file_path=_THIS_FILE,
+            content=f"session_runtime_stopped session_id={sid}",
+            extra={
+                "session_id": sid,
+                "had_queue": bool(had_queue),
+                "had_thread": bool(had_thread),
+                "had_events": bool(had_events),
+                "had_jobs": bool(had_jobs),
+                "ok": True,
+            },
+        )
+        return {"ok": True, "session_id": sid}
+
+    def _emit_step(self, session_id: str, job_id: str, kind: str, text: str, *, cls: str = "", call_id: str = "") -> None:
+        with self._lock:
+            cid = str(call_id or "").strip()
             self._append_event_locked(
                 session_id,
                 {
@@ -178,11 +250,13 @@ class ToolRuntimeManager:
                     "kind": kind,
                     "text": str(text),
                     "class": cls,
+                    "call_id": cid,
                     "ts": _now_iso(),
                 },
             )
 
-    def _run_single_job(self, session_id: str, job_id: str, raw_command: str, user_perm: int) -> None:
+    def _run_single_job(self, session_id: str, job_id: str, raw_command: str, user_perm: int, *, call_id: str = "") -> None:
+        cid = str(call_id or "").strip()
         self._set_job_status(session_id, job_id, "running")
         audit_event(
             op_type="TOOL_EXECUTE",
@@ -222,11 +296,11 @@ class ToolRuntimeManager:
             return
 
         cmd = parts[0].lower()
-        self._emit_step(session_id, job_id, "cmd", raw_command)
+        self._emit_step(session_id, job_id, "cmd", raw_command, call_id=cid)
 
         if cmd == "/help":
-            self._emit_step(session_id, job_id, "out", "命令列表：/help /tools /tool <name> [args]")
-            self._emit_step(session_id, job_id, "sep", "─" * 36)
+            self._emit_step(session_id, job_id, "out", "命令列表：/help /tools /tool <name> [args]", call_id=cid)
+            self._emit_step(session_id, job_id, "sep", "─" * 36, call_id=cid)
             self._set_job_status(session_id, job_id, "done")
             audit_event(
                 op_type="TOOL_EXECUTE",
@@ -241,12 +315,12 @@ class ToolRuntimeManager:
         if cmd == "/tools":
             tools = tool_registry.list_tools(user_perm)
             if not tools:
-                self._emit_step(session_id, job_id, "out", "当前权限下没有可用工具。")
+                self._emit_step(session_id, job_id, "out", "当前权限下没有可用工具。", call_id=cid)
             else:
-                self._emit_step(session_id, job_id, "out", "可用工具：", cls="info")
+                self._emit_step(session_id, job_id, "out", "可用工具：", cls="info", call_id=cid)
                 for name, desc in sorted(tools.items()):
-                    self._emit_step(session_id, job_id, "out", f"- {name}: {desc}")
-            self._emit_step(session_id, job_id, "sep", "─" * 36)
+                    self._emit_step(session_id, job_id, "out", f"- {name}: {desc}", call_id=cid)
+            self._emit_step(session_id, job_id, "sep", "─" * 36, call_id=cid)
             self._set_job_status(session_id, job_id, "done")
             audit_event(
                 op_type="TOOL_READ",
@@ -259,8 +333,8 @@ class ToolRuntimeManager:
             return
 
         if cmd != "/tool":
-            self._emit_step(session_id, job_id, "out", "未知命令。输入 /help 查看可用命令。", cls="err")
-            self._emit_step(session_id, job_id, "sep", "─" * 36)
+            self._emit_step(session_id, job_id, "out", "未知命令。输入 /help 查看可用命令。", cls="err", call_id=cid)
+            self._emit_step(session_id, job_id, "sep", "─" * 36, call_id=cid)
             self._set_job_status(session_id, job_id, "failed", "unknown command")
             audit_event(
                 op_type="TOOL_EXECUTE",
@@ -273,8 +347,8 @@ class ToolRuntimeManager:
             return
 
         if len(parts) < 2:
-            self._emit_step(session_id, job_id, "out", "用法: /tool <工具名> [参数...]", cls="err")
-            self._emit_step(session_id, job_id, "sep", "─" * 36)
+            self._emit_step(session_id, job_id, "out", "用法: /tool <工具名> [参数...]", cls="err", call_id=cid)
+            self._emit_step(session_id, job_id, "sep", "─" * 36, call_id=cid)
             self._set_job_status(session_id, job_id, "failed", "missing tool name")
             audit_event(
                 op_type="TOOL_EXECUTE",
@@ -288,39 +362,61 @@ class ToolRuntimeManager:
 
         tool_name = parts[1]
         args = parts[2:]
+        payload = {"tool_name": tool_name, "args": args}
+        raw = tool_registry.run_agent_tool(
+            tool_registry.AGENT_CALL_TOOL_NAME,
+            user_perm,
+            payload,
+            call_id=cid,
+        )
+        parsed = None
+        try:
+            parsed = json.loads(raw)
+        except Exception:
+            parsed = None
 
-        capture = io.StringIO()
-        result: Any = None
-        with contextlib.redirect_stdout(capture):
-            try:
-                result = tool_registry.run_tool(tool_name, user_perm, *args)
-            except (ValueError, PermissionError) as e:
-                self._emit_step(session_id, job_id, "out", str(e), cls="err")
-                self._emit_step(session_id, job_id, "sep", "─" * 36)
-                self._set_job_status(session_id, job_id, "failed", str(e))
+        if isinstance(parsed, dict):
+            shown_call_id = str(parsed.get("call_id", "") or cid).strip()
+            suffix = f" #{shown_call_id}" if shown_call_id else ""
+            self._emit_step(session_id, job_id, "out", f"tool: {tool_name}{suffix}", cls="info", call_id=shown_call_id)
+            if parsed.get("ok") is False:
+                self._emit_step(session_id, job_id, "out", str(parsed.get("error", "工具执行失败")), cls="err", call_id=shown_call_id)
+                self._emit_step(session_id, job_id, "sep", "─" * 36, call_id=shown_call_id)
+                self._set_job_status(session_id, job_id, "failed", str(parsed.get("error", "工具执行失败")))
                 audit_event(
                     op_type="TOOL_EXECUTE",
                     subsystem="tool_runtime",
                     func="ToolRuntimeManager._run_single_job",
                     file_path=_THIS_FILE,
                     content=f"job_tool_failed job_id={job_id} tool={tool_name}",
-                    extra={"session_id": session_id, "job_id": job_id, "tool_name": tool_name, "ok": False, "error": str(e)},
+                    extra={
+                        "session_id": session_id,
+                        "job_id": job_id,
+                        "tool_name": tool_name,
+                        "call_id": shown_call_id,
+                        "ok": False,
+                        "error": str(parsed.get("error", "")),
+                    },
                 )
                 return
-
-        printed = capture.getvalue().strip()
-        self._emit_step(session_id, job_id, "out", f"tool: {tool_name}", cls="info")
-        if printed:
-            for line in printed.split("\n"):
-                self._emit_step(session_id, job_id, "out", line)
-        if result is not None:
-            text = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
-            for line in str(text).split("\n"):
-                self._emit_step(session_id, job_id, "out", line)
-        if not printed and result is None:
-            self._emit_step(session_id, job_id, "out", "工具执行完成。")
-
-        self._emit_step(session_id, job_id, "sep", "─" * 36)
+            stdout_text = str(parsed.get("stdout", "") or "")
+            if stdout_text:
+                for line in stdout_text.split("\n"):
+                    self._emit_step(session_id, job_id, "out", line, call_id=shown_call_id)
+            if "result" in parsed:
+                rendered = parsed.get("result")
+                text = rendered if isinstance(rendered, str) else json.dumps(rendered, ensure_ascii=False)
+                for line in str(text).split("\n"):
+                    self._emit_step(session_id, job_id, "out", line, call_id=shown_call_id)
+            if not stdout_text and "result" not in parsed:
+                self._emit_step(session_id, job_id, "out", "工具执行完成。", call_id=shown_call_id)
+            self._emit_step(session_id, job_id, "sep", "─" * 36, call_id=shown_call_id)
+        else:
+            text = str(raw or "").strip() or "工具执行完成。"
+            self._emit_step(session_id, job_id, "out", f"tool: {tool_name}", cls="info", call_id=cid)
+            for line in text.split("\n"):
+                self._emit_step(session_id, job_id, "out", line, call_id=cid)
+            self._emit_step(session_id, job_id, "sep", "─" * 36, call_id=cid)
         self._set_job_status(session_id, job_id, "done")
         audit_event(
             op_type="TOOL_EXECUTE",
@@ -328,7 +424,7 @@ class ToolRuntimeManager:
             func="ToolRuntimeManager._run_single_job",
             file_path=_THIS_FILE,
             content=f"job_tool_done job_id={job_id} tool={tool_name}",
-            extra={"session_id": session_id, "job_id": job_id, "tool_name": tool_name, "ok": True},
+            extra={"session_id": session_id, "job_id": job_id, "tool_name": tool_name, "call_id": cid, "ok": True},
         )
 
     def get_events(self, session_id: str, after_seq: int = 0, limit: int = 200) -> dict[str, Any]:
@@ -360,6 +456,7 @@ class ToolRuntimeManager:
                 "job_id": job.job_id,
                 "session_id": job.session_id,
                 "raw_command": job.raw_command,
+                "call_id": str(job.call_id or ""),
                 "status": job.status,
                 "created_at": job.created_at,
                 "updated_at": job.updated_at,
