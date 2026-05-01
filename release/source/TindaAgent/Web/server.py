@@ -7,6 +7,7 @@ import re
 import threading
 import time
 import uuid
+import gzip
 from pathlib import Path
 from datetime import datetime
 
@@ -20,6 +21,7 @@ from pydantic import BaseModel, Field
 
 from TindaAgent.Process.AI.agent import Agent
 from TindaAgent.Process.AI.client import LLMClient
+from TindaAgent.Process.AI.tokenizer import estimate_messages_tokens
 from TindaAgent.Process.Versioning import get_version_manager
 from TindaAgent.Process.Security import (
     get_current_principal,
@@ -120,6 +122,7 @@ _HTML_LOG_VIEW = (Path(__file__).parent / "logs.html").read_text(encoding="utf-8
 _HTML_MODEL_DIAGNOSTICS = (Path(__file__).parent / "model_diagnostics.html").read_text(encoding="utf-8")
 _HTML_SETTINGS = (Path(__file__).parent / "settings.html").read_text(encoding="utf-8")
 _LOG_ROOT = get_log_root()
+_ACTIVE_LOG_ROOT_ENV = "TINDA_ACTIVE_LOG_ROOT"
 _LOG_MAX_READ_BYTES = 2 * 1024 * 1024
 _AUTH_OPEN_PATHS = {
     "/",
@@ -806,6 +809,7 @@ _TOOL_MARKER_BLOCK_RE = re.compile(
 )
 _SYSTEM_SUMMARY_PREFIX_RE = re.compile(r"(?im)^\s*\[系统摘要\]\s*")
 _LLM_TERMINAL_CONTEXT_MAX_ROWS = 40
+_AUTO_COMPRESS_RAW_CHAT_ROWS_TRIGGER = 80
 _LLM_CONTEXT_PAYLOAD_VERSION = 1
 _LLM_CONTEXT_PAYLOAD_FORMAT = "tinda_llm_json_input"
 _CONTEXT_INJECTION_PREVIEW_MAX_ITEMS = 6
@@ -1311,6 +1315,26 @@ def _store_to_agent_messages(rows: list[dict]) -> tuple[list[dict], dict[str, in
     return out, stats
 
 
+def _estimate_context_usage_length(agent_rows: list[dict]) -> int:
+    msgs: list[dict] = []
+    for item in (agent_rows or []):
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role", "")).strip()
+        if role not in {"system", "user", "assistant", "tool"}:
+            continue
+        content = str(item.get("content", ""))
+        if role in {"system", "user", "assistant"} and not content.strip():
+            continue
+        row = {"role": role, "content": content}
+        if role == "tool":
+            tcid = str(item.get("tool_call_id", "")).strip()
+            if tcid:
+                row["tool_call_id"] = tcid
+        msgs.append(row)
+    return int(estimate_messages_tokens(msgs))
+
+
 def _is_logged_in() -> bool:
     return sec_get_current_user() is not None
 
@@ -1426,13 +1450,26 @@ def _perm_items() -> list[dict]:
     ]
 
 
-def _maybe_auto_compress(session_id: str, *, context_rows: list[dict] | None = None) -> None:
+def _maybe_auto_compress(session_id: str, *, context_rows: list[dict] | None = None) -> dict[str, Any]:
     sid = str(session_id)
     agent = _sessions.get(sid)
+    info: dict[str, Any] = {
+        "compressed": False,
+        "trigger": "",
+        "reason": "",
+        "raw_chat_count": 0,
+        "estimated_tokens_before": 0,
+        "estimated_tokens_after": 0,
+        "max_context_tokens": 0,
+    }
     if not agent:
-        return
-    if not agent._should_compress():
-        return
+        info["reason"] = "agent_not_found"
+        return info
+    tokens_before = int(agent.estimate_current_tokens())
+    max_tokens = int(getattr(agent, "max_context_tokens", 0) or 0)
+    info["estimated_tokens_before"] = tokens_before
+    info["estimated_tokens_after"] = tokens_before
+    info["max_context_tokens"] = max_tokens
     rows = context_rows if context_rows is not None else _store.get_context_messages(sid)
     raw_rows = [
         x for x in rows
@@ -1440,26 +1477,52 @@ def _maybe_auto_compress(session_id: str, *, context_rows: list[dict] | None = N
         and str(x.get("entry_type", "chat")) == "chat"
         and str(x.get("role", "")) in {"user", "assistant"}
     ]
+    raw_count = len(raw_rows)
+    info["raw_chat_count"] = raw_count
+    token_trigger = tokens_before > max_tokens
+    row_trigger = raw_count >= _AUTO_COMPRESS_RAW_CHAT_ROWS_TRIGGER
+    if token_trigger:
+        info["trigger"] = "token"
+    elif row_trigger:
+        info["trigger"] = "raw_chat_count"
+    else:
+        info["reason"] = "below_threshold"
+        return info
     if len(raw_rows) < 6:
-        return
+        info["reason"] = "insufficient_messages"
+        return info
     older = raw_rows[:-4]
     try:
         summary = _compress_messages_with_llm(older)
         if not summary:
-            return
+            info["reason"] = "summary_empty"
+            return info
         _store.compress_context(sid, summary)
         new_rows = _store.get_context_messages(sid)
         agent_rows, _ = _store_to_agent_messages(new_rows)
         agent.replace_conversation(agent_rows)
+        tokens_after = int(agent.estimate_current_tokens())
+        info["compressed"] = True
+        info["reason"] = "ok"
+        info["estimated_tokens_after"] = tokens_after
         _audit_web(
             "SYSTEM_EXECUTE",
             "_maybe_auto_compress",
             f"auto_compress_done session_id={sid}",
-            {"session_id": sid, "compressed_count": len(older),
-             "context_tokens_before": agent.estimate_current_tokens()},
+            {
+                "session_id": sid,
+                "compressed_count": len(older),
+                "trigger": info["trigger"],
+                "raw_chat_count_before": raw_count,
+                "context_tokens_before": tokens_before,
+                "context_tokens_after": tokens_after,
+                "max_context_tokens": max_tokens,
+            },
         )
-    except Exception:
-        pass
+        return info
+    except Exception as e:
+        info["reason"] = f"exception:{e}"
+        return info
 
 
 def _get_agent(session_id: str):
@@ -1510,6 +1573,25 @@ def _get_agent(session_id: str):
             "max_context_tokens": agent.max_context_tokens,
         },
     )
+    # 自动压缩：token 超阈值或原始聊天消息过长时触发。
+    auto_compress = _maybe_auto_compress(sid, context_rows=rows)
+    if bool(auto_compress.get("compressed")):
+        rows = _store.get_context_messages(sid)
+        agent_rows, filter_stats = _store_to_agent_messages(rows)
+        _audit_context_injection(
+            "get_agent.rebuild_context_after_compress",
+            sid,
+            agent_rows,
+            extra={
+                "source_context_rows": len(rows),
+                "context_filter": filter_stats,
+                "model": _client.model,
+                "estimated_tokens": agent.estimate_current_tokens(),
+                "max_context_tokens": agent.max_context_tokens,
+                "auto_compress": auto_compress,
+            },
+        )
+
     _audit_web(
         "SYSTEM_EXECUTE",
         "_get_agent",
@@ -1522,11 +1604,9 @@ def _get_agent(session_id: str):
             "model": _client.model,
             "estimated_tokens": agent.estimate_current_tokens(),
             "max_context_tokens": agent.max_context_tokens,
+            "auto_compress": auto_compress,
         },
     )
-
-    # 自动压缩：上下文超过阈值时触发
-    _maybe_auto_compress(sid, context_rows=rows)
 
     return _sessions[sid]
 
@@ -1934,21 +2014,53 @@ def _read_log_tail(path: Path, *, max_lines: int, max_bytes: int) -> tuple[list[
     return lines, truncated
 
 
+def _iter_log_roots(*, include_legacy: bool = True) -> list[Path]:
+    roots: list[Path] = []
+    seen: set[str] = set()
+
+    def _append(path: Path | None) -> None:
+        if path is None:
+            return
+        try:
+            resolved = Path(path).expanduser().resolve()
+        except Exception:
+            resolved = Path(path)
+        key = str(resolved)
+        if key in seen:
+            return
+        seen.add(key)
+        roots.append(resolved)
+
+    _append(get_log_root())
+    _append(_LOG_ROOT)
+    active_raw = str(os.getenv(_ACTIVE_LOG_ROOT_ENV, "")).strip()
+    if active_raw:
+        _append(Path(active_raw))
+    if include_legacy:
+        _append(get_legacy_log_root())
+    return roots
+
+
 def _resolve_log_file_path(safe_name: str) -> Path | None:
-    primary = _LOG_ROOT / safe_name
-    if primary.exists() and primary.is_file():
+    for root in _iter_log_roots(include_legacy=True):
+        primary = root / safe_name
+        if not primary.exists() or not primary.is_file():
+            continue
+        legacy_root = get_legacy_log_root()
+        try:
+            is_legacy = primary.resolve().is_relative_to(legacy_root.resolve())
+        except Exception:
+            is_legacy = False
+        if is_legacy:
+            audit_event(
+                op_type="SYSTEM_READ",
+                subsystem="storage_migration",
+                func="_resolve_log_file_path",
+                file_path=_THIS_FILE,
+                content=f"legacy_fallback_read_log file={safe_name}",
+                extra={"legacy_file": str(primary)},
+            )
         return primary
-    legacy = get_legacy_log_root() / safe_name
-    if legacy.exists() and legacy.is_file():
-        audit_event(
-            op_type="SYSTEM_READ",
-            subsystem="storage_migration",
-            func="_resolve_log_file_path",
-            file_path=_THIS_FILE,
-            content=f"legacy_fallback_read_log file={safe_name}",
-            extra={"legacy_file": str(legacy)},
-        )
-        return legacy
     return None
 
 
@@ -1970,25 +2082,57 @@ def _parse_event_id(raw: str | int | None) -> int | None:
     return value
 
 
-def _resolve_total_jsonl_candidates() -> list[Path]:
+def _resolve_total_jsonl_candidates(*, include_archives: bool = True) -> list[Path]:
     rows: list[Path] = []
-    primary = _LOG_ROOT / "total.jsonl"
-    if primary.exists() and primary.is_file():
-        rows.append(primary)
-    legacy = get_legacy_log_root() / "total.jsonl"
-    if legacy.exists() and legacy.is_file():
+    seen: set[str] = set()
+    roots = [root for root in _iter_log_roots(include_legacy=True) if root.exists()]
+
+    def _append(path: Path) -> None:
         try:
-            if legacy.resolve() != primary.resolve():
-                rows.append(legacy)
+            key = str(path.resolve())
         except Exception:
-            rows.append(legacy)
+            key = str(path)
+        if key in seen:
+            return
+        if not path.exists() or not path.is_file():
+            return
+        seen.add(key)
+        rows.append(path)
+
+    for root in roots:
+        _append(root / "total.jsonl")
+        if not include_archives:
+            continue
+        for arc in sorted(root.glob("total.*.jsonl.gz"), reverse=True):
+            _append(arc)
     return rows
 
 
+def _iter_audit_rows(path: Path):
+    opener = gzip.open if str(path).lower().endswith(".gz") else open
+    with opener(path, "rt", encoding="utf-8", errors="replace") as fp:
+        for line_no, line in enumerate(fp, start=1):
+            row_text = str(line).strip()
+            if not row_text:
+                continue
+            try:
+                row = json.loads(row_text)
+            except Exception:
+                continue
+            try:
+                rid = int(row.get("id", -1))
+            except Exception:
+                continue
+            if rid <= 0:
+                continue
+            yield line_no, rid, row
+
+
 def _find_audit_event_by_id(event_id: int) -> dict | None:
-    """通过索引 O(1) 查找，不再线性扫描 JSONL。"""
+    """先走 total.idx 快速查当前日志，再回退扫描归档 .jsonl.gz。"""
     target = int(event_id)
-    for path in _resolve_total_jsonl_candidates():
+    # Fast path: 只对未压缩 total.jsonl 使用 idx 定位。
+    for path in _resolve_total_jsonl_candidates(include_archives=False):
         idx_path = path.with_suffix(".idx")
         idx = {}
         try:
@@ -2024,6 +2168,21 @@ def _find_audit_event_by_id(event_id: int) -> dict | None:
                     }
         except Exception:
             pass
+
+    # Slow path: 回退扫描当前日志+历史归档。
+    for path in _resolve_total_jsonl_candidates(include_archives=True):
+        try:
+            for line_no, rid, row in _iter_audit_rows(path):
+                if rid != target:
+                    continue
+                return {
+                    "event": row,
+                    "source_file": str(path.name),
+                    "source_path": str(path),
+                    "source_line": int(line_no),
+                }
+        except Exception:
+            continue
     return None
 
 
@@ -2329,12 +2488,7 @@ async def list_users():
 @app.get("/logs/files")
 async def list_log_files():
     _require_public_read_user()
-    roots: list[Path] = []
-    if _LOG_ROOT.exists():
-        roots.append(_LOG_ROOT)
-    legacy = get_legacy_log_root()
-    if legacy.exists() and legacy.resolve() != _LOG_ROOT.resolve():
-        roots.append(legacy)
+    roots = [root for root in _iter_log_roots(include_legacy=True) if root.exists()]
     if not roots:
         return JSONResponse({"ok": True, "files": []})
 
@@ -2626,6 +2780,25 @@ async def get_session_messages(session_id: str):
     _store.ensure_session(session_id)
     rows = _store.load_messages(session_id)
     return JSONResponse({"ok": True, "session_id": session_id, "entries": rows})
+
+
+@app.get("/sessions/{session_id}/context-usage")
+async def get_session_context_usage(session_id: str):
+    _require_login()
+    _store.ensure_session(session_id)
+    sid = str(session_id or "").strip()
+    context_rows = _store.get_context_messages(sid)
+    agent_rows, _ = _store_to_agent_messages(context_rows)
+    usage = _estimate_context_usage_length(agent_rows)
+    return JSONResponse(
+        {
+            "ok": True,
+            "session_id": sid,
+            "usage_length": int(usage),
+            "context_rows": len(context_rows),
+            "agent_rows": len(agent_rows),
+        }
+    )
 
 
 @app.post("/sessions/{session_id}/title")
@@ -3597,4 +3770,6 @@ async def import_record_compat(req: ImportRecordRequest):
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("TindaAgent.Web.server:app", host="0.0.0.0", port=8000, reload=True)
+    _DEFAULT_PORT = 8000
+    _DEFAULT_HOST = "0.0.0.0"
+    uvicorn.run("TindaAgent.Web.server:app", host=_DEFAULT_HOST, port=_DEFAULT_PORT, reload=True)

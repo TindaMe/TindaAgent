@@ -8,6 +8,9 @@ import uvicorn
 
 from TindaAgent.Process.Architecture.paths import get_runtime_root
 
+_DEFAULT_PORT = 8000
+_DEFAULT_HOST = "0.0.0.0"
+
 
 def _load_selected_app_dir() -> Path | None:
     runtime_root = get_runtime_root()
@@ -49,8 +52,8 @@ def _pick_app_import(app_dir: Path | None) -> str:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="TindaAgent 启动器")
-    parser.add_argument("--port", type=int, default=8000, help="监听端口 (默认 8000)")
-    parser.add_argument("--host", type=str, default="0.0.0.0", help="监听地址 (默认 0.0.0.0)")
+    parser.add_argument("--port", type=int, default=_DEFAULT_PORT, help=f"监听端口 (默认 {_DEFAULT_PORT})")
+    parser.add_argument("--host", type=str, default=_DEFAULT_HOST, help=f"监听地址 (默认 {_DEFAULT_HOST})")
     parser.add_argument("--no-reload", action="store_true", help="禁用热重载")
     args = parser.parse_args()
 
