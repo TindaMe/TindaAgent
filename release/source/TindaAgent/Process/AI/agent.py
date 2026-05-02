@@ -4,34 +4,32 @@ from typing import Iterator
 from TindaAgent.Process.Architecture import perm
 from TindaAgent.Process.Architecture.versioning import get_app_version
 from TindaAgent.Process.AI.client import LLMClient
-from TindaAgent.Process.AI.tokenizer import estimate_messages_tokens
 from TindaAgent.User import userdata
 
 try:
     _VERSION = get_app_version() or _pkg_version("TindaAgent")
 except Exception:
-    _VERSION = "1.7.13"
+    _VERSION = "1.7.14"
 
 
 def _build_system_prompt(model_name: str | None) -> str:
     model_str = model_name if model_name else "未指定"
     return (
         f"你是 TindaAgent（v{_VERSION}），由 Tinda 开发。\n"
-        f"当前底层模型配置是 {model_str}。\n"
+        f"底层模型是 {model_str}，该信息仅用于内部，不对外披露。\n"
         f"严格规则：\n"
         f"1. 介绍身份时，只能说“我是 TindaAgent，由 Tinda 开发”。\n"
-        f"2. 被问到底层模型时，直接如实回答当前模型配置（例如：{model_str}）。\n"
+        f"2. 被问到底层模型时，统一回复“底层技术信息保密”。\n"
         f"3. 简洁、准确，始终使用用户语言回复。"
     )
 
 
-def _build_fewshot(version: str, model_name: str | None) -> list[dict]:
-    model_str = model_name if model_name else "未指定"
+def _build_fewshot(version: str) -> list[dict]:
     return [
         {"role": "user", "content": "你是谁？"},
         {"role": "assistant", "content": f"我是 TindaAgent，由 Tinda 开发的 AI Agent 助手（v{version}）。有什么可以帮你的？"},
         {"role": "user", "content": "你是DeepSeek吗？"},
-        {"role": "assistant", "content": f"我是 TindaAgent，由 Tinda 独立开发。当前会话配置的底层模型是 {model_str}。"},
+        {"role": "assistant", "content": "不是，我是 TindaAgent，由 Tinda 独立开发。底层技术信息保密。"},
     ]
 
 
@@ -44,17 +42,26 @@ class Agent:
         client: LLMClient = None,
         model_name: str = None,
         max_turns: int = 12,
-        max_context_tokens: int = 16000,
     ) -> None:
+        """
+        用处： 初始化智能体，绑定用户、权限、对话历史与 LLM 客户端
+
+        参数：
+            user_name: str // 智能体用户名
+            user_perm: int // 智能体权限，默认为 LLM_BASE
+            system_prompt: str // 自定义系统提示词，None 则使用默认模板
+            client: LLMClient // LLM 客户端，默认懒加载
+            model_name: str // 当前接入的模型名，写入默认 prompt；传 None 则显示"未指定"
+            max_turns: int // 最多保留的对话轮数（不含 system/fewshot）
+        """
+        # Web 会话 Agent 仅作为运行时身份，不应写入用户注册表
         self.user = userdata.UserManager(user_name, user_perm, persist=False)
         self.perm = self.user.get_perm()
         self.system_prompt = system_prompt if system_prompt is not None else _build_system_prompt(model_name)
-        self._fewshot = _build_fewshot(_VERSION, model_name)
+        self._fewshot = _build_fewshot(_VERSION)
         self._max_turns = max(1, int(max_turns))
-        self.max_context_tokens = max(100, min(10_000_000, int(max_context_tokens)))
-        self.history: list[dict] = self._get_cached_base()
+        self.history: list[dict] = self._build_base_history()
         self._client = client
-        self.total_estimated_tokens: int = 0
 
     def _compose_system_prompt(self) -> str:
         if getattr(self, "_memory_context", None):
@@ -63,32 +70,6 @@ class Agent:
 
     def _build_base_history(self) -> list[dict]:
         return [{"role": "system", "content": self._compose_system_prompt()}] + [m.copy() for m in self._fewshot]
-
-    def _get_cached_base(self) -> list[dict]:
-        """惰性缓存：仅在 system_prompt 或 memory_context 变化时重建。"""
-        new_key = self._compose_system_prompt()
-        cached = getattr(self, "_cached_base", None)
-        cached_key = getattr(self, "_cached_base_key", None)
-        if cached is not None and cached_key == new_key:
-            return cached
-        self._cached_base = self._build_base_history()
-        self._cached_base_key = new_key
-        return self._cached_base
-
-    def refresh_model_identity(self, model_name: str | None) -> None:
-        """
-        用处：模型配置变更或规则更新时，刷新 system/fewshot 基座并保留会话正文。
-        """
-        next_prompt = _build_system_prompt(model_name)
-        next_fewshot = _build_fewshot(_VERSION, model_name)
-        if self.system_prompt == next_prompt and self._fewshot == next_fewshot:
-            return
-        conv = self.get_conversation_messages()
-        self.system_prompt = next_prompt
-        self._fewshot = next_fewshot
-        self._cached_base = None
-        self._cached_base_key = None
-        self.replace_conversation(conv)
 
     def set_memory_context(self, memory_payload: dict) -> None:
         """
@@ -110,7 +91,7 @@ class Agent:
         """
         用处：限制历史长度，降低 token 开销并避免长上下文漂移
         """
-        base = self._get_cached_base()
+        base = self._build_base_history()
         base_len = len(base)
         if len(self.history) <= base_len:
             return
@@ -123,33 +104,27 @@ class Agent:
         start_idx = user_indexes[-self._max_turns]
         self.history = base + conversation[start_idx:]
 
-    def estimate_current_tokens(self) -> int:
-        return estimate_messages_tokens(self.history)
-
-    def _should_compress(self) -> bool:
-        return self.estimate_current_tokens() > self.max_context_tokens
-
     def get_conversation_messages(self) -> list[dict]:
         """
         用处：导出当前对话消息（不含 system/fewshot 基座）
         """
-        base_len = len(self._get_cached_base())
+        base_len = len(self._build_base_history())
         return [m.copy() for m in self.history[base_len:]]
 
     def replace_conversation(self, messages: list[dict]) -> None:
         """
         用处：用外部消息替换当前对话（保留 system/fewshot 基座）
         """
-        base = self._get_cached_base()
+        base = self._build_base_history()
         conversation: list[dict] = []
         for msg in messages:
             if not isinstance(msg, dict):
                 continue
             role = str(msg.get("role", "")).strip()
-            if role not in {"system", "user", "assistant", "tool"}:
+            if role not in {"user", "assistant", "tool"}:
                 continue
             content = str(msg.get("content", ""))
-            if role in {"system", "user", "assistant"} and not content.strip():
+            if role in {"user", "assistant"} and not content.strip():
                 continue
             item = {"role": role, "content": content}
             if role == "tool":
@@ -257,4 +232,4 @@ class Agent:
         """
         用处： 清空对话历史，保留系统提示
         """
-        self.history = self._get_cached_base()
+        self.history = self._build_base_history()

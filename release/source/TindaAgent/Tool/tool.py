@@ -2,10 +2,7 @@ import functools
 import contextlib
 import io
 import json
-import os
 import re
-import subprocess
-import gzip
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
@@ -14,9 +11,7 @@ from typing import Any, Callable
 from TindaAgent.Process.Architecture import perm
 from TindaAgent.Process.Architecture.paths import get_memory_file
 from TindaAgent.Process.Observability import audit_event
-from TindaAgent.Process.Observability.audit import redact_sensitive_text
 from TindaAgent.Process.Architecture.paths import get_log_root, get_legacy_log_root
-from TindaAgent.Process.Security import terminal_policy
 from TindaAgent.Permission import (
     has_perm,
     validate_registered_tool_perm,
@@ -180,10 +175,6 @@ def tool(tool_perm: int, tool_des: str, must: bool = False) -> Callable:
             SYSTEM_TOOL[tool_name] = tool_info
         else:
             SPARE_TOOL[tool_name] = tool_info
-        _invalidate_tool_caches()
-        import inspect as _inspect
-        if "_caller_perm" in _inspect.signature(func).parameters:
-            _caller_perm_funcs.add(id(func))
 
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
@@ -270,8 +261,6 @@ def run_tool(tool_name: str, user_perm: int, *args, **kwargs):
         },
     )
     try:
-        if id(tool_info["func"]) in _caller_perm_funcs:
-            kwargs["_caller_perm"] = int(user_perm)
         result = tool_info["func"](*args, **kwargs)
         audit_event(
             op_type="TOOL_EXECUTE",
@@ -294,41 +283,41 @@ def run_tool(tool_name: str, user_perm: int, *args, **kwargs):
         raise
 
 
-_all_tools_cache: dict[str, dict] | None = None
-_schema_cache: dict[int, list[dict]] = {}
-_caller_perm_funcs: set[int] = set()  # id(func) for tools that accept _caller_perm
-
-
-def _invalidate_tool_caches() -> None:
-    global _all_tools_cache, _schema_cache
-    _all_tools_cache = None
-    _schema_cache.clear()
-
-
 def list_tools(user_perm: int | None = None) -> dict[str, str]:
-    global _all_tools_cache
-    if _all_tools_cache is None:
-        _all_tools_cache = {**SYSTEM_TOOL, **SPARE_TOOL}
+    """
+    用处： 列出所有工具名称与描述；若提供 user_perm 则只返回可调用的
+
+    参数：
+        user_perm: int | None // 调用方权限，None 表示不过滤
+
+    返回：
+        dict[str, str] // {工具名: 描述}
+    """
     result: dict[str, str] = {}
-    for name, info in _all_tools_cache.items():
+    for name, info in {**SYSTEM_TOOL, **SPARE_TOOL}.items():
         if user_perm is None or (user_perm & info["perm"]) == info["perm"]:
             result[name] = info["des"]
     return result
 
 
 def build_agent_tool_schemas(user_perm: int) -> list[dict[str, Any]]:
-    cached = _schema_cache.get(user_perm)
-    if cached is not None:
-        return cached
+    """
+    用处：构建供模型调用的工具 schema（OpenAI Chat Completions tools 格式）
+    """
     tools = list_tools(user_perm)
     tool_hint = ", ".join(sorted(tools.keys())) if tools else "无"
+
     schemas: list[dict[str, Any]] = [
         {
             "type": "function",
             "function": {
                 "name": AGENT_LIST_TOOLS_NAME,
                 "description": "列出当前会话可调用的后端工具及用途。",
-                "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": False,
+                },
             },
         },
         {
@@ -342,9 +331,22 @@ def build_agent_tool_schemas(user_perm: int) -> list[dict[str, Any]]:
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "tool_name": {"type": "string", "description": "目标工具名称"},
-                        "args": {"type": "array", "description": "传给工具的位置参数列表（字符串）", "items": {"type": "string"}, "default": []},
-                        "kwargs": {"type": "object", "description": "传给工具的具名参数（值会按字符串处理）", "additionalProperties": {"type": "string"}, "default": {}},
+                        "tool_name": {
+                            "type": "string",
+                            "description": "目标工具名称",
+                        },
+                        "args": {
+                            "type": "array",
+                            "description": "传给工具的位置参数列表（字符串）",
+                            "items": {"type": "string"},
+                            "default": [],
+                        },
+                        "kwargs": {
+                            "type": "object",
+                            "description": "传给工具的具名参数（值会按字符串处理）",
+                            "additionalProperties": {"type": "string"},
+                            "default": {},
+                        },
                     },
                     "required": ["tool_name"],
                     "additionalProperties": False,
@@ -352,7 +354,6 @@ def build_agent_tool_schemas(user_perm: int) -> list[dict[str, Any]]:
             },
         },
     ]
-    _schema_cache[user_perm] = schemas
     return schemas
 
 
@@ -559,8 +560,6 @@ def run_agent_tool(
     if printed:
         payload["stdout"] = printed
     if result is not None:
-        if isinstance(result, dict) and result.get("ok") is not None:
-            payload["ok"] = result["ok"]
         payload["result"] = result
     if not printed and result is None:
         payload["result"] = "工具执行完成"
@@ -843,61 +842,17 @@ def _parse_event_id(raw: str | int | None) -> int | None:
 
 def _iter_total_jsonl_candidates() -> list[Path]:
     paths: list[Path] = []
-    seen: set[str] = set()
-    roots: list[Path] = []
-    active_log_root = str(os.getenv("TINDA_ACTIVE_LOG_ROOT", "")).strip()
-    primary_root = get_log_root()
-    if primary_root.exists():
-        roots.append(primary_root)
-    if active_log_root:
-        active_root = Path(active_log_root).expanduser()
-        if active_root.exists():
-            roots.append(active_root)
-    legacy_root = get_legacy_log_root()
-    if legacy_root.exists():
+    primary = get_log_root() / "total.jsonl"
+    if primary.exists() and primary.is_file():
+        paths.append(primary)
+    legacy = get_legacy_log_root() / "total.jsonl"
+    if legacy.exists() and legacy.is_file():
         try:
-            if legacy_root.resolve() != primary_root.resolve():
-                roots.append(legacy_root)
+            if legacy.resolve() != primary.resolve():
+                paths.append(legacy)
         except Exception:
-            roots.append(legacy_root)
-
-    def _append(path: Path) -> None:
-        try:
-            key = str(path.resolve())
-        except Exception:
-            key = str(path)
-        if key in seen:
-            return
-        if not path.exists() or not path.is_file():
-            return
-        seen.add(key)
-        paths.append(path)
-
-    for root in roots:
-        _append(root / "total.jsonl")
-        for arc in sorted(root.glob("total.*.jsonl.gz"), reverse=True):
-            _append(arc)
+            paths.append(legacy)
     return paths
-
-
-def _iter_audit_rows(path: Path):
-    opener = gzip.open if str(path).lower().endswith(".gz") else open
-    with opener(path, "rt", encoding="utf-8", errors="replace") as fp:
-        for line_no, line in enumerate(fp, start=1):
-            row_text = str(line).strip()
-            if not row_text:
-                continue
-            try:
-                row = json.loads(row_text)
-            except Exception:
-                continue
-            try:
-                rid = int(row.get("id", -1))
-            except Exception:
-                continue
-            if rid <= 0:
-                continue
-            yield line_no, rid, row
 
 
 @tool(perm.PUBLIC_READ, "按审计ID查询日志事件（id 支持纯数字或 tc_ 前缀）", must=True)
@@ -911,78 +866,28 @@ def get_log_event_by_id(id: str) -> dict[str, Any]:
 
     for path in _iter_total_jsonl_candidates():
         try:
-            for line_no, rid, row in _iter_audit_rows(path):
-                if rid != parsed_id:
-                    continue
-                return {
-                    "ok": True,
-                    "id": parsed_id,
-                    "source_file": str(path.name),
-                    "source_line": int(line_no),
-                    "event": row,
-                }
+            with path.open("r", encoding="utf-8") as fp:
+                for line_no, line in enumerate(fp, start=1):
+                    row_text = str(line).strip()
+                    if not row_text:
+                        continue
+                    try:
+                        row = json.loads(row_text)
+                    except Exception:
+                        continue
+                    try:
+                        rid = int(row.get("id", -1))
+                    except Exception:
+                        continue
+                    if rid != parsed_id:
+                        continue
+                    return {
+                        "ok": True,
+                        "id": parsed_id,
+                        "source_file": str(path.name),
+                        "source_line": int(line_no),
+                        "event": row,
+                    }
         except Exception:
             continue
     return {"ok": False, "id": parsed_id, "error": "id not found"}
-
-
-@tool(perm.TOOL_EXECUTE | perm.PUBLIC_EXECUTE, "在终端执行一条 shell 命令（参数: cmd=命令字符串；兼容 command=...；timeout=超时秒数默认30；cwd=工作目录可选）。系统级操作(rm/mv/chmod等)需额外SYSTEM权限。", must=True)
-def run_terminal(cmd: str = "", timeout: int = 30, cwd: str | None = None, command: str | None = None, _caller_perm: int = 0, _confirmed: bool = False) -> dict[str, Any]:
-    command = str(cmd or command or "").strip()
-    if not command:
-        return {"ok": False, "error": "cmd 不能为空"}
-
-    blacklisted = terminal_policy.check_blacklist(command)
-    if blacklisted:
-        return {"ok": False, "error": f"命令被黑名单拦截: {', '.join(blacklisted)}"}
-
-    sys_ops = terminal_policy.detect_system_operations(command)
-    if sys_ops and (_caller_perm & perm.SYSTEM_EXECUTE) != perm.SYSTEM_EXECUTE:
-        return {"ok": False, "error": f"命令涉及系统操作({', '.join(sys_ops)})，需要 SYSTEM_EXECUTE 权限，当前权限不足"}
-
-    # 确认流程：bypass 关闭且未确认时，返回挂起状态（非失败），等待用户确认
-    if not terminal_policy.is_bypass_enabled(_caller_perm) and not _confirmed:
-        import uuid as _uuid
-        return {
-            "ok": True,
-            "pending_confirmation": True,
-            "confirm_id": f"tcf_{_uuid.uuid4().hex[:16]}",
-            "cmd": command,
-            "message": f"命令 '{command}' 正在等待用户在聊天窗口中确认执行。",
-        }
-
-    try:
-        work_dir = str(cwd).strip() if cwd else None
-        if work_dir and not Path(work_dir).is_dir():
-            work_dir = None
-        exec_cwd = work_dir or os.getcwd()
-        result = subprocess.run(
-            command,
-            shell=True,
-            capture_output=True,
-            text=True,
-            timeout=max(1, min(int(timeout), 120)),
-            cwd=work_dir,
-            env={**os.environ, "PYTHONUNBUFFERED": "1"},
-        )
-        stdout_raw = result.stdout or ""
-        stderr_raw = result.stderr or ""
-        out = stdout_raw + stderr_raw
-        if len(out) > 8000:
-            out = out[:8000] + "\n...(output truncated)"
-        safe_stdout = redact_sensitive_text(stdout_raw)
-        safe_stderr = redact_sensitive_text(stderr_raw)
-        safe_output = redact_sensitive_text(out.strip() or "(no output)")
-        return {
-            "ok": True,
-            "cmd": command,
-            "cwd": exec_cwd,
-            "stdout": safe_stdout,
-            "stderr": safe_stderr,
-            "returncode": result.returncode,
-            "output": safe_output,
-        }
-    except subprocess.TimeoutExpired:
-        return {"ok": False, "error": f"命令超时（>{timeout}s）: {command[:120]}"}
-    except Exception as e:
-        return {"ok": False, "error": str(e), "cmd": command[:120]}

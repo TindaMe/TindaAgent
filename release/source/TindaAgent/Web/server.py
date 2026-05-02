@@ -2,12 +2,10 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 import threading
 import time
 import uuid
-import gzip
 from pathlib import Path
 from datetime import datetime
 
@@ -21,7 +19,6 @@ from pydantic import BaseModel, Field
 
 from TindaAgent.Process.AI.agent import Agent
 from TindaAgent.Process.AI.client import LLMClient
-from TindaAgent.Process.AI.tokenizer import estimate_messages_tokens
 from TindaAgent.Process.Versioning import get_version_manager
 from TindaAgent.Process.Security import (
     get_current_principal,
@@ -43,8 +40,6 @@ from TindaAgent.Process.Architecture.paths import (
     get_sessions_root,
 )
 from TindaAgent.Process.Observability import audit_event
-from TindaAgent.Process.Observability.audit import redact_sensitive_text
-from TindaAgent.Web import records_store
 from TindaAgent.Web.session_store import SessionStore, SessionStoreError, cleanup_legacy_chat_records
 from TindaAgent.Web.tool_runtime import ToolRuntimeManager
 
@@ -92,8 +87,6 @@ if not _cleanup_flag_file.exists():
 
 _sessions: dict[str, Agent] = {}
 _session_last_access: dict[str, float] = {}
-_title_generation_lock = threading.Lock()
-_title_generation_inflight: set[str] = set()
 _MAX_SESSIONS = 300
 _LLM_EXECUTE_PERM = int(perm.PUBLIC_EXECUTE)
 
@@ -120,21 +113,20 @@ _APP_VERSION = get_app_version()
 
 _HTML_HOME = (Path(__file__).parent / "home.html").read_text(encoding="utf-8")
 _HTML_CHAT = (Path(__file__).parent / "chat.html").read_text(encoding="utf-8")
+_HTML_SETTINGS = (Path(__file__).parent / "settings.html").read_text(encoding="utf-8")
 _HTML_USER_ADMIN = (Path(__file__).parent / "user_admin.html").read_text(encoding="utf-8")
 _HTML_LOG_VIEW = (Path(__file__).parent / "logs.html").read_text(encoding="utf-8")
 _HTML_MODEL_DIAGNOSTICS = (Path(__file__).parent / "model_diagnostics.html").read_text(encoding="utf-8")
-_HTML_SETTINGS = (Path(__file__).parent / "settings.html").read_text(encoding="utf-8")
 _LOG_ROOT = get_log_root()
-_ACTIVE_LOG_ROOT_ENV = "TINDA_ACTIVE_LOG_ROOT"
 _LOG_MAX_READ_BYTES = 2 * 1024 * 1024
 _AUTH_OPEN_PATHS = {
     "/",
     "/home",
     "/chat",
     "/app",
+    "/settings",
     "/logs",
     "/model-diagnostics",
-    "/settings",
     "/favicon.ico",
     "/system/version",
     "/user-admin",
@@ -181,7 +173,7 @@ def _build_runtime_version_state() -> dict[str, object]:
     runtime_app_path = str(Path(__file__).resolve().parents[2])
     version_consistent = not (runtime_version and selected_version_raw and runtime_version != selected_version_raw)
 
-    # 产品策略：切换禁用时，不保留"已选版本"历史错位；检测到错位自动对齐 current.json。
+    # 产品策略：切换禁用时，不保留“已选版本”历史错位；检测到错位自动对齐 current.json。
     if not version_consistent:
         try:
             aligned = _version_mgr.align_current_to_runtime(runtime_version, runtime_app_path, keep_switched_at=True)
@@ -332,18 +324,6 @@ def _now_iso() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
 
 
-def _new_turn_id() -> str:
-    return f"turn_{uuid.uuid4().hex[:16]}"
-
-
-def _normalize_turn_id(raw: str | None) -> str:
-    text = str(raw or "").strip()
-    if not text:
-        return ""
-    text = re.sub(r"[^A-Za-z0-9._:-]+", "_", text)
-    return text[:80]
-
-
 def _normalize_model_choice(raw: str | None) -> str | None:
     key = str(raw or "").strip().lower()
     if not key:
@@ -359,6 +339,30 @@ def _sanitize_diagnostic_url(raw: str | None) -> str:
     if not (low.startswith("http://") or low.startswith("https://")):
         return ""
     return text
+
+
+def _truncate_context_preview(text: str, max_chars: int = 300) -> str:
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    if len(raw) > int(max_chars):
+        raw = raw[: int(max_chars)] + "..."
+    return raw
+
+
+def _estimate_context_usage_length(rows: list[dict]) -> int:
+    total = 0
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        role = str(row.get("role", "")).strip()
+        if role not in {"user", "assistant", "system"}:
+            continue
+        content = str(row.get("content", "") or "")
+        if not content.strip():
+            continue
+        total += len(content)
+    return int(total)
 
 
 def _to_diagnostic_fail(test: str, err: Exception) -> dict:
@@ -528,502 +532,29 @@ def _build_user_message_with_meta(
     meta_time_iso: str | None,
     meta_time_text: str | None,
 ) -> str:
-    message = str(raw_message or "").strip()
+    message = str(raw_message or "")
     if "[USER_META]" in message and "[/USER_META]" in message:
         return message
 
-    values = {
-        "name": _sanitize_meta_value(meta_user_name),
-        "uid": _sanitize_meta_value(meta_user_id),
-        "perm": _sanitize_meta_value(meta_user_perm),
-        "time_iso": _sanitize_meta_value(meta_time_iso),
-        "time_text": _sanitize_meta_value(meta_time_text),
-    }
-    has_meta = any(str(v or "").strip() not in {"", "N/A"} for v in values.values())
-    if not has_meta:
-        return message
-
-    meta_block = (
-        "---\n"
+    block = (
+        "\n\n---\n"
         "[USER_META]\n"
-        f"name={values['name']}\n"
-        f"uid={values['uid']}\n"
-        f"perm={values['perm']}\n"
-        f"time_iso={values['time_iso']}\n"
-        f"time_text={values['time_text']}\n"
+        f"name: {_sanitize_meta_value(meta_user_name)}\n"
+        f"uid: {_sanitize_meta_value(meta_user_id)}\n"
+        f"perm: {_sanitize_meta_value(meta_user_perm)}\n"
+        f"time_iso: {_sanitize_meta_value(meta_time_iso)}\n"
+        f"time_text: {_sanitize_meta_value(meta_time_text)}\n"
         "[/USER_META]"
     )
-    if not message:
-        return meta_block
-    return f"{message}\n\n{meta_block}"
+    return f"{message}{block}" if message else block.strip()
 
 
 def _strip_user_meta_block(content: str) -> str:
     text = str(content or "")
-    try:
-        parsed = json.loads(text)
-    except Exception:
-        parsed = None
-    if isinstance(parsed, dict) and str(parsed.get("format", "")).strip() == _LLM_CONTEXT_PAYLOAD_FORMAT:
-        return str(parsed.get("content", "") or "").strip()
-    return records_store.strip_user_meta_block(text)
-
-
-def _trim_terminal_followup_output(raw: str) -> str:
-    text = str(raw or "").strip()
-    if not text:
-        return "(no output)"
-    if len(text) <= _TERMINAL_FOLLOWUP_OUTPUT_MAX_CHARS:
-        return text
-    return text[:_TERMINAL_FOLLOWUP_OUTPUT_MAX_CHARS] + "\n...(output truncated)"
-
-
-def _extract_terminal_confirm_origin_user_intent(rows: list[dict], confirm_id: str) -> str:
-    pos = -1
-    cid = str(confirm_id or "").strip()
-    for idx, row in enumerate(rows or []):
-        if str(row.get("id", "") or "").strip() == cid and str(row.get("entry_type", "")).strip() == "terminal_confirm":
-            pos = idx
-            break
-    if pos < 0:
-        pos = len(rows or [])
-
-    for idx in range(pos - 1, -1, -1):
-        row = rows[idx] if isinstance(rows[idx], dict) else {}
-        if str(row.get("role", "")).strip() != "user":
-            continue
-        if str(row.get("entry_type", "")).strip() != "chat":
-            continue
-        content = _strip_user_meta_block(str(row.get("content", "") or "")).strip()
-        if not content:
-            continue
-        if _is_tool_command_text(content):
-            continue
-        return content
-    return ""
-
-
-def _build_terminal_followup_user_input_json(
-    *,
-    confirm_id: str,
-    cmd: str,
-    result: dict,
-    origin_user_intent: str,
-) -> str:
-    intent = str(origin_user_intent or "").strip() or "（未提供明确诉求）"
-    rc = result.get("returncode", "")
-    output_text = _trim_terminal_followup_output(str(result.get("output", "") or ""))
-    content = (
-        "[TERMINAL_FOLLOWUP]\n"
-        "你正在处理一条已确认执行的终端命令。请仅围绕本次执行结果回复，不要输出身份介绍或底层模型信息。\n"
-        f"用户原始诉求: {intent}\n"
-        f"命令: {str(cmd or '').strip()}\n"
-        f"返回码: {rc}\n"
-        "输出:\n"
-        f"{output_text}\n\n"
-        "回答要求:\n"
-        "1) 明确命令是否成功。\n"
-        "2) 给出关键输出结论。\n"
-        "3) 若失败，给出下一步建议。"
-    )
-    return content
-
-
-def _build_terminal_confirm_fallback_reply(cmd: str, result: dict) -> str:
-    rc = result.get("returncode", "")
-    output_text = _trim_terminal_followup_output(str(result.get("output", "") or ""))
-    status_text = "成功" if str(rc) == "0" else "失败"
-    return (
-        f"命令 `{cmd}` 已执行（返回码 {rc}，{status_text}）。\n\n"
-        f"输出结果：\n\n```\n{output_text}\n```"
-    )
-
-
-def _is_terminal_followup_reply_relevant(reply: str, *, cmd: str, origin_user_intent: str) -> bool:
-    text = str(reply or "").strip()
-    if not text:
-        return False
-    low = text.lower()
-    if "底层技术信息保密" in text:
-        return False
-    if "我是 tindaagent" in low and ("命令" not in text and "输出" not in text):
-        return False
-
-    cmd_head = str(cmd or "").strip().split(" ", 1)[0].strip().lower()
-    if cmd_head and cmd_head in low:
-        return True
-
-    intent_tokens = [tok for tok in re.findall(r"[a-zA-Z0-9_./:-]+", str(origin_user_intent or "").lower()) if len(tok) >= 2]
-    for tok in intent_tokens[:4]:
-        if tok in low:
-            return True
-
-    for kw in ("命令", "执行", "输出", "返回码", "成功", "失败", "超时", "确认", "完成", "result", "stdout", "stderr", "error"):
-        if kw in text or kw in low:
-            return True
-    return False
-
-
-def _normalize_terminal_confirm_status(raw: str | None) -> str:
-    text = str(raw or "").strip().lower()
-    if text in {"allow", "allowed"}:
-        return "allowed"
-    if text in {"deny", "denied"}:
-        return "denied"
-    return "pending"
-
-
-def _parse_terminal_confirm_row_payload(row: dict) -> dict:
-    raw = row.get("content", "{}") if isinstance(row, dict) else "{}"
-    try:
-        data = json.loads(raw)
-    except Exception:
-        data = {}
-    if not isinstance(data, dict):
-        data = {}
-    payload = dict(data)
-    payload["cmd"] = str(payload.get("cmd", "") or "").strip()
-    payload["status"] = _normalize_terminal_confirm_status(str(payload.get("status", "pending") or "pending"))
-    action = str(payload.get("action", "") or "").strip().lower()
-    if not action:
-        if payload["status"] == "allowed":
-            action = "allow"
-        elif payload["status"] == "denied":
-            action = "deny"
-    if action:
-        payload["action"] = action
-    return payload
-
-
-def _collect_pending_terminal_confirms(rows: list[dict], *, turn_id: str | None = None) -> list[dict]:
-    tid_filter = _normalize_turn_id(turn_id) if turn_id is not None else ""
-    out: list[dict] = []
-    seen: set[str] = set()
-    for row in rows or []:
-        if not isinstance(row, dict):
-            continue
-        if str(row.get("entry_type", "") or "").strip() != "terminal_confirm":
-            continue
-        row_tid = _normalize_turn_id(str(row.get("turn_id", "") or ""))
-        if tid_filter and row_tid != tid_filter:
-            continue
-        cid = str(row.get("id", "") or "").strip()
-        if not cid or cid in seen:
-            continue
-        payload = _parse_terminal_confirm_row_payload(row)
-        if str(payload.get("status", "pending")) != "pending":
-            continue
-        seen.add(cid)
-        out.append(
-            {
-                "confirm_id": cid,
-                "cmd": str(payload.get("cmd", "") or ""),
-                "turn_id": row_tid,
-            }
-        )
-    return out
-
-
-def _collect_turn_terminal_confirm_results(rows: list[dict], *, turn_id: str) -> list[dict]:
-    tid = _normalize_turn_id(turn_id)
-    if not tid:
-        return []
-    out: list[dict] = []
-    for row in rows or []:
-        if not isinstance(row, dict):
-            continue
-        if str(row.get("entry_type", "") or "").strip() != "terminal_confirm":
-            continue
-        row_tid = _normalize_turn_id(str(row.get("turn_id", "") or ""))
-        if row_tid != tid:
-            continue
-        payload = _parse_terminal_confirm_row_payload(row)
-        status = str(payload.get("status", "pending"))
-        if status not in {"allowed", "denied"}:
-            continue
-        out.append(
-            {
-                "confirm_id": str(row.get("id", "") or "").strip(),
-                "cmd": str(payload.get("cmd", "") or "").strip(),
-                "status": status,
-                "action": str(payload.get("action", "") or ""),
-                "executed": bool(payload.get("executed") is True),
-                "returncode": payload.get("returncode", None),
-                "output": str(payload.get("output", "") or ""),
-            }
-        )
-    return out
-
-
-def _build_terminal_batch_followup_user_input_json(
-    *,
-    confirm_results: list[dict],
-    origin_user_intent: str,
-) -> str:
-    intent = str(origin_user_intent or "").strip() or "（未提供明确诉求）"
-    lines = [
-        "[TERMINAL_FOLLOWUP_BATCH]",
-        "你正在处理一批已确认的终端命令。请仅围绕这批执行结果回复，不要输出身份介绍或底层模型信息。",
-        f"用户原始诉求: {intent}",
-        "本轮确认结果：",
-    ]
-    for idx, item in enumerate(confirm_results[:8], start=1):
-        cmd = str(item.get("cmd", "") or "").strip()
-        status = str(item.get("status", "pending") or "pending").strip().lower()
-        if status == "denied":
-            lines.append(f"{idx}) [已拒绝] 命令: {cmd}")
-            continue
-        rc = item.get("returncode", "")
-        lines.append(f"{idx}) [已执行] 命令: {cmd} | 返回码: {rc}")
-        out = _trim_terminal_followup_output(str(item.get("output", "") or "(no output)"))
-        lines.append(f"输出:\n{out}")
-    lines.extend(
-        [
-            "",
-            "回答要求:",
-            "1) 逐条说明命令是否成功；",
-            "2) 提炼关键信息（避免复读全部输出）；",
-            "3) 若存在失败项，给出下一步建议。",
-        ]
-    )
-    return "\n".join(lines)
-
-
-def _build_terminal_confirm_batch_fallback_reply(confirm_results: list[dict]) -> str:
-    if not confirm_results:
-        return "本轮终端确认已完成。"
-    lines = ["本轮终端确认已完成："]
-    for idx, item in enumerate(confirm_results[:8], start=1):
-        cmd = str(item.get("cmd", "") or "").strip()
-        status = str(item.get("status", "") or "").strip().lower()
-        if status == "denied":
-            lines.append(f"{idx}. 已拒绝：`{cmd}`")
-            continue
-        rc = item.get("returncode", "")
-        out = _trim_terminal_followup_output(str(item.get("output", "") or "(no output)"))
-        lines.append(f"{idx}. 已执行：`{cmd}`（返回码 {rc}）")
-        lines.append(f"输出：`{out}`")
-    return "\n".join(lines)
-
-
-_TOOL_MARKER_BLOCK_RE = re.compile(
-    r"(?:[ \t]*>\s*>_<[ \t]*\n[ \t]*>\s*--调用工具中--[ \t]*(?:\n[ \t]*>\s*--(?:call_id:\s*)?[^\n]+--[ \t]*)*\n?)+",
-    re.MULTILINE,
-)
-_SYSTEM_SUMMARY_PREFIX_RE = re.compile(r"(?im)^\s*\[系统摘要\]\s*")
-_LLM_TERMINAL_CONTEXT_MAX_ROWS = 40
-_AUTO_COMPRESS_RAW_CHAT_ROWS_TRIGGER = 80
-_LLM_CONTEXT_PAYLOAD_VERSION = 1
-_LLM_CONTEXT_PAYLOAD_FORMAT = "tinda_llm_json_input"
-_CONTEXT_INJECTION_PREVIEW_MAX_ITEMS = 6
-_CONTEXT_INJECTION_PREVIEW_HEAD_ITEMS = 3
-_CONTEXT_INJECTION_PREVIEW_TAIL_ITEMS = 2
-_CONTEXT_INJECTION_PREVIEW_MAX_CHARS = 240
-_TERMINAL_FOLLOWUP_OUTPUT_MAX_CHARS = 3200
-
-
-def _strip_tool_marker_noise(content: str) -> str:
-    text = str(content or "")
-    if not text:
-        return text
-    cleaned = _TOOL_MARKER_BLOCK_RE.sub("\n", text)
-    cleaned = _SYSTEM_SUMMARY_PREFIX_RE.sub("", cleaned)
-    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
-    return cleaned.strip()
-
-
-def _inject_tool_call_ids_into_marker_text(content: str, tool_trace: list[dict] | None) -> str:
-    text = str(content or "")
-    if not text.strip():
-        return text
-    if "调用工具中" not in text:
-        return text
-    if re.search(r"(?im)^\s*>\s*--call_id:\s*[^\n]+--\s*$", text):
-        return text
-
-    call_ids = _extract_tool_trace_call_ids(tool_trace)
-    if not call_ids:
-        return text
-
-    marker_re = re.compile(r"(?im)^([ \t]*>\s*--调用工具中--[ \t]*)$")
-    idx = 0
-
-    def _repl(m: re.Match) -> str:
-        nonlocal idx
-        line = str(m.group(1) or "").rstrip()
-        if idx >= len(call_ids):
-            return line
-        cid = str(call_ids[idx] or "").strip()
-        idx += 1
-        if not cid:
-            return line
-        return f"{line}\n> --call_id: {cid}--"
-
-    out = marker_re.sub(_repl, text)
-    if idx <= 0:
-        return text
-    return out
-
-
-def _to_llm_context_role(*, role: str, entry_type: str) -> str:
-    et = str(entry_type or "").strip()
-    if et in {"terminal", "terminal_exec", "terminal_confirm", "tool_marker"}:
-        return "system"
-    r = str(role or "").strip()
-    if r == "user":
-        return "user"
-    if r == "assistant":
-        return "llm"
-    return "system"
-
-
-def _build_llm_system_input_json(
-    *,
-    input_role: str,
-    entry_type: str,
-    content: str,
-    message_id: str,
-    created_at: str,
-) -> str:
-    payload = {
-        "format": _LLM_CONTEXT_PAYLOAD_FORMAT,
-        "version": _LLM_CONTEXT_PAYLOAD_VERSION,
-        "input_role": str(input_role or "system"),
-        "entry_type": str(entry_type or "chat"),
-        "content": str(content or ""),
-        "meta": {
-            "id": str(message_id or ""),
-            "created_at": str(created_at or ""),
-        },
-    }
-    return json.dumps(payload, ensure_ascii=False)
-
-
-def _parse_llm_context_payload(content: str) -> dict | None:
-    raw = str(content or "")
-    if not raw.strip():
-        return None
-    try:
-        parsed = json.loads(raw)
-    except Exception:
-        return None
-    if not isinstance(parsed, dict):
-        return None
-    if str(parsed.get("format", "")).strip() != _LLM_CONTEXT_PAYLOAD_FORMAT:
-        return None
-    return parsed
-
-
-def _truncate_context_preview(content: str, max_chars: int = _CONTEXT_INJECTION_PREVIEW_MAX_CHARS) -> str:
-    text = redact_sensitive_text(str(content or "")).replace("\r", "")
-    text = re.sub(r"\n{3,}", "\n\n", text).strip().replace("\n", "\\n")
-    if len(text) <= max_chars:
-        return text
-    return text[: max(0, int(max_chars) - 3)] + "..."
-
-
-def _summarize_context_injection_messages(
-    messages: list[dict],
-    *,
-    max_preview_items: int = _CONTEXT_INJECTION_PREVIEW_MAX_ITEMS,
-) -> dict:
-    rows = messages if isinstance(messages, list) else []
-    role_counts: dict[str, int] = {}
-    legacy_input_role_counts: dict[str, int] = {}
-    entry_type_counts: dict[str, int] = {}
-
-    def _inc(bucket: dict[str, int], key: str) -> None:
-        k = str(key or "").strip() or "unknown"
-        bucket[k] = int(bucket.get(k, 0)) + 1
-
-    parsed_cache: list[dict | None] = []
-    for row in rows:
-        item = row if isinstance(row, dict) else {}
-        role = str(item.get("role", "")).strip() or "unknown"
-        _inc(role_counts, role)
-        parsed = _parse_llm_context_payload(str(item.get("content", "")))
-        parsed_cache.append(parsed)
-        raw_entry_type = str(item.get("entry_type", "")).strip()
-        payload_entry_type = str(parsed.get("entry_type", "")).strip() if isinstance(parsed, dict) else ""
-        entry_type = raw_entry_type or payload_entry_type
-        if entry_type:
-            _inc(entry_type_counts, entry_type)
-        if parsed is not None:
-            _inc(legacy_input_role_counts, str(parsed.get("input_role", "")).strip() or "unknown")
-
-    total = len(rows)
-    sample_indexes: list[int]
-    max_items = max(0, int(max_preview_items))
-    if total <= max_items:
-        sample_indexes = list(range(total))
-    else:
-        head = min(_CONTEXT_INJECTION_PREVIEW_HEAD_ITEMS, max_items, total)
-        remaining = max(0, max_items - head)
-        tail = min(_CONTEXT_INJECTION_PREVIEW_TAIL_ITEMS, remaining, max(0, total - head))
-        sample_indexes = list(range(head))
-        if tail > 0:
-            sample_indexes.extend(list(range(total - tail, total)))
-
-    preview_rows: list[dict] = []
-    for idx in sample_indexes:
-        row = rows[idx] if isinstance(rows[idx], dict) else {}
-        payload = parsed_cache[idx]
-        role = str(row.get("role", "")).strip() or "unknown"
-        row_entry_type = str(row.get("entry_type", "")).strip()
-        if payload is not None:
-            preview_content = str(payload.get("content", ""))
-            entry_type = row_entry_type or (str(payload.get("entry_type", "")).strip() or "chat")
-        else:
-            preview_content = str(row.get("content", ""))
-            entry_type = row_entry_type
-        preview_rows.append(
-            {
-                "idx": int(idx),
-                "role": role,
-                "entry_type": entry_type,
-                "is_legacy_json_payload": bool(payload is not None),
-                "content_preview": _truncate_context_preview(preview_content),
-            }
-        )
-
-    legacy_json_payload_count = int(sum(1 for item in parsed_cache if item is not None))
-    return {
-        "message_count": total,
-        "legacy_json_payload_count": legacy_json_payload_count,
-        # backward-compat: 老字段保留，便于旧前端/脚本平滑过渡
-        "json_payload_count": legacy_json_payload_count,
-        "preview_count": len(preview_rows),
-        "preview_omitted_count": max(0, total - len(preview_rows)),
-        "role_counts": role_counts,
-        "legacy_input_role_counts": legacy_input_role_counts,
-        # backward-compat: 老字段保留，便于旧前端/脚本平滑过渡
-        "input_role_counts": legacy_input_role_counts,
-        "entry_type_counts": entry_type_counts,
-        "preview": preview_rows,
-    }
-
-
-def _audit_context_injection(
-    phase: str,
-    session_id: str,
-    messages: list[dict],
-    *,
-    op_type: str = "SYSTEM_EXECUTE",
-    extra: dict | None = None,
-) -> int:
-    sid = str(session_id or "").strip()
-    summary = _summarize_context_injection_messages(messages)
-    payload = {"phase": str(phase or ""), "session_id": sid, **summary}
-    if isinstance(extra, dict) and extra:
-        payload.update(extra)
-    return audit_event(
-        op_type=op_type,
-        subsystem="context_injection",
-        func="_audit_context_injection",
-        file_path=_THIS_FILE,
-        content=f"{phase} session_id={sid} message_count={summary.get('message_count', 0)}",
-        extra=payload,
-    )
+    marker_start = text.find("\n\n---\n[USER_META]")
+    if marker_start >= 0:
+        return text[:marker_start].rstrip()
+    return text
 
 
 def _perm_label(p: int) -> str:
@@ -1246,7 +777,6 @@ def _is_tool_command_text(content: str) -> bool:
 
 def _store_to_agent_messages(rows: list[dict]) -> tuple[list[dict], dict[str, int]]:
     out: list[dict] = []
-    staged: list[dict] = []
     stats = {
         "input_rows": int(len(rows or [])),
         "skipped_entry_type": 0,
@@ -1255,14 +785,11 @@ def _store_to_agent_messages(rows: list[dict]) -> tuple[list[dict], dict[str, in
         "skipped_tool_cmd": 0,
         "included_chat": 0,
         "included_notice": 0,
-        "included_terminal": 0,
-        "dropped_terminal": 0,
     }
-    allowed_entry_types = {"chat", "notice", "terminal", "terminal_exec", "terminal_confirm", "tool_marker"}
     for item in rows:
         entry_type = str(item.get("entry_type", "chat")).strip() or "chat"
-        # 统一上下文输入：chat/notice + 工具上下文（terminal*）
-        if entry_type not in allowed_entry_types:
+        # 严格过滤：仅 chat/notice 允许进入 LLM 上下文
+        if entry_type not in {"chat", "notice"}:
             stats["skipped_entry_type"] += 1
             continue
         role = str(item.get("role", "")).strip()
@@ -1270,8 +797,6 @@ def _store_to_agent_messages(rows: list[dict]) -> tuple[list[dict], dict[str, in
             stats["skipped_role"] += 1
             continue
         content = str(item.get("content", ""))
-        # 历史里可能混入大量工具占位标记，回灌给 LLM 前做噪声清理，避免复读刷屏。
-        content = _strip_tool_marker_noise(content)
         if not content.strip():
             stats["skipped_empty"] += 1
             continue
@@ -1279,63 +804,17 @@ def _store_to_agent_messages(rows: list[dict]) -> tuple[list[dict], dict[str, in
         if role == "user" and entry_type == "chat" and _is_tool_command_text(content):
             stats["skipped_tool_cmd"] += 1
             continue
-        inject_role = role
-        if entry_type in {"notice", "terminal", "terminal_exec", "terminal_confirm", "tool_marker"}:
-            inject_role = "system"
-        is_terminal = entry_type in {"terminal", "terminal_exec", "terminal_confirm"}
-        staged.append(
-            {
-                "role": inject_role,
-                "content": content,
-                "entry_type": entry_type,
-                "_is_terminal": is_terminal,
-            }
-        )
-        if entry_type == "notice":
+        if role == "system":
+            # Agent 不接受上下文里额外 system 角色，降级为 assistant 上下文提示
+            out.append({"role": "assistant", "content": f"[系统摘要] {content}"})
             stats["included_notice"] += 1
-        elif is_terminal:
-            stats["included_terminal"] += 1
         else:
-            stats["included_chat"] += 1
-
-    terminal_positions = [i for i, x in enumerate(staged) if bool(x.get("_is_terminal"))]
-    overflow = len(terminal_positions) - _LLM_TERMINAL_CONTEXT_MAX_ROWS
-    drop_pos_set: set[int] = set()
-    if overflow > 0:
-        drop_pos_set = set(terminal_positions[:overflow])
-        stats["dropped_terminal"] = int(overflow)
-
-    for idx, item in enumerate(staged):
-        if idx in drop_pos_set:
-            continue
-        out.append(
-            {
-                "role": str(item.get("role", "system") or "system"),
-                "content": str(item.get("content", "")),
-                "entry_type": str(item.get("entry_type", "") or "chat"),
-            }
-        )
+            out.append({"role": role, "content": content})
+            if entry_type == "notice":
+                stats["included_notice"] += 1
+            else:
+                stats["included_chat"] += 1
     return out, stats
-
-
-def _estimate_context_usage_length(agent_rows: list[dict]) -> int:
-    msgs: list[dict] = []
-    for item in (agent_rows or []):
-        if not isinstance(item, dict):
-            continue
-        role = str(item.get("role", "")).strip()
-        if role not in {"system", "user", "assistant", "tool"}:
-            continue
-        content = str(item.get("content", ""))
-        if role in {"system", "user", "assistant"} and not content.strip():
-            continue
-        row = {"role": role, "content": content}
-        if role == "tool":
-            tcid = str(item.get("tool_call_id", "")).strip()
-            if tcid:
-                row["tool_call_id"] = tcid
-        msgs.append(row)
-    return int(estimate_messages_tokens(msgs))
 
 
 def _is_logged_in() -> bool:
@@ -1453,81 +932,6 @@ def _perm_items() -> list[dict]:
     ]
 
 
-def _maybe_auto_compress(session_id: str, *, context_rows: list[dict] | None = None) -> dict[str, Any]:
-    sid = str(session_id)
-    agent = _sessions.get(sid)
-    info: dict[str, Any] = {
-        "compressed": False,
-        "trigger": "",
-        "reason": "",
-        "raw_chat_count": 0,
-        "estimated_tokens_before": 0,
-        "estimated_tokens_after": 0,
-        "max_context_tokens": 0,
-    }
-    if not agent:
-        info["reason"] = "agent_not_found"
-        return info
-    tokens_before = int(agent.estimate_current_tokens())
-    max_tokens = int(getattr(agent, "max_context_tokens", 0) or 0)
-    info["estimated_tokens_before"] = tokens_before
-    info["estimated_tokens_after"] = tokens_before
-    info["max_context_tokens"] = max_tokens
-    rows = context_rows if context_rows is not None else _store.get_context_messages(sid)
-    raw_rows = [
-        x for x in rows
-        if not bool(x.get("is_summary", False))
-        and str(x.get("entry_type", "chat")) == "chat"
-        and str(x.get("role", "")) in {"user", "assistant"}
-    ]
-    raw_count = len(raw_rows)
-    info["raw_chat_count"] = raw_count
-    token_trigger = tokens_before > max_tokens
-    row_trigger = raw_count >= _AUTO_COMPRESS_RAW_CHAT_ROWS_TRIGGER
-    if token_trigger:
-        info["trigger"] = "token"
-    elif row_trigger:
-        info["trigger"] = "raw_chat_count"
-    else:
-        info["reason"] = "below_threshold"
-        return info
-    if len(raw_rows) < 6:
-        info["reason"] = "insufficient_messages"
-        return info
-    older = raw_rows[:-4]
-    try:
-        summary = _compress_messages_with_llm(older)
-        if not summary:
-            info["reason"] = "summary_empty"
-            return info
-        _store.compress_context(sid, summary)
-        new_rows = _store.get_context_messages(sid)
-        agent_rows, _ = _store_to_agent_messages(new_rows)
-        agent.replace_conversation(agent_rows)
-        tokens_after = int(agent.estimate_current_tokens())
-        info["compressed"] = True
-        info["reason"] = "ok"
-        info["estimated_tokens_after"] = tokens_after
-        _audit_web(
-            "SYSTEM_EXECUTE",
-            "_maybe_auto_compress",
-            f"auto_compress_done session_id={sid}",
-            {
-                "session_id": sid,
-                "compressed_count": len(older),
-                "trigger": info["trigger"],
-                "raw_chat_count_before": raw_count,
-                "context_tokens_before": tokens_before,
-                "context_tokens_after": tokens_after,
-                "max_context_tokens": max_tokens,
-            },
-        )
-        return info
-    except Exception as e:
-        info["reason"] = f"exception:{e}"
-        return info
-
-
 def _get_agent(session_id: str):
     sid = str(session_id)
     current = _require_login()
@@ -1550,51 +954,12 @@ def _get_agent(session_id: str):
                 agent.user.change_perm(current_perm)
             except Exception:
                 pass
-    try:
-        agent.refresh_model_identity(_client.model)
-    except Exception:
-        pass
     _touch_session_cache(sid)
 
-    # 同步会话级阈值到 agent
-    meta = _store.get_session(sid) or {}
-    agent.max_context_tokens = max(100, int(meta.get("max_context_tokens", 16000)))
-
-    # 每次都基于 store 的"有效上下文"回灌，确保压缩边界生效
+    # 每次都基于 store 的“有效上下文”回灌，确保压缩边界生效
     rows = _store.get_context_messages(sid)
     agent_rows, filter_stats = _store_to_agent_messages(rows)
     _sessions[sid].replace_conversation(agent_rows)
-    _audit_context_injection(
-        "get_agent.rebuild_context",
-        sid,
-        agent_rows,
-        extra={
-            "source_context_rows": len(rows),
-            "context_filter": filter_stats,
-            "model": _client.model,
-            "estimated_tokens": agent.estimate_current_tokens(),
-            "max_context_tokens": agent.max_context_tokens,
-        },
-    )
-    # 自动压缩：token 超阈值或原始聊天消息过长时触发。
-    auto_compress = _maybe_auto_compress(sid, context_rows=rows)
-    if bool(auto_compress.get("compressed")):
-        rows = _store.get_context_messages(sid)
-        agent_rows, filter_stats = _store_to_agent_messages(rows)
-        _audit_context_injection(
-            "get_agent.rebuild_context_after_compress",
-            sid,
-            agent_rows,
-            extra={
-                "source_context_rows": len(rows),
-                "context_filter": filter_stats,
-                "model": _client.model,
-                "estimated_tokens": agent.estimate_current_tokens(),
-                "max_context_tokens": agent.max_context_tokens,
-                "auto_compress": auto_compress,
-            },
-        )
-
     _audit_web(
         "SYSTEM_EXECUTE",
         "_get_agent",
@@ -1605,12 +970,8 @@ def _get_agent(session_id: str):
             "agent_rows": len(agent_rows),
             "context_filter": filter_stats,
             "model": _client.model,
-            "estimated_tokens": agent.estimate_current_tokens(),
-            "max_context_tokens": agent.max_context_tokens,
-            "auto_compress": auto_compress,
         },
     )
-
     return _sessions[sid]
 
 
@@ -1627,40 +988,10 @@ def _stringify_trace_value(value) -> str:
         return str(value)
 
 
-def _extract_call_id_from_trace_step(step: dict) -> str:
-    if not isinstance(step, dict):
-        return ""
-    result = step.get("result")
-    if isinstance(result, dict):
-        cid = str(result.get("call_id", "") or "").strip()
-        if cid:
-            return cid
-    for key in ("call_id", "tool_call_id"):
-        cid = str(step.get(key, "") or "").strip()
-        if cid:
-            return cid
-    return ""
-
-
-def _extract_tool_trace_call_ids(tool_trace: list[dict] | None) -> list[str]:
-    if not isinstance(tool_trace, list) or not tool_trace:
-        return []
-    out: list[str] = []
-    seen: set[str] = set()
-    for step in tool_trace:
-        cid = _extract_call_id_from_trace_step(step)
-        if not cid or cid in seen:
-            continue
-        seen.add(cid)
-        out.append(cid)
-    return out
-
-
-def _tool_trace_to_terminal_items(tool_trace: list[dict] | None, *, turn_id: str = "") -> list[dict]:
+def _tool_trace_to_terminal_items(tool_trace: list[dict] | None) -> list[dict]:
     if not isinstance(tool_trace, list) or not tool_trace:
         return []
 
-    tid = _normalize_turn_id(turn_id)
     items: list[dict] = []
     for step in tool_trace:
         if not isinstance(step, dict):
@@ -1669,7 +1000,13 @@ def _tool_trace_to_terminal_items(tool_trace: list[dict] | None, *, turn_id: str
         name = str(step.get("agent_tool", "") or "unknown_tool")
         args_text = _stringify_trace_value(step.get("arguments", {}))
         result = step.get("result")
-        call_id = _extract_call_id_from_trace_step(step)
+        call_id = ""
+        if isinstance(result, dict):
+            call_id = str(result.get("call_id", "") or "").strip()
+        if not call_id:
+            call_id = str(step.get("call_id", "") or "").strip()
+        if not call_id:
+            call_id = str(step.get("tool_call_id", "") or "").strip()
         call_suffix = f" #{call_id}" if call_id else ""
         items.append(
             {
@@ -1680,7 +1017,6 @@ def _tool_trace_to_terminal_items(tool_trace: list[dict] | None, *, turn_id: str
                 "terminal_kind": "cmd",
                 "created_at": _now_iso(),
                 "is_summary": False,
-                "turn_id": tid,
             }
         )
 
@@ -1727,7 +1063,6 @@ def _tool_trace_to_terminal_items(tool_trace: list[dict] | None, *, turn_id: str
                     "terminal_kind": "out",
                     "created_at": _now_iso(),
                     "is_summary": False,
-                    "turn_id": tid,
                 }
             )
 
@@ -1740,52 +1075,8 @@ def _tool_trace_to_terminal_items(tool_trace: list[dict] | None, *, turn_id: str
                 "terminal_kind": "sep",
                 "created_at": _now_iso(),
                 "is_summary": False,
-                "turn_id": tid,
             }
         )
-
-        # run_terminal: 额外生成聊天内联终端气泡
-        inner_tool = ""
-        args = step.get("arguments")
-        if isinstance(args, dict):
-            inner_tool = str(args.get("tool_name", "") or "").strip()
-        if inner_tool == "run_terminal" and isinstance(result, dict):
-            inner = result.get("result")
-            if isinstance(inner, dict):
-                if inner.get("pending_confirmation") is True:
-                    confirm_id = str(inner.get("confirm_id", "") or "").strip() or f"m_{uuid.uuid4().hex[:16]}"
-                    confirm_data = json.dumps({
-                        "cmd": str(inner.get("cmd", "") or ""),
-                        "status": "pending",
-                    }, ensure_ascii=False)
-                    items.append({
-                        "id": confirm_id,
-                        "role": "user",
-                        "content": confirm_data,
-                        "entry_type": "terminal_confirm",
-                        "created_at": _now_iso(),
-                        "is_summary": False,
-                        "turn_id": tid,
-                    })
-                else:
-                    cmd = str(inner.get("cmd", "") or "")
-                    output = str(inner.get("output", "") or "(no output)")
-                    rc = inner.get("returncode", None)
-                    exec_data = json.dumps({
-                        "cmd": cmd,
-                        "output": output,
-                        "returncode": rc,
-                        "status": "ok" if inner.get("ok") else "error",
-                    }, ensure_ascii=False)
-                    items.append({
-                        "id": f"m_{uuid.uuid4().hex[:16]}",
-                        "role": "user",
-                        "content": exec_data,
-                        "entry_type": "terminal_exec",
-                        "created_at": _now_iso(),
-                        "is_summary": False,
-                        "turn_id": tid,
-                    })
     return items
 
 
@@ -1796,10 +1087,7 @@ def _save_chat_messages(
     *,
     tool_marker: bool = False,
     tool_trace: list[dict] | None = None,
-    turn_id: str | None = None,
-) -> str:
-    tid = _normalize_turn_id(turn_id) or _new_turn_id()
-    assistant_content = _inject_tool_call_ids_into_marker_text(str(assistant_text or ""), tool_trace)
+) -> None:
     items = [
         {
             "id": f"m_{uuid.uuid4().hex[:16]}",
@@ -1808,35 +1096,28 @@ def _save_chat_messages(
             "entry_type": "chat",
             "created_at": _now_iso(),
             "is_summary": False,
-            "turn_id": tid,
         },
         {
             "id": f"m_{uuid.uuid4().hex[:16]}",
             "role": "assistant",
-            "content": assistant_content,
+            "content": assistant_text,
             "entry_type": "chat",
             "created_at": _now_iso(),
             "is_summary": False,
-            "turn_id": tid,
         },
     ]
     if tool_marker:
-        call_ids = _extract_tool_trace_call_ids(tool_trace)
-        marker = "> >_<\n> --调用工具中--\n"
-        if call_ids:
-            marker += "\n".join(f"> --call_id: {cid}--" for cid in call_ids) + "\n"
         items.append(
             {
                 "id": f"m_{uuid.uuid4().hex[:16]}",
                 "role": "assistant",
-                "content": marker.rstrip("\n"),
+                "content": "> --调用工具中--",
                 "entry_type": "tool_marker",
                 "created_at": _now_iso(),
                 "is_summary": False,
-                "turn_id": tid,
             }
         )
-    items.extend(_tool_trace_to_terminal_items(tool_trace, turn_id=tid))
+    items.extend(_tool_trace_to_terminal_items(tool_trace))
     _store.append_messages(session_id, items)
     _audit_web(
         "PUBLIC_WRITE",
@@ -1847,10 +1128,8 @@ def _save_chat_messages(
             "items_count": len(items),
             "tool_marker": bool(tool_marker),
             "tool_trace_count": len(tool_trace or []),
-            "turn_id": tid,
         },
     )
-    return tid
 
 
 def _persist_terminal_events(session_id: str, events: list[dict]) -> None:
@@ -1858,7 +1137,6 @@ def _persist_terminal_events(session_id: str, events: list[dict]) -> None:
     for e in events:
         if e.get("type") != "terminal":
             continue
-        turn_id = _normalize_turn_id(str(e.get("turn_id", "") or ""))
         kind = str(e.get("kind", "out")).strip() or "out"
         if kind not in {"cmd", "out", "sep"}:
             kind = "out"
@@ -1872,7 +1150,6 @@ def _persist_terminal_events(session_id: str, events: list[dict]) -> None:
                 "terminal_class": str(e.get("class", "") or "").strip().lower(),
                 "created_at": str(e.get("ts", "")) or _now_iso(),
                 "is_summary": False,
-                "turn_id": turn_id,
             }
         )
     if rows:
@@ -1910,27 +1187,16 @@ def _generate_title_from_first_round(session_id: str) -> None:
         )
         return
 
-    with _title_generation_lock:
-        if session_id in _title_generation_inflight:
-            _audit_web(
-                "SYSTEM_EXECUTE",
-                "_generate_title_from_first_round",
-                f"skip_generate_title_inflight session_id={session_id}",
-                {"session_id": session_id},
-            )
-            return
-        _title_generation_inflight.add(session_id)
-
     user_msg, assistant_msg = pair
 
     def run() -> None:
+        prompt = (
+            "请根据以下对话生成一个不超过 15 字的简洁标题，"
+            "直接返回标题文本，不要加引号或说明。\n\n"
+            f"用户：{user_msg}\n"
+            f"助手：{assistant_msg}"
+        )
         try:
-            prompt = (
-                "请根据以下对话生成一个不超过 15 字的简洁标题，"
-                "直接返回标题文本，不要加引号或说明。\n\n"
-                f"用户：{user_msg}\n"
-                f"助手：{assistant_msg}"
-            )
             title = _title_client.chat(
                 [
                     {"role": "system", "content": "你是对话标题生成助手。"},
@@ -1955,16 +1221,8 @@ def _generate_title_from_first_round(session_id: str) -> None:
                 f"generate_title_failed session_id={session_id} err={e}",
                 {"session_id": session_id, "ok": False, "error": str(e)},
             )
-        finally:
-            with _title_generation_lock:
-                _title_generation_inflight.discard(session_id)
 
-    try:
-        threading.Thread(target=run, daemon=True, name=f"title-gen-{session_id}").start()
-    except Exception:
-        with _title_generation_lock:
-            _title_generation_inflight.discard(session_id)
-        raise
+    threading.Thread(target=run, daemon=True, name=f"title-gen-{session_id}").start()
 
 
 def _compress_messages_with_llm(rows: list[dict]) -> str:
@@ -2036,53 +1294,21 @@ def _read_log_tail(path: Path, *, max_lines: int, max_bytes: int) -> tuple[list[
     return lines, truncated
 
 
-def _iter_log_roots(*, include_legacy: bool = True) -> list[Path]:
-    roots: list[Path] = []
-    seen: set[str] = set()
-
-    def _append(path: Path | None) -> None:
-        if path is None:
-            return
-        try:
-            resolved = Path(path).expanduser().resolve()
-        except Exception:
-            resolved = Path(path)
-        key = str(resolved)
-        if key in seen:
-            return
-        seen.add(key)
-        roots.append(resolved)
-
-    _append(get_log_root())
-    _append(_LOG_ROOT)
-    active_raw = str(os.getenv(_ACTIVE_LOG_ROOT_ENV, "")).strip()
-    if active_raw:
-        _append(Path(active_raw))
-    if include_legacy:
-        _append(get_legacy_log_root())
-    return roots
-
-
 def _resolve_log_file_path(safe_name: str) -> Path | None:
-    for root in _iter_log_roots(include_legacy=True):
-        primary = root / safe_name
-        if not primary.exists() or not primary.is_file():
-            continue
-        legacy_root = get_legacy_log_root()
-        try:
-            is_legacy = primary.resolve().is_relative_to(legacy_root.resolve())
-        except Exception:
-            is_legacy = False
-        if is_legacy:
-            audit_event(
-                op_type="SYSTEM_READ",
-                subsystem="storage_migration",
-                func="_resolve_log_file_path",
-                file_path=_THIS_FILE,
-                content=f"legacy_fallback_read_log file={safe_name}",
-                extra={"legacy_file": str(primary)},
-            )
+    primary = _LOG_ROOT / safe_name
+    if primary.exists() and primary.is_file():
         return primary
+    legacy = get_legacy_log_root() / safe_name
+    if legacy.exists() and legacy.is_file():
+        audit_event(
+            op_type="SYSTEM_READ",
+            subsystem="storage_migration",
+            func="_resolve_log_file_path",
+            file_path=_THIS_FILE,
+            content=f"legacy_fallback_read_log file={safe_name}",
+            extra={"legacy_file": str(legacy)},
+        )
+        return legacy
     return None
 
 
@@ -2104,57 +1330,25 @@ def _parse_event_id(raw: str | int | None) -> int | None:
     return value
 
 
-def _resolve_total_jsonl_candidates(*, include_archives: bool = True) -> list[Path]:
+def _resolve_total_jsonl_candidates() -> list[Path]:
     rows: list[Path] = []
-    seen: set[str] = set()
-    roots = [root for root in _iter_log_roots(include_legacy=True) if root.exists()]
-
-    def _append(path: Path) -> None:
+    primary = _LOG_ROOT / "total.jsonl"
+    if primary.exists() and primary.is_file():
+        rows.append(primary)
+    legacy = get_legacy_log_root() / "total.jsonl"
+    if legacy.exists() and legacy.is_file():
         try:
-            key = str(path.resolve())
+            if legacy.resolve() != primary.resolve():
+                rows.append(legacy)
         except Exception:
-            key = str(path)
-        if key in seen:
-            return
-        if not path.exists() or not path.is_file():
-            return
-        seen.add(key)
-        rows.append(path)
-
-    for root in roots:
-        _append(root / "total.jsonl")
-        if not include_archives:
-            continue
-        for arc in sorted(root.glob("total.*.jsonl.gz"), reverse=True):
-            _append(arc)
+            rows.append(legacy)
     return rows
 
 
-def _iter_audit_rows(path: Path):
-    opener = gzip.open if str(path).lower().endswith(".gz") else open
-    with opener(path, "rt", encoding="utf-8", errors="replace") as fp:
-        for line_no, line in enumerate(fp, start=1):
-            row_text = str(line).strip()
-            if not row_text:
-                continue
-            try:
-                row = json.loads(row_text)
-            except Exception:
-                continue
-            try:
-                rid = int(row.get("id", -1))
-            except Exception:
-                continue
-            if rid <= 0:
-                continue
-            yield line_no, rid, row
-
-
 def _find_audit_event_by_id(event_id: int) -> dict | None:
-    """先走 total.idx 快速查当前日志，再回退扫描归档 .jsonl.gz。"""
+    """通过索引 O(1) 查找，不再线性扫描 JSONL。"""
     target = int(event_id)
-    # Fast path: 只对未压缩 total.jsonl 使用 idx 定位。
-    for path in _resolve_total_jsonl_candidates(include_archives=False):
+    for path in _resolve_total_jsonl_candidates():
         idx_path = path.with_suffix(".idx")
         idx = {}
         try:
@@ -2190,21 +1384,6 @@ def _find_audit_event_by_id(event_id: int) -> dict | None:
                     }
         except Exception:
             pass
-
-    # Slow path: 回退扫描当前日志+历史归档。
-    for path in _resolve_total_jsonl_candidates(include_archives=True):
-        try:
-            for line_no, rid, row in _iter_audit_rows(path):
-                if rid != target:
-                    continue
-                return {
-                    "event": row,
-                    "source_file": str(path.name),
-                    "source_path": str(path),
-                    "source_line": int(line_no),
-                }
-        except Exception:
-            continue
     return None
 
 
@@ -2235,7 +1414,7 @@ async def chat_page():
 
 @app.get("/settings", response_class=HTMLResponse)
 async def settings_page():
-    return HTMLResponse(_HTML_SETTINGS)
+    return _HTML_SETTINGS
 
 
 @app.get("/model-diagnostics", response_class=HTMLResponse)
@@ -2510,7 +1689,12 @@ async def list_users():
 @app.get("/logs/files")
 async def list_log_files():
     _require_public_read_user()
-    roots = [root for root in _iter_log_roots(include_legacy=True) if root.exists()]
+    roots: list[Path] = []
+    if _LOG_ROOT.exists():
+        roots.append(_LOG_ROOT)
+    legacy = get_legacy_log_root()
+    if legacy.exists() and legacy.resolve() != _LOG_ROOT.resolve():
+        roots.append(legacy)
     if not roots:
         return JSONResponse({"ok": True, "files": []})
 
@@ -2776,21 +1960,41 @@ async def list_sessions(limit: int = 100, offset: int = 0):
     return JSONResponse(_store.list_sessions(limit=limit, offset=offset))
 
 
+@app.get("/sessions/{session_id}/context-usage")
+async def get_session_context_usage(session_id: str):
+    _require_login()
+    sid = str(session_id or "").strip()
+    if not sid:
+        return JSONResponse({"ok": False, "error": "session_id required"}, status_code=400)
+
+    _store.ensure_session(sid)
+    rows = _store.get_context_messages(sid)
+    usage_length = _estimate_context_usage_length(rows)
+    meta = _store.get_session(sid) or {}
+    title = str(meta.get("title", "") or "新对话").strip() or "新对话"
+
+    if title in {"", "新对话"} and usage_length > 0:
+        try:
+            _generate_title_from_first_round(sid)
+        except Exception:
+            pass
+
+    return JSONResponse(
+        {
+            "ok": True,
+            "session_id": sid,
+            "title": title,
+            "usage_length": int(usage_length),
+        }
+    )
+
+
 @app.delete("/sessions/{session_id}")
 async def delete_session(session_id: str):
     _require_login()
     ok = _store.delete_session(session_id)
     _sessions.pop(session_id, None)
     _session_last_access.pop(session_id, None)
-    try:
-        _tool_runtime.stop_session(session_id)
-    except Exception as e:
-        _audit_web(
-            "SYSTEM_EXECUTE",
-            "delete_session",
-            f"stop_tool_runtime_failed session_id={session_id}",
-            {"session_id": session_id, "ok": False, "error": str(e)},
-        )
     if not ok:
         return JSONResponse({"ok": False, "error": "session not found"}, status_code=404)
     return JSONResponse({"ok": True, "session_id": session_id})
@@ -2802,30 +2006,6 @@ async def get_session_messages(session_id: str):
     _store.ensure_session(session_id)
     rows = _store.load_messages(session_id)
     return JSONResponse({"ok": True, "session_id": session_id, "entries": rows})
-
-
-@app.get("/sessions/{session_id}/context-usage")
-async def get_session_context_usage(session_id: str):
-    _require_login()
-    _store.ensure_session(session_id)
-    sid = str(session_id or "").strip()
-    context_rows = _store.get_context_messages(sid)
-    agent_rows, _ = _store_to_agent_messages(context_rows)
-    usage = _estimate_context_usage_length(agent_rows)
-    meta = _store.get_session(sid) or {}
-    title = str(meta.get("title", "") or "新对话")
-    if title in {"", "新对话"}:
-        _generate_title_from_first_round(sid)
-    return JSONResponse(
-        {
-            "ok": True,
-            "session_id": sid,
-            "title": title,
-            "usage_length": int(usage),
-            "context_rows": len(context_rows),
-            "agent_rows": len(agent_rows),
-        }
-    )
 
 
 @app.post("/sessions/{session_id}/title")
@@ -2869,416 +2049,6 @@ async def compress_session_context(session_id: str):
     return JSONResponse({"ok": True, **result})
 
 
-class SessionConfigRequest(BaseModel):
-    max_context_tokens: int | None = None
-
-
-@app.patch("/sessions/{session_id}/config")
-async def patch_session_config(session_id: str, req: SessionConfigRequest):
-    current = _require_login()
-    if not _has_llm_perm(current):
-        return JSONResponse({"ok": False, "error": "权限不足"}, status_code=403)
-    try:
-        result = _store.set_session_config(session_id, max_context_tokens=req.max_context_tokens)
-        # 同步到运行中的 agent
-        agent = _sessions.get(session_id)
-        if agent and req.max_context_tokens is not None:
-            agent.max_context_tokens = max(100, int(req.max_context_tokens))
-        return JSONResponse({"ok": True, **result})
-    except SessionStoreError as e:
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
-
-
-class TerminalConfirmRequest(BaseModel):
-    session_id: str
-    confirm_id: str | None = None
-    action: str  # "allow" | "deny"
-    cmd: str | None = None  # 前端直接传命令，避免依赖异步落盘后的 confirm_entry 查询
-
-
-@app.post("/terminal/confirm")
-async def terminal_confirm(req: TerminalConfirmRequest):
-    current = _require_login()
-    sid = str(req.session_id or "").strip()
-    cid = str(req.confirm_id or "").strip()
-    action = str(req.action or "").strip().lower()
-    cmd = str(req.cmd or "").strip()
-
-    if not sid or action not in ("allow", "deny"):
-        return JSONResponse({"ok": False, "error": "invalid params"}, status_code=400)
-    if not cid and not cmd:
-        return JSONResponse({"ok": False, "error": "confirm_id or cmd required"}, status_code=400)
-    if (int(current.get_perm()) & 511) != 511:
-        return JSONResponse({"ok": False, "error": "permission denied"}, status_code=403)
-
-    rows = _store.load_messages(sid)
-    confirm_row = None
-
-    if cid:
-        for row in rows:
-            if row.get("id") == cid and row.get("entry_type") == "terminal_confirm":
-                confirm_row = row
-                break
-
-    if confirm_row is None and cmd:
-        for row in reversed(rows):
-            if row.get("entry_type") != "terminal_confirm":
-                continue
-            try:
-                row_data = json.loads(row.get("content", "{}"))
-            except Exception:
-                row_data = {}
-            row_cmd = str(row_data.get("cmd", "") or "").strip()
-            row_status = str(row_data.get("status", "pending") or "pending").strip().lower()
-            if row_cmd == cmd and row_status == "pending":
-                confirm_row = row
-                cid = str(row.get("id", "") or cid).strip()
-                break
-
-    if confirm_row is None:
-        return JSONResponse({"ok": False, "error": "confirm entry not found or already handled"}, status_code=404)
-    turn_id = _normalize_turn_id(str(confirm_row.get("turn_id", "") or "")) or _new_turn_id()
-
-    try:
-        row_data = json.loads(confirm_row.get("content", "{}"))
-    except Exception:
-        row_data = {}
-
-    row_cmd = str(row_data.get("cmd", "") or "").strip()
-    row_status = str(row_data.get("status", "pending") or "pending").strip().lower()
-    cmd = cmd or row_cmd
-
-    if not cmd:
-        return JSONResponse({"ok": False, "error": "empty command"}, status_code=400)
-
-    # 幂等：已处理过的确认请求直接返回，不重复执行命令与落盘 notice。
-    if row_status in {"allow", "deny", "allowed", "denied"}:
-        replay = dict(row_data)
-        replay.setdefault("cmd", cmd)
-        normalized = str(replay.get("status", row_status)).strip().lower()
-        if normalized == "allow":
-            replay["status"] = "allowed"
-            replay["action"] = "allow"
-        elif normalized == "deny":
-            replay["status"] = "denied"
-            replay["action"] = "deny"
-        elif normalized == "allowed":
-            replay["action"] = "allow"
-        elif normalized == "denied":
-            replay["action"] = "deny"
-
-        replay_action = str(replay.get("action", "") or "").strip().lower()
-        reply = ""
-        if replay_action == "allow":
-            if replay.get("executed") is True or ("output" in replay):
-                out_text = str(replay.get("output", "(no output)"))
-                reply = (
-                    f"已执行命令 `{cmd}`。\n\n"
-                    f"输出结果：\n\n```\n{out_text}\n```"
-                )
-            else:
-                reply = f"命令 `{cmd}` 已允许执行。"
-        elif replay_action == "deny":
-            reply = f"已拒绝执行命令 `{cmd}`。"
-
-        return JSONResponse(
-            {
-                "ok": True,
-                "confirm_id": cid,
-                "already_processed": True,
-                "reply": reply,
-                "tool_trace": [],
-                "turn_id": turn_id,
-                **replay,
-            }
-        )
-
-    status = "allowed" if action == "allow" else "denied"
-    result = {"cmd": cmd, "status": status, "action": action}
-    if action == "allow":
-        import subprocess
-        try:
-            r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30,
-                               env={**os.environ, "PYTHONUNBUFFERED": "1"})
-            out = (r.stdout or "") + (r.stderr or "")
-            if len(out) > 8000:
-                out = out[:8000] + "\n...(output truncated)"
-            result["output"] = out.strip() or "(no output)"
-            result["returncode"] = r.returncode
-            result["executed"] = True
-        except subprocess.TimeoutExpired:
-            result["output"] = f"(命令超时 >30s)"
-            result["returncode"] = -1
-            result["executed"] = True
-        except Exception as e:
-            result["output"] = f"(执行失败: {e})"
-            result["returncode"] = -1
-            result["executed"] = True
-
-    confirm_row["turn_id"] = turn_id
-    confirm_row["content"] = json.dumps(result, ensure_ascii=False)
-    _store._write_messages(sid, rows)
-
-    action_text = "允许" if action == "allow" else "拒绝"
-    exec_summary = f"[终端确认] 用户已{action_text}执行命令: {cmd}"
-    if result.get("executed"):
-        exec_summary += f"\n输出:\n{result.get('output', '(no output)')}"
-    _store.append_messages(sid, [{
-        "id": f"m_{uuid.uuid4().hex[:16]}",
-        "role": "system",
-        "content": exec_summary,
-        "entry_type": "notice",
-        "created_at": _now_iso(),
-        "is_summary": False,
-        "turn_id": turn_id,
-    }])
-
-    pending_turn_confirms = _collect_pending_terminal_confirms(rows, turn_id=turn_id)
-    if pending_turn_confirms:
-        return JSONResponse(
-            {
-                "ok": True,
-                "confirm_id": cid,
-                "reply": "",
-                "tool_trace": [],
-                "turn_id": turn_id,
-                "awaiting_other_confirmations": True,
-                "pending_confirm_count": len(pending_turn_confirms),
-                "pending_confirmations": pending_turn_confirms,
-                **result,
-            }
-        )
-
-    turn_confirm_results = _collect_turn_terminal_confirm_results(rows, turn_id=turn_id)
-    is_batch_confirm = len(turn_confirm_results) > 1
-
-    tool_trace = []
-    reply = ""
-    if is_batch_confirm:
-        any_allowed_executed = any(
-            (str(it.get("status", "")).strip().lower() == "allowed") and bool(it.get("executed") is True)
-            for it in turn_confirm_results
-        )
-        if any_allowed_executed:
-            origin_confirm_id = str(turn_confirm_results[0].get("confirm_id", "") or cid).strip()
-            origin_cmd = str(turn_confirm_results[0].get("cmd", "") or "")
-            origin_user_intent = _extract_terminal_confirm_origin_user_intent(rows, origin_confirm_id)
-            fallback_reply = _build_terminal_confirm_batch_fallback_reply(turn_confirm_results)
-            try:
-                agent = _get_agent(sid)
-                continuation_messages = list(agent.history)
-                followup_user_input = _build_terminal_batch_followup_user_input_json(
-                    confirm_results=turn_confirm_results,
-                    origin_user_intent=origin_user_intent,
-                )
-                continuation_messages.append({"role": "user", "content": followup_user_input})
-                _audit_context_injection(
-                    "terminal_confirm.batch_allow_continue",
-                    sid,
-                    continuation_messages,
-                    extra={
-                        "confirm_id": cid,
-                        "action": action,
-                        "cmd": cmd,
-                        "user_perm": int(current.get_perm()),
-                        "origin_user_intent": origin_user_intent,
-                        "followup_injected": True,
-                        "followup_entry_type": "terminal_followup_batch",
-                        "confirm_count": len(turn_confirm_results),
-                    },
-                )
-                llm_result = _client.chat_with_tools(
-                    continuation_messages,
-                    user_perm=int(current.get_perm()),
-                    max_tool_steps=0,
-                )
-                reply = str(llm_result.get("reply", "") or "").strip()
-                tool_trace = _sanitize_tool_trace_for_user(llm_result.get("tool_trace", []))
-                delta = llm_result.get("history_delta", [])
-                if delta:
-                    agent.history.extend(delta)
-                    agent._trim_history()
-            except Exception as e:
-                _audit_web(
-                    "SYSTEM_EXECUTE",
-                    "terminal_confirm",
-                    f"batch_allow_continue_failed session_id={sid}",
-                    {
-                        "session_id": sid,
-                        "confirm_id": cid,
-                        "cmd": cmd,
-                        "ok": False,
-                        "error": str(e),
-                    },
-                )
-                reply = ""
-
-            if not _is_terminal_followup_reply_relevant(reply, cmd=origin_cmd, origin_user_intent=origin_user_intent):
-                reason = "empty_or_failed" if not reply else "off_topic"
-                _audit_web(
-                    "SYSTEM_EXECUTE",
-                    "terminal_confirm",
-                    f"batch_allow_continue_fallback session_id={sid} reason={reason}",
-                    {
-                        "session_id": sid,
-                        "confirm_id": cid,
-                        "cmd": cmd,
-                        "reason": reason,
-                        "origin_user_intent": origin_user_intent,
-                        "reply_preview": str(reply or "")[:160],
-                        "confirm_count": len(turn_confirm_results),
-                    },
-                )
-                reply = fallback_reply
-                tool_trace = []
-        else:
-            reply = _build_terminal_confirm_batch_fallback_reply(turn_confirm_results)
-    else:
-        if action == "allow" and result.get("executed"):
-            origin_user_intent = _extract_terminal_confirm_origin_user_intent(rows, cid)
-            fallback_reply = _build_terminal_confirm_fallback_reply(cmd, result)
-            try:
-                # 协议约束：确认后续写必须补一个明确 user 回合，避免模型按历史漂移跑题。
-                agent = _get_agent(sid)
-                continuation_messages = list(agent.history)
-                followup_user_input = _build_terminal_followup_user_input_json(
-                    confirm_id=cid,
-                    cmd=cmd,
-                    result=result,
-                    origin_user_intent=origin_user_intent,
-                )
-                continuation_messages.append({"role": "user", "content": followup_user_input})
-                _audit_context_injection(
-                    "terminal_confirm.allow_continue",
-                    sid,
-                    continuation_messages,
-                    extra={
-                        "confirm_id": cid,
-                        "action": action,
-                        "cmd": cmd,
-                        "user_perm": int(current.get_perm()),
-                        "origin_user_intent": origin_user_intent,
-                        "followup_injected": True,
-                        "followup_entry_type": "terminal_followup",
-                    },
-                )
-                llm_result = _client.chat_with_tools(
-                    continuation_messages,
-                    user_perm=int(current.get_perm()),
-                    max_tool_steps=0,
-                )
-                reply = str(llm_result.get("reply", "") or "").strip()
-                tool_trace = _sanitize_tool_trace_for_user(llm_result.get("tool_trace", []))
-                delta = llm_result.get("history_delta", [])
-                if delta:
-                    agent.history.extend(delta)
-                    agent._trim_history()
-            except Exception as e:
-                _audit_web(
-                    "SYSTEM_EXECUTE",
-                    "terminal_confirm",
-                    f"allow_continue_failed session_id={sid}",
-                    {
-                        "session_id": sid,
-                        "confirm_id": cid,
-                        "cmd": cmd,
-                        "ok": False,
-                        "error": str(e),
-                    },
-                )
-                reply = ""
-
-            if not _is_terminal_followup_reply_relevant(reply, cmd=cmd, origin_user_intent=origin_user_intent):
-                reason = "empty_or_failed" if not reply else "off_topic"
-                _audit_web(
-                    "SYSTEM_EXECUTE",
-                    "terminal_confirm",
-                    f"allow_continue_fallback session_id={sid} reason={reason}",
-                    {
-                        "session_id": sid,
-                        "confirm_id": cid,
-                        "cmd": cmd,
-                        "reason": reason,
-                        "origin_user_intent": origin_user_intent,
-                        "reply_preview": str(reply or "")[:160],
-                    },
-                )
-                reply = fallback_reply
-                tool_trace = []
-        elif action == "deny":
-            reply = f"已拒绝执行命令 `{cmd}`。"
-
-    if reply:
-        reply = _sanitize_terminal_dump_reply(
-            reply_text=reply,
-            tool_steps=len(tool_trace or []),
-            tool_trace=tool_trace,
-        )
-        reply = _inject_tool_call_ids_into_marker_text(reply, tool_trace)
-        items = [{
-            "id": f"m_{uuid.uuid4().hex[:16]}",
-            "role": "assistant",
-            "content": reply,
-            "entry_type": "chat",
-            "created_at": _now_iso(),
-            "is_summary": False,
-            "turn_id": turn_id,
-        }]
-        items.extend(_tool_trace_to_terminal_items(tool_trace, turn_id=turn_id))
-        _store.append_messages(sid, items)
-
-    return JSONResponse(
-        {
-            "ok": True,
-            "confirm_id": cid,
-            "reply": reply,
-            "tool_trace": tool_trace,
-            "turn_id": turn_id,
-            "awaiting_other_confirmations": False,
-            "pending_confirm_count": 0,
-            "pending_confirmations": [],
-            "resolved_confirm_count": len(turn_confirm_results),
-            "is_batch_confirm": bool(is_batch_confirm),
-            **result,
-        }
-    )
-
-
-@app.get("/terminal/settings")
-async def get_terminal_settings():
-    current = _require_login()
-    if (int(current.get_perm()) & 511) != 511:
-        return JSONResponse({"ok": False, "error": "permission denied"}, status_code=403)
-    from TindaAgent.Process.Security.terminal_policy import load_settings
-    s = load_settings()
-    return JSONResponse({"ok": True, "whitelist": s.get("whitelist", []),
-                         "blacklist": s.get("blacklist", []),
-                         "bypass_terminal_confirm": s.get("bypass_terminal_confirm", False)})
-
-
-class TerminalSettingsRequest(BaseModel):
-    whitelist: list[str] | None = None
-    blacklist: list[str] | None = None
-    bypass_terminal_confirm: bool | None = None
-
-
-@app.put("/terminal/settings")
-async def update_terminal_settings(req: TerminalSettingsRequest):
-    current = _require_login()
-    if (int(current.get_perm()) & 511) != 511:
-        return JSONResponse({"ok": False, "error": "permission denied"}, status_code=403)
-    from TindaAgent.Process.Security.terminal_policy import load_settings, save_settings
-    s = load_settings()
-    if req.whitelist is not None:
-        s["whitelist"] = [str(x).strip() for x in req.whitelist if str(x).strip()]
-    if req.blacklist is not None:
-        s["blacklist"] = [str(x).strip() for x in req.blacklist if str(x).strip()]
-    if req.bypass_terminal_confirm is not None:
-        s["bypass_terminal_confirm"] = bool(req.bypass_terminal_confirm)
-    save_settings(s)
-    return JSONResponse({"ok": True, **s})
-
-
 @app.post("/chat")
 async def chat(req: ChatRequest):
     current = _require_login()
@@ -3293,17 +2063,6 @@ async def chat(req: ChatRequest):
     message = str(req.message or "").strip()
     if not message:
         return JSONResponse({"reply": "", "tool_trace": [], "tool_steps": 0})
-    pending_confirms = _collect_pending_terminal_confirms(_store.load_messages(sid))
-    if pending_confirms:
-        return JSONResponse(
-            {
-                "error": "存在待确认终端命令，请先全部允许/拒绝后再发送新消息。",
-                "pending_confirm_count": len(pending_confirms),
-                "pending_confirmations": pending_confirms,
-            },
-            status_code=409,
-        )
-    turn_id = _new_turn_id()
 
     if message.startswith("/"):
         profile = _get_web_profile()
@@ -3311,10 +2070,6 @@ async def chat(req: ChatRequest):
             job = _tool_runtime.submit_command(sid, message, profile.perm)
         except Exception as e:
             return JSONResponse({"error": str(e)}, status_code=400)
-        marker = "> >_<\n> --调用工具中--"
-        call_id = str((job or {}).get("call_id", "") or "").strip()
-        if call_id:
-            marker += f"\n> --call_id: {call_id}--"
         # 工具命令也写入 chat 消息（用户气泡独立）
         _store.append_messages(
             sid,
@@ -3326,27 +2081,24 @@ async def chat(req: ChatRequest):
                     "entry_type": "chat",
                     "is_summary": False,
                     "created_at": _now_iso(),
-                    "turn_id": turn_id,
                 },
                 {
                     "id": f"m_{uuid.uuid4().hex[:16]}",
                     "role": "assistant",
-                    "content": marker,
+                    "content": "> --调用工具中--",
                     "entry_type": "tool_marker",
                     "is_summary": False,
                     "created_at": _now_iso(),
-                    "turn_id": turn_id,
                 },
             ],
         )
         return JSONResponse(
             {
-                "reply": marker,
+                "reply": "> --调用工具中--",
                 "tool_trace": [],
                 "tool_steps": 0,
                 "tool_job": job,
                 "tool_async": True,
-                "turn_id": turn_id,
             }
         )
 
@@ -3357,18 +2109,6 @@ async def chat(req: ChatRequest):
         meta_user_perm=req.meta_user_perm,
         meta_time_iso=req.meta_time_iso,
         meta_time_text=req.meta_time_text,
-    )
-    request_messages = list(agent.history)
-    request_messages.append({"role": "user", "content": llm_message})
-    _audit_context_injection(
-        "chat.request",
-        sid,
-        request_messages,
-        extra={
-            "stream": False,
-            "user_perm": int(current.get_perm()),
-            "message_chars": len(message),
-        },
     )
 
     result = agent.chat_with_meta(llm_message)
@@ -3395,15 +2135,13 @@ async def chat(req: ChatRequest):
             },
         )
         reply = sanitized_reply
-    reply = _inject_tool_call_ids_into_marker_text(reply, tool_trace)
 
-    saved_turn_id = _save_chat_messages(
+    _save_chat_messages(
         sid,
-        message,
+        llm_message,
         reply,
         tool_marker=bool(tool_steps > 0),
         tool_trace=tool_trace,
-        turn_id=turn_id,
     )
     _generate_title_from_first_round(sid)
 
@@ -3412,7 +2150,6 @@ async def chat(req: ChatRequest):
             "reply": reply,
             "tool_trace": tool_trace,
             "tool_steps": tool_steps,
-            "turn_id": saved_turn_id,
         }
     )
 
@@ -3440,32 +2177,8 @@ async def chat_stream(
 
     _store.ensure_session(sid)
     agent = _get_agent(sid)
-    turn_id = _new_turn_id()
 
     text = str(message or "").strip()
-    pending_confirms = _collect_pending_terminal_confirms(_store.load_messages(sid))
-    if pending_confirms:
-        chunks = [
-            _sse_event(
-                "error",
-                {
-                    "message": "存在待确认终端命令，请先全部允许/拒绝后再发送新消息。",
-                    "pending_confirm_count": len(pending_confirms),
-                    "pending_confirmations": pending_confirms,
-                },
-            ),
-            _sse_event(
-                "done",
-                {
-                    "reply": "",
-                    "tool_trace": [],
-                    "tool_steps": 0,
-                    "pending_confirm_count": len(pending_confirms),
-                    "pending_confirmations": pending_confirms,
-                },
-            ),
-        ]
-        return HTMLResponse("".join(chunks), media_type="text/event-stream")
     if text.startswith("/"):
         profile = _get_web_profile()
         try:
@@ -3477,11 +2190,6 @@ async def chat_stream(
             ]
             return HTMLResponse("".join(chunks), media_type="text/event-stream")
 
-        marker = "> >_<\n> --调用工具中--"
-        call_id = str((job or {}).get("call_id", "") or "").strip()
-        if call_id:
-            marker += f"\n> --call_id: {call_id}--"
-
         _store.append_messages(
             sid,
             [
@@ -3492,32 +2200,29 @@ async def chat_stream(
                     "entry_type": "chat",
                     "is_summary": False,
                     "created_at": _now_iso(),
-                    "turn_id": turn_id,
                 },
                 {
                     "id": f"m_{uuid.uuid4().hex[:16]}",
                     "role": "assistant",
-                    "content": marker,
+                    "content": "> --调用工具中--",
                     "entry_type": "tool_marker",
                     "is_summary": False,
                     "created_at": _now_iso(),
-                    "turn_id": turn_id,
                 },
             ],
         )
 
         chunks = [
             _sse_event("reset", {}),
-            _sse_event("delta", {"content": marker}),
+            _sse_event("delta", {"content": "> --调用工具中--"}),
             _sse_event(
                 "done",
                 {
-                    "reply": marker,
+                    "reply": "> --调用工具中--",
                     "tool_trace": [],
                     "tool_steps": 0,
                     "tool_job": job,
                     "tool_async": True,
-                    "turn_id": turn_id,
                 },
             ),
         ]
@@ -3531,18 +2236,6 @@ async def chat_stream(
         meta_time_iso=meta_time_iso,
         meta_time_text=meta_time_text,
     )
-    stream_request_messages = list(agent.history)
-    stream_request_messages.append({"role": "user", "content": llm_message})
-    _audit_context_injection(
-        "chat_stream.request",
-        sid,
-        stream_request_messages,
-        extra={
-            "stream": True,
-            "user_perm": int(current.get_perm()),
-            "message_chars": len(text),
-        },
-    )
 
     def event_iter():
         final_reply = ""
@@ -3555,7 +2248,7 @@ async def chat_stream(
                     yield _sse_event("delta", {"content": event.get("content", "")})
                 elif et == "reset":
                     # 关键：把工具调用标记按流顺序写入持久化文本，确保刷新/导入后仍是 A-标记-B。
-                    final_reply += "\n\n> >_<\n> --调用工具中--\n"
+                    final_reply += "\n\n> --调用工具中--\n"
                     yield _sse_event("reset", {})
                 elif et == "tool_step":
                     yield _sse_event("tool_step", {"trace": event.get("trace", [])})
@@ -3564,11 +2257,10 @@ async def chat_stream(
                         "reply": event.get("reply", ""),
                         "tool_trace": _sanitize_tool_trace_for_user(event.get("tool_trace", [])),
                         "tool_steps": int(event.get("tool_steps", 0)),
-                        "turn_id": turn_id,
                     }
 
             if done_payload is None:
-                done_payload = {"reply": final_reply, "tool_trace": [], "tool_steps": 0, "turn_id": turn_id}
+                done_payload = {"reply": final_reply, "tool_trace": [], "tool_steps": 0}
 
             safe_tool_trace = (
                 done_payload.get("tool_trace", [])
@@ -3581,7 +2273,6 @@ async def chat_stream(
                 "reply": final_reply,
                 "tool_trace": safe_tool_trace,
                 "tool_steps": safe_tool_steps,
-                "turn_id": turn_id,
             }
 
             sanitized_reply = _sanitize_terminal_dump_reply(
@@ -3605,47 +2296,20 @@ async def chat_stream(
                 done_payload["reply"] = sanitized_reply
                 final_reply = sanitized_reply
 
-            decorated_reply = _inject_tool_call_ids_into_marker_text(
-                str(done_payload.get("reply", "")),
-                done_payload.get("tool_trace", []),
-            )
-            if decorated_reply != str(done_payload.get("reply", "")):
-                done_payload["reply"] = decorated_reply
-                final_reply = decorated_reply
-
             yield _sse_event("done", done_payload)
             # 优先持久化带 reset 标记的 final_reply；没有内容时再回退 done_payload.reply
             reply = str(final_reply or done_payload.get("reply", ""))
             _save_chat_messages(
                 sid,
-                text,
+                llm_message,
                 reply,
                 # 流式已把标记内嵌到 assistant 文本，不再额外落一条 tool_marker，避免变成 A-B-标记
                 tool_marker=False,
                 tool_trace=done_payload.get("tool_trace", []),
-                turn_id=turn_id,
             )
             _generate_title_from_first_round(sid)
         except Exception as e:
-            err_code = str(getattr(e, "tinda_error_code", "") or "").strip()
-            user_message = str(getattr(e, "tinda_user_message", "") or "").strip()
-            msg = user_message or str(e)
-            _audit_web(
-                "SYSTEM_EXECUTE",
-                "chat_stream",
-                f"chat_stream_failed session_id={sid}",
-                {
-                    "session_id": sid,
-                    "ok": False,
-                    "error": str(e),
-                    "error_code": err_code,
-                    "error_type": type(e).__name__,
-                },
-            )
-            payload = {"message": msg}
-            if err_code:
-                payload["error_code"] = err_code
-            yield _sse_event("error", payload)
+            yield _sse_event("error", {"message": str(e)})
 
     from starlette.responses import StreamingResponse
 
@@ -3700,7 +2364,6 @@ async def session_events(req: SessionEventsRequest):
                 "terminal_class": str(it.get("terminal_class", it.get("class", ""))),
                 "is_summary": False,
                 "created_at": str(it.get("ts", "")) or _now_iso(),
-                "turn_id": _normalize_turn_id(str(it.get("turn_id", "") or "")),
             }
         )
     try:
@@ -3798,15 +2461,6 @@ async def import_record_compat(req: ImportRecordRequest):
     if not rows:
         return JSONResponse({"ok": False, "error": "记录不存在或不再支持旧格式导入"}, status_code=400)
     _store.delete_session(req.session_id)
-    try:
-        _tool_runtime.stop_session(req.session_id)
-    except Exception as e:
-        _audit_web(
-            "SYSTEM_EXECUTE",
-            "import_record_compat",
-            f"stop_tool_runtime_failed session_id={req.session_id}",
-            {"session_id": str(req.session_id), "ok": False, "error": str(e)},
-        )
     _store.create_session(req.session_id, title="新对话")
     _store.append_messages(req.session_id, rows)
     return JSONResponse({"ok": True, "session_id": req.session_id, "entries": rows})
@@ -3815,6 +2469,4 @@ async def import_record_compat(req: ImportRecordRequest):
 if __name__ == "__main__":
     import uvicorn
 
-    _DEFAULT_PORT = 8000
-    _DEFAULT_HOST = "0.0.0.0"
-    uvicorn.run("TindaAgent.Web.server:app", host=_DEFAULT_HOST, port=_DEFAULT_PORT, reload=True)
+    uvicorn.run("TindaAgent.Web.server:app", host="0.0.0.0", port=8000, reload=True)

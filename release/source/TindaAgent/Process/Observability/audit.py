@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-import atexit
 import gzip
 import json
 import os
-import re
 import shutil
 import threading
-import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -35,7 +32,6 @@ OP_TOOL_EXECUTE = "TOOL_EXECUTE"
 OP_SYSTEM_READ = "SYSTEM_READ"
 OP_SYSTEM_WRITE = "SYSTEM_WRITE"
 OP_SYSTEM_EXECUTE = "SYSTEM_EXECUTE"
-_ACTIVE_LOG_ROOT_ENV = "TINDA_ACTIVE_LOG_ROOT"
 
 
 def _now_iso() -> str:
@@ -56,46 +52,6 @@ def _truncate_text(text: Any, *, max_len: int = 4000) -> str:
     return value[:max_len]
 
 
-_REDACT_VALUE = "***REDACTED***"
-_SENSITIVE_KEY_VALUE_RE = re.compile(
-    r"(?i)\b("
-    r"(?:deepseek|openai)?[_-]?api[_-]?key|"
-    r"access[_-]?token|refresh[_-]?token|auth[_-]?token|"
-    r"authorization|secret|password"
-    r")\b(\s*[:=]\s*)([^\n]+)"
-)
-_SENSITIVE_BEARER_RE = re.compile(r"(?i)\b(Bearer\s+)([A-Za-z0-9._~+/=-]{10,})")
-_SENSITIVE_SK_RE = re.compile(r"\bsk-[A-Za-z0-9]{16,}\b")
-
-
-def redact_sensitive_text(text: Any) -> str:
-    raw = str(text if text is not None else "")
-    if not raw:
-        return raw
-    out = _SENSITIVE_KEY_VALUE_RE.sub(lambda m: f"{m.group(1)}{m.group(2)}{_REDACT_VALUE}", raw)
-    out = _SENSITIVE_BEARER_RE.sub(lambda m: f"{m.group(1)}{_REDACT_VALUE}", out)
-    out = _SENSITIVE_SK_RE.sub(_REDACT_VALUE, out)
-    return out
-
-
-def _sanitize_extra_value(value: Any, depth: int = 0) -> Any:
-    if depth > 6:
-        return redact_sensitive_text(_truncate_text(value, max_len=800))
-    if isinstance(value, str):
-        return redact_sensitive_text(_truncate_text(value, max_len=4000))
-    if isinstance(value, (int, float, bool)) or value is None:
-        return value
-    if isinstance(value, dict):
-        out: dict[str, Any] = {}
-        for k, v in value.items():
-            key = str(k)
-            out[key] = _sanitize_extra_value(v, depth + 1)
-        return out
-    if isinstance(value, list):
-        return [_sanitize_extra_value(x, depth + 1) for x in value]
-    return redact_sensitive_text(_truncate_text(value, max_len=2000))
-
-
 @dataclass
 class _AuditFiles:
     root: Path
@@ -111,87 +67,21 @@ class GlobalAuditEngine:
     用处：全局唯一审计引擎（线程安全、跨重启自增ID、JSONL+文本镜像）。
     """
 
-    _BATCH_SIZE = 16
-    _BATCH_MAX_AGE_S = 3.0
-
     def __init__(self, log_root: Path | None = None) -> None:
         self._lock = threading.RLock()
         self._thread_local = threading.local()
         self._failure_count = 0
-        self._files, root_notice = self._build_files(log_root)
+        self._files = self._build_files(log_root)
         self._counter_file = self._files.root / "id_counter.txt"
-        self._seed_counter_from_preferred_root(root_notice)
         self._current_id = self._load_counter()
-        self._pending: list[tuple[dict, str, str]] = []
-        self._pending_last_flush: float = time.monotonic()
-        if isinstance(root_notice, dict) and root_notice:
-            self._safe_record_error("log_root_fallback", root_notice)
-        atexit.register(self.flush)
 
     @staticmethod
-    def _probe_writable_dir(root: Path) -> tuple[bool, str]:
-        try:
-            root.mkdir(parents=True, exist_ok=True)
-        except Exception as e:
-            return False, str(e)
-        probe = root / ".audit_write_probe"
-        try:
-            with probe.open("a", encoding="utf-8") as fp:
-                fp.write("")
-            try:
-                probe.unlink()
-            except Exception:
-                pass
-            return True, ""
-        except Exception as e:
-            try:
-                if probe.exists():
-                    probe.unlink()
-            except Exception:
-                pass
-            return False, str(e)
-
-    @staticmethod
-    def _build_files(log_root: Path | None) -> tuple[_AuditFiles, dict[str, Any] | None]:
+    def _build_files(log_root: Path | None) -> _AuditFiles:
         if log_root is None:
-            preferred_root = get_log_root()
+            root = get_log_root()
         else:
-            preferred_root = Path(log_root).expanduser()
-
-        # 原因说明：在 WSL / 容器 / 沙箱中，/mnt/* 目录经常以只读或受限方式挂载。
-        # 若继续写入会不断触发 "Read-only file system"，因此这里自动回退到可写目录。
-        home_fallback = Path.home() / ".tinda" / "agent" / "log"
-        tmp_fallback = Path("/tmp") / "tinda-agent" / "log"
-        candidates = [preferred_root, home_fallback, tmp_fallback]
-        seen: set[str] = set()
-        root = preferred_root
-        primary_error = ""
-        fallback_notice: dict[str, Any] | None = None
-
-        for idx, candidate in enumerate(candidates):
-            try:
-                resolved = candidate.resolve()
-            except Exception:
-                resolved = candidate
-            key = str(resolved)
-            if key in seen:
-                continue
-            seen.add(key)
-            ok, err = GlobalAuditEngine._probe_writable_dir(resolved)
-            if not ok:
-                if idx == 0:
-                    primary_error = err
-                continue
-            root = resolved
-            if idx > 0:
-                fallback_notice = {
-                    "preferred_root": str(preferred_root),
-                    "active_root": str(root),
-                    "reason": primary_error or "preferred_root_not_writable",
-                }
-            break
-
-        os.environ[_ACTIVE_LOG_ROOT_ENV] = str(root)
+            root = Path(log_root).resolve()
+        root.mkdir(parents=True, exist_ok=True)
         return _AuditFiles(
             root=root,
             total_jsonl=root / "total.jsonl",
@@ -199,38 +89,7 @@ class GlobalAuditEngine:
             total_text=root / "total.log",
             error_text=root / "error.log",
             legacy_error_text=root / "audit_error.log",
-        ), fallback_notice
-
-    def _seed_counter_from_preferred_root(self, fallback_notice: dict[str, Any] | None) -> None:
-        if not isinstance(fallback_notice, dict) or not fallback_notice:
-            return
-        preferred_raw = str(fallback_notice.get("preferred_root", "")).strip()
-        if not preferred_raw:
-            return
-        try:
-            preferred_root = Path(preferred_raw).expanduser().resolve()
-            preferred_counter = preferred_root / "id_counter.txt"
-            if not preferred_counter.exists():
-                return
-            src_text = preferred_counter.read_text(encoding="utf-8").strip()
-            src_value = int(src_text or "0")
-        except Exception:
-            return
-        if src_value <= 0:
-            return
-        dst_value = -1
-        try:
-            if self._counter_file.exists():
-                dst_text = self._counter_file.read_text(encoding="utf-8").strip()
-                dst_value = int(dst_text or "0")
-        except Exception:
-            dst_value = -1
-        if src_value > dst_value:
-            try:
-                self._counter_file.parent.mkdir(parents=True, exist_ok=True)
-                self._counter_file.write_text(f"{src_value}\n", encoding="utf-8")
-            except Exception:
-                pass
+        )
 
     def _load_counter(self) -> int:
         with self._lock:
@@ -354,65 +213,6 @@ class GlobalAuditEngine:
         with subsystem_file.open("a", encoding="utf-8") as fp:
             fp.write(text_line + "\n")
 
-    def flush(self) -> None:
-        with self._lock:
-            pending = self._pending
-            self._pending = []
-            self._pending_last_flush = 0.0
-        if not pending:
-            return
-        try:
-            self._write_batch(pending)
-        except Exception as e:
-            self._safe_record_error("batch_flush_failed", {"count": len(pending), "error": str(e)})
-
-    def _write_batch(self, records: list[tuple[dict, str, str]]) -> None:
-        self._rotate_if_needed()
-        idx: dict[str, int] = {}
-        try:
-            idx_text = self._files.total_idx.read_text(encoding="utf-8")
-            idx = json.loads(idx_text) if idx_text.strip() else {}
-            if not isinstance(idx, dict):
-                idx = {}
-        except Exception:
-            idx = {}
-        offset = self._files.total_jsonl.stat().st_size if self._files.total_jsonl.exists() else 0
-
-        jsonl_lines: list[str] = []
-        text_lines: list[str] = []
-        subsystem_buf: dict[str, list[str]] = {}
-
-        for json_event, text_line, subsystem in records:
-            eid = int(json_event["id"])
-            jsonl_lines.append(json.dumps(json_event, ensure_ascii=False, default=str))
-            text_lines.append(text_line)
-            idx[str(eid)] = int(offset)
-            offset += len(jsonl_lines[-1].encode("utf-8")) + 1
-            subsystem_buf.setdefault(subsystem, []).append(text_line)
-
-        with self._files.total_jsonl.open("a", encoding="utf-8") as fp:
-            fp.write("\n".join(jsonl_lines) + "\n")
-        with self._files.total_text.open("a", encoding="utf-8") as fp:
-            fp.write("\n".join(text_lines) + "\n")
-        idx["_write_count"] = int(idx.get("_write_count", 0)) + len(records)
-        try:
-            self._files.total_idx.write_text(json.dumps(idx, ensure_ascii=False), encoding="utf-8")
-        except Exception:
-            pass
-        for subsystem, lines in subsystem_buf.items():
-            sfile = self._files.root / self._subsystem_file_name(subsystem)
-            with sfile.open("a", encoding="utf-8") as fp:
-                fp.write("\n".join(lines) + "\n")
-
-    def _maybe_flush(self) -> None:
-        if not self._pending:
-            return
-        now = time.monotonic()
-        count_ok = len(self._pending) >= self._BATCH_SIZE
-        age_ok = (now - self._pending_last_flush) >= self._BATCH_MAX_AGE_S
-        if count_ok or age_ok:
-            self.flush()
-
     def event(
         self,
         *,
@@ -435,7 +235,7 @@ class GlobalAuditEngine:
             "dir": str(path.parent.name or ""),
             "file": str(path.name or ""),
             "path": str(path),
-            "content": redact_sensitive_text(_truncate_text(content, max_len=4000)),
+            "content": _truncate_text(content, max_len=4000),
         }
         if isinstance(extra, dict) and extra:
             safe_extra: dict[str, Any] = {}
@@ -443,21 +243,29 @@ class GlobalAuditEngine:
                 if k in {"message", "content", "response", "prompt", "history", "token"}:
                     continue
                 try:
-                    safe_extra[str(k)] = _sanitize_extra_value(v)
+                    safe_extra[str(k)] = v if isinstance(v, (int, float, bool, dict, list)) else str(v)
                 except Exception:
-                    safe_extra[str(k)] = redact_sensitive_text(_truncate_text(v, max_len=2000))
+                    safe_extra[str(k)] = str(v)
             if safe_extra:
                 record["extra"] = safe_extra
 
         text_line = self._format_text_line(record)
         try:
             with self._lock:
-                self._pending.append((record, text_line, record["subsystem"]))
-                self._maybe_flush()
+                self._write_lines(
+                    json_event=record,
+                    text_line=text_line,
+                    subsystem=record["subsystem"],
+                )
         except Exception as e:
             self._safe_record_error(
                 "write_event_failed",
-                {"id": eid, "error": str(e), "subsystem": record["subsystem"], "func": record["func"]},
+                {
+                    "id": eid,
+                    "error": str(e),
+                    "subsystem": record["subsystem"],
+                    "func": record["func"],
+                },
             )
         return eid
 

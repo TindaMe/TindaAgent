@@ -22,8 +22,10 @@ if ($Mode -ne "--show") {
 
 $repoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $portsFile = Join-Path $repoRoot ".tinda_ports.list"
+$selfEnv = "windows"
 
 $trackedSet = [System.Collections.Generic.HashSet[int]]::new()
+$trackedForeign = [System.Collections.Generic.HashSet[string]]::new()
 $listenSet = [System.Collections.Generic.HashSet[int]]::new()
 $listenPids = @{}
 
@@ -37,6 +39,43 @@ function Add-PortToken {
     if (-not [int]::TryParse($Token, [ref]$n)) { return }
     if ($n -le 0 -or $n -gt 65535) { return }
     [void]$Set.Add($n)
+}
+
+function Parse-PortRecord {
+    param([string]$Token)
+    if ([string]::IsNullOrWhiteSpace($Token)) { return $null }
+    $envTag = "legacy"
+    $rawPort = $Token
+    if ($Token.Contains(":")) {
+        $parts = $Token.Split(":", 2)
+        if ($parts.Count -eq 2 -and -not [string]::IsNullOrWhiteSpace($parts[0]) -and -not [string]::IsNullOrWhiteSpace($parts[1])) {
+            $envTag = $parts[0].ToLowerInvariant()
+            $rawPort = $parts[1]
+        }
+    }
+    switch ($envTag) {
+        "win" { $envTag = "windows" }
+        "nt" { $envTag = "windows" }
+        "gnu/linux" { $envTag = "linux" }
+        "" { $envTag = "legacy" }
+    }
+    $n = 0
+    if (-not [int]::TryParse($rawPort, [ref]$n)) { return $null }
+    if ($n -le 0 -or $n -gt 65535) { return $null }
+    return @{
+        env  = $envTag
+        port = $n
+    }
+}
+
+function Is-LocalListening {
+    param([int]$Port)
+    try {
+        $found = netstat -ano -p tcp | findstr /r /c:":$Port .*LISTENING"
+        return -not [string]::IsNullOrWhiteSpace(($found -join ""))
+    } catch {
+        return $false
+    }
 }
 
 function Add-ListenPair {
@@ -67,7 +106,21 @@ if (Test-Path $portsFile) {
     foreach ($line in $lines) {
         $tokens = ($line -replace "[,;]", " ").Split(" ", [System.StringSplitOptions]::RemoveEmptyEntries)
         foreach ($token in $tokens) {
-            Add-PortToken -Token $token -Set $trackedSet
+            $rec = Parse-PortRecord -Token $token
+            if ($null -eq $rec) { continue }
+            $envTag = [string]$rec.env
+            $port = [int]$rec.port
+            if ($envTag -eq $selfEnv) {
+                [void]$trackedSet.Add($port)
+            } elseif ($envTag -eq "legacy") {
+                if (Is-LocalListening -Port $port) {
+                    [void]$trackedSet.Add($port)
+                } else {
+                    [void]$trackedForeign.Add(("{0}:{1}" -f $envTag, $port))
+                }
+            } else {
+                [void]$trackedForeign.Add(("{0}:{1}" -f $envTag, $port))
+            }
         }
     }
 }
@@ -76,7 +129,9 @@ $envPorts = [string]$env:TINDA_ACTIVE_PORTS
 if (-not [string]::IsNullOrWhiteSpace($envPorts)) {
     $tokens = ($envPorts -replace "[,;]", " ").Split(" ", [System.StringSplitOptions]::RemoveEmptyEntries)
     foreach ($token in $tokens) {
-        Add-PortToken -Token $token -Set $trackedSet
+        $rec = Parse-PortRecord -Token $token
+        if ($null -eq $rec) { continue }
+        [void]$trackedSet.Add([int]$rec.port)
     }
 }
 
@@ -113,6 +168,13 @@ if ($listening.Count -eq 0) {
         $pidText = (($listenPids[$p].ToArray() | Sort-Object | ForEach-Object { "$_" }) -join " ")
         Write-Output "[listen] port $p - pids $pidText"
     }
+}
+
+$trackedForeignArr = $trackedForeign.ToArray() | Sort-Object
+if ($trackedForeignArr.Count -eq 0) {
+    Write-Output "[status] tracked-foreign: none"
+} else {
+    Write-Output ("[status] tracked-foreign: " + (($trackedForeignArr | ForEach-Object { "$_" }) -join " "))
 }
 
 $orphan = @()

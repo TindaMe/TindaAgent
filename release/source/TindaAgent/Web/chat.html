@@ -121,6 +121,11 @@
       box-shadow: 0 2px 10px rgba(255,110,180,0.08);
       white-space: nowrap;
     }
+    .status-sep {
+      opacity: 0.45;
+      font-weight: 600;
+      margin: 0 2px;
+    }
     .status-dot {
       width: 8px;
       height: 8px;
@@ -128,11 +133,6 @@
       background: #22c55e;
       box-shadow: 0 0 0 3px rgba(34,197,94,0.18);
       animation: statusPulse 2.1s ease-in-out infinite;
-    }
-    .status-dot.offline {
-      background: #ef4444;
-      box-shadow: 0 0 0 3px rgba(239,68,68,0.18);
-      animation: none;
     }
     @keyframes statusPulse {
       0%, 100% { transform: scale(1); box-shadow: 0 0 0 3px rgba(34,197,94,0.18); }
@@ -215,56 +215,9 @@
       gap: 10px;
       flex-shrink: 0;
     }
-    .header-user-switch {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      min-width: 0;
-      flex-shrink: 1;
-    }
-    .header-user-switch select {
-      width: 188px;
-      max-width: 26vw;
+    .account-btn {
+      width: 30px;
       height: 30px;
-      border-radius: 999px;
-      border: 1.5px solid var(--border);
-      background: #fff;
-      color: var(--text-dim);
-      padding: 0 10px;
-      font-family: inherit;
-      font-size: 12px;
-      line-height: 1;
-      outline: none;
-    }
-    .header-user-switch select:focus {
-      border-color: var(--accent-2);
-      box-shadow: 0 0 0 3px rgba(255,110,180,0.12);
-    }
-    .header-user-switch select:disabled {
-      opacity: 0.6;
-    }
-    .header-user-switch button {
-      height: 30px;
-      border-radius: 999px;
-      border: 1.5px solid var(--border);
-      background: #fff;
-      color: var(--text-dim);
-      padding: 0 10px;
-      font-family: inherit;
-      font-size: 11px;
-      font-weight: 700;
-      cursor: pointer;
-      transition: border-color 0.16s ease, color 0.16s ease, background 0.16s ease;
-      white-space: nowrap;
-    }
-    .header-user-switch button:hover:not(:disabled) {
-      border-color: var(--accent-2);
-      color: var(--accent-deep);
-      background: var(--surface-2);
-    }
-    .header-user-switch button:disabled {
-      opacity: 0.58;
-      cursor: not-allowed;
     }
 
     .header-decos {
@@ -1477,8 +1430,7 @@
       .header-decos { display: none; }
       .btn-sep { display: none; }
       header { grid-template-columns: 1fr auto; }
-      .header-center { display: none; }
-      .header-user-switch { display: none; }
+      .header-center { display: block; }
       .tinda-toast { bottom: 100px; }
     }
 
@@ -1734,7 +1686,7 @@
   <div class="brand">
     <div class="brand-logo" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"></circle><path d="M12 2.8v4.2M12 17v4.2M2.8 12h4.2M17 12h4.2M5.3 5.3l3 3M15.7 15.7l3 3M18.7 5.3l-3 3M8.3 15.7l-3 3"></path></svg></div>
     <span class="brand-name">TindaAgent</span>
-    <button id="versionBadgeBtn" class="version-badge version-btn" onclick="showVersionTip()" title="版本信息">v1.7.13</button>
+    <button id="versionBadgeBtn" class="version-badge version-btn" onclick="showVersionTip()" title="版本信息">v1.7.14</button>
     <button id="accountBtn" class="icon-btn account-btn" onclick="showAccountPopup()" title="切换账户" aria-label="切换账户">
       <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 21a8 8 0 0 0-16 0"></path><circle cx="12" cy="8" r="3.2"></circle></svg>
     </button>
@@ -1742,7 +1694,7 @@
   <div class="header-center">
     <span id="statusPill" class="status-pill">
       <span class="status-dot"></span>
-      <span class="status-text">在线 · 新对话 · 0</span>
+      <span class="status-text">在线 <span class="status-sep">·</span> 新会话 <span class="status-sep">·</span> 0</span>
     </span>
   </div>
   <div class="header-right" id="headerRight">
@@ -1937,7 +1889,7 @@
   };
   const USER_ADMIN_PERM = 511;
   const AUTH_TOKEN_KEY = "ta_auth_token";
-  const VERSION_FALLBACK = "v1.7.13";
+  const VERSION_FALLBACK = "v1.7.14";
 
   function getAuthToken() {
     return String(localStorage.getItem(AUTH_TOKEN_KEY) || "").trim();
@@ -2040,13 +1992,16 @@
 
   function renderHeaderStatus() {
     const onlineText = gatewayOnline ? "在线" : "离线";
-    const sessionText = String(activeSessionTitle || "无会话").trim() || "无会话";
+    const sessionText = String(activeSessionTitle || "新会话").trim() || "新会话";
     const usageText = String(normalizeStatusCount(statusContextUsageLength));
     if (statusTextEl) {
-      statusTextEl.textContent = `${onlineText} · ${sessionText} · ${usageText}`;
+      statusTextEl.innerHTML = `${escapeHtml(onlineText)} <span class="status-sep">·</span> ${escapeHtml(sessionText)} <span class="status-sep">·</span> ${escapeHtml(usageText)}`;
     }
     if (statusDotEl) {
-      statusDotEl.classList.toggle("offline", !gatewayOnline);
+      statusDotEl.style.background = gatewayOnline ? "#22c55e" : "#ef4444";
+      statusDotEl.style.boxShadow = gatewayOnline
+        ? "0 0 0 3px rgba(34,197,94,0.18)"
+        : "0 0 0 3px rgba(239,68,68,0.18)";
     }
   }
 

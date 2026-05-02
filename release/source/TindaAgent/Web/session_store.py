@@ -18,7 +18,7 @@ class SessionStoreError(ValueError):
 
 
 ROLE_SET = {"user", "assistant", "system"}
-ENTRY_TYPES = {"chat", "notice", "tool_marker", "terminal", "attachment", "terminal_confirm", "terminal_exec"}
+ENTRY_TYPES = {"chat", "notice", "tool_marker", "terminal"}
 TERMINAL_KINDS = {"", "cmd", "out", "sep"}
 TERMINAL_CLASSES = {"", "err", "info", "dim"}
 MAX_MSG_CHARS = 64000
@@ -51,7 +51,6 @@ class SessionMeta:
     reset_anchor_msg_id: str = ""
     summary_anchor_msg_id: str = ""
     latest_summary_message_id: str = ""
-    max_context_tokens: int = 16000
 
 
 class SessionStore:
@@ -69,13 +68,6 @@ class SessionStore:
 
         self._lock = threading.RLock()
         self._session_locks: dict[str, threading.Lock] = {}
-        self._sessions_cache: dict[str, dict] | None = None
-        self._sessions_dirty = False
-        self._meta_write_count = 0
-        self._META_FLUSH_EVERY = 8
-        self._msg_cache: dict[str, list[dict]] = {}
-        self._msg_cache_order: list[str] = []
-        self._MSG_CACHE_MAX = 50
 
         if not self.sessions_file.exists():
             self._write_sessions({"sessions": []})
@@ -114,15 +106,9 @@ class SessionStore:
             return lock
 
     def _read_sessions(self) -> dict[str, Any]:
-        if self._sessions_cache is not None:
-            return {"sessions": list(self._sessions_cache.values())}
         try:
             data = json.loads(self.sessions_file.read_text(encoding="utf-8"))
             if isinstance(data, dict) and isinstance(data.get("sessions"), list):
-                cache: dict[str, dict] = {}
-                for it in data["sessions"]:
-                    cache[str(it.get("id", ""))] = it
-                self._sessions_cache = cache
                 return data
         except Exception:
             pass
@@ -130,10 +116,6 @@ class SessionStore:
             try:
                 data = json.loads(self.legacy_sessions_file.read_text(encoding="utf-8"))
                 if isinstance(data, dict) and isinstance(data.get("sessions"), list):
-                    cache: dict[str, dict] = {}
-                    for it in data["sessions"]:
-                        cache[str(it.get("id", ""))] = it
-                    self._sessions_cache = cache
                     audit_event(
                         op_type="SYSTEM_READ",
                         subsystem="storage_migration",
@@ -145,32 +127,12 @@ class SessionStore:
                     return data
             except Exception:
                 pass
-        self._sessions_cache = {}
         return {"sessions": []}
 
     def _write_sessions(self, payload: dict[str, Any]) -> None:
-        self._sessions_dirty = False
-        self._meta_write_count = 0
         temp = self.sessions_file.with_suffix(".json.tmp")
         temp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         temp.replace(self.sessions_file)
-        # sync cache
-        cache: dict[str, dict] = {}
-        for it in payload.get("sessions", []):
-            cache[str(it.get("id", ""))] = it
-        self._sessions_cache = cache
-
-    def _maybe_flush_sessions(self) -> None:
-        self._meta_write_count += 1
-        if self._meta_write_count >= self._META_FLUSH_EVERY:
-            self._sessions_dirty = True
-        if self._sessions_dirty and self._sessions_cache is not None:
-            with self._lock:
-                if self._sessions_dirty and self._sessions_cache is not None:
-                    payload = {"sessions": sorted(
-                        list(self._sessions_cache.values()),
-                        key=lambda x: str(x.get("updated_at", "")), reverse=True)}
-                    self._write_sessions(payload)
 
     def _messages_path(self, session_id: str) -> Path:
         sid = _safe_session_id(session_id)
@@ -178,24 +140,10 @@ class SessionStore:
             raise SessionStoreError("session_id 非法")
         return self.messages_dir / f"{sid}.jsonl"
 
-    def _touch_msg_cache(self, sid: str) -> None:
-        with self._lock:
-            if sid in self._msg_cache_order:
-                self._msg_cache_order.remove(sid)
-            self._msg_cache_order.append(sid)
-            while len(self._msg_cache_order) > self._MSG_CACHE_MAX:
-                evicted = self._msg_cache_order.pop(0)
-                self._msg_cache.pop(evicted, None)
-
     def _load_messages(self, session_id: str) -> list[dict[str, Any]]:
-        sid = _safe_session_id(session_id)
-        # 热缓存命中
-        cached = self._msg_cache.get(sid)
-        if cached is not None:
-            self._touch_msg_cache(sid)
-            return list(cached)
-        path = self._messages_path(sid)
+        path = self._messages_path(session_id)
         legacy_path = None
+        sid = _safe_session_id(session_id)
         if self.legacy_messages_dir is not None and sid:
             legacy_path = self.legacy_messages_dir / f"{sid}.jsonl"
         if (not path.exists()) and legacy_path is not None and legacy_path.exists():
@@ -221,8 +169,6 @@ class SessionStore:
                 continue
             if isinstance(item, dict):
                 rows.append(item)
-        self._msg_cache[sid] = list(rows)
-        self._touch_msg_cache(sid)
         return rows
 
     def _write_messages(self, session_id: str, rows: list[dict[str, Any]]) -> None:
@@ -232,10 +178,6 @@ class SessionStore:
         temp = path.with_suffix(".jsonl.tmp")
         temp.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
         temp.replace(path)
-        sid = _safe_session_id(session_id)
-        if sid:
-            self._msg_cache[sid] = list(rows)
-            self._touch_msg_cache(sid)
 
     def _touch_session_meta(
         self,
@@ -246,29 +188,38 @@ class SessionStore:
         summary_anchor_msg_id: str | None = None,
         latest_summary_message_id: str | None = None,
         message_count: int | None = None,
-        max_context_tokens: int | None = None,
     ) -> dict[str, Any]:
         sid = _safe_session_id(session_id)
         if not sid:
             raise SessionStoreError("session_id 非法")
 
+        payload = self._read_sessions()
+        sessions = payload.get("sessions", [])
         now = _now_iso()
-        cache = self._sessions_cache if self._sessions_cache is not None else {}
-        if sid in cache:
-            row = cache[sid]
-        else:
-            row = {
-                "id": sid, "title": "新对话", "created_at": now,
-                "updated_at": now, "message_count": 0,
-                "reset_anchor_msg_id": "", "summary_anchor_msg_id": "",
-                "latest_summary_message_id": "", "max_context_tokens": 16000,
-            }
-            cache[sid] = row
+        idx = -1
+        for i, it in enumerate(sessions):
+            if str(it.get("id", "")) == sid:
+                idx = i
+                break
 
+        if idx < 0:
+            item = {
+                "id": sid,
+                "title": "新对话",
+                "created_at": now,
+                "updated_at": now,
+                "message_count": 0,
+                "reset_anchor_msg_id": "",
+                "summary_anchor_msg_id": "",
+                "latest_summary_message_id": "",
+            }
+            sessions.append(item)
+            idx = len(sessions) - 1
+
+        row = dict(sessions[idx])
         row.setdefault("reset_anchor_msg_id", "")
         row.setdefault("summary_anchor_msg_id", "")
         row.setdefault("latest_summary_message_id", "")
-        row.setdefault("max_context_tokens", 16000)
         row["updated_at"] = now
         if title is not None:
             t = str(title or "").strip().strip("\"'")
@@ -281,11 +232,11 @@ class SessionStore:
             row["latest_summary_message_id"] = str(latest_summary_message_id or "")
         if message_count is not None:
             row["message_count"] = max(0, int(message_count))
-        if max_context_tokens is not None:
-            row["max_context_tokens"] = max(100, min(10_000_000, int(max_context_tokens)))
+        sessions[idx] = row
 
-        self._sessions_cache = cache
-        self._maybe_flush_sessions()
+        sessions.sort(key=lambda x: str(x.get("updated_at", "")), reverse=True)
+        payload["sessions"] = sessions
+        self._write_sessions(payload)
         return row
 
     def create_session(self, session_id: str | None = None, title: str = "新对话") -> dict[str, Any]:
@@ -409,10 +360,9 @@ class SessionStore:
         terminal_class = str(raw.get("terminal_class", raw.get("class", ""))).strip().lower()
         if terminal_class not in TERMINAL_CLASSES:
             terminal_class = ""
-        turn_id = re.sub(r"[^A-Za-z0-9._:-]+", "_", str(raw.get("turn_id", "") or "").strip())[:80]
         is_summary = bool(raw.get("is_summary", False))
         created_at = str(raw.get("created_at", "")).strip() or _now_iso()
-        out = {
+        return {
             "id": msg_id,
             "role": role,
             "content": _truncate_text(content, MAX_MSG_CHARS),
@@ -422,9 +372,6 @@ class SessionStore:
             "is_summary": is_summary,
             "created_at": created_at,
         }
-        if turn_id:
-            out["turn_id"] = turn_id
-        return out
 
     def append_messages(self, session_id: str, messages: list[dict[str, Any]]) -> dict[str, Any]:
         sid = _safe_session_id(session_id)
@@ -433,33 +380,36 @@ class SessionStore:
         lock = self._get_session_lock(sid)
         with lock:
             self.ensure_session(sid)
+            old = self._load_messages(sid)
             additions: list[dict[str, Any]] = []
             for item in messages:
                 n = self._normalize_message(item)
                 if n is not None:
                     additions.append(n)
             if not additions:
-                return {"session_id": sid, "added": 0}
-
-            # 增量追加：只写新行，不重写整个文件
-            path = self._messages_path(sid)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            lines = [json.dumps(item, ensure_ascii=False) for item in additions]
-            with path.open("a", encoding="utf-8") as fp:
-                fp.write("\n".join(lines) + "\n")
-            # 同步到热缓存
-            cached = self._msg_cache.get(sid)
-            if cached is not None:
-                cached.extend(additions)
-                self._touch_msg_cache(sid)
-            else:
-                self._load_messages(sid)
-
-            # 只从缓存取计数，避免全量读取
-            meta = self._sessions_cache.get(sid) if self._sessions_cache else None
-            new_count = max(0, int(meta.get("message_count", 0) if meta else 0)) + len(additions)
-            self._touch_session_meta(sid, message_count=new_count)
-            return {"session_id": sid, "added": len(additions), "message_count": new_count}
+                audit_event(
+                    op_type="PUBLIC_WRITE",
+                    subsystem="session",
+                    func="SessionStore.append_messages",
+                    file_path=_THIS_FILE,
+                    content=f"append_messages_skipped session_id={sid}",
+                    extra={"added": 0, "message_count": len(old), "session_id": sid},
+                )
+                return {"session_id": sid, "added": 0, "message_count": len(old)}
+            merged = old + additions
+            merged.sort(key=lambda x: str(x.get("created_at", "")))
+            self._write_messages(sid, merged)
+            self._touch_session_meta(sid, message_count=len(merged))
+            self._render_exports_for_session(sid)
+            audit_event(
+                op_type="PUBLIC_WRITE",
+                subsystem="session",
+                func="SessionStore.append_messages",
+                file_path=_THIS_FILE,
+                content=f"append_messages_done session_id={sid}",
+                extra={"added": len(additions), "message_count": len(merged), "session_id": sid},
+            )
+            return {"session_id": sid, "added": len(additions), "message_count": len(merged)}
 
     def set_session_title(self, session_id: str, title: str) -> dict[str, Any]:
         sid = _safe_session_id(session_id)
@@ -511,15 +461,6 @@ class SessionStore:
                 "reset_anchor_msg_id": str(meta.get("reset_anchor_msg_id", "") or ""),
                 "message_count": len(rows),
             }
-
-    def set_session_config(self, session_id: str, *, max_context_tokens: int | None = None) -> dict[str, Any]:
-        sid = _safe_session_id(session_id)
-        if not sid:
-            raise SessionStoreError("session_id 非法")
-        with self._get_session_lock(sid):
-            self.ensure_session(sid)
-            meta = self._touch_session_meta(sid, max_context_tokens=max_context_tokens)
-            return {"session_id": sid, "max_context_tokens": int(meta.get("max_context_tokens", 16000))}
 
     def load_messages(self, session_id: str) -> list[dict[str, Any]]:
         sid = _safe_session_id(session_id)
@@ -582,27 +523,13 @@ class SessionStore:
 
     def maybe_first_round_messages(self, session_id: str) -> tuple[str, str] | None:
         rows = self._load_messages(session_id)
-        if not rows:
+        user = [x for x in rows if x.get("role") == "user" and x.get("entry_type") == "chat"]
+        assistant = [x for x in rows if x.get("role") == "assistant" and x.get("entry_type") == "chat"]
+        if len(user) < 1 or len(assistant) < 1:
             return None
-        pending_user = ""
-        first_user = ""
-        for item in rows:
-            if str(item.get("entry_type", "")) != "chat":
-                continue
-            role = str(item.get("role", ""))
-            content = str(item.get("content", "")).strip()
-            if not content:
-                continue
-            if role == "user":
-                if not first_user:
-                    first_user = content
-                pending_user = content
-                continue
-            if role == "assistant" and pending_user:
-                return pending_user, content
-        # 仅有用户消息时也给标题生成留兜底输入（例如首轮是命令或工具链路异常）。
-        if first_user:
-            return first_user, ""
+        # 只在 exactly 1+1 初次命中时触发，避免后续反复改标题
+        if len(user) == 1 and len(assistant) == 1:
+            return str(user[0].get("content", "")), str(assistant[0].get("content", ""))
         return None
 
     def compress_context(self, session_id: str, summary_text: str) -> dict[str, Any]:

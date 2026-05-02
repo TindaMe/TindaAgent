@@ -21,6 +21,14 @@
 .vscode/
 .trae/
 
+# Agent spec files (local only, not for source repo)
+**/STANDARD.md
+**/CLAUDE.md
+**/CODEX.md
+**/OPENCODE.md
+**/OPENCLAW.md
+**/LOCALCHANGE.md
+
 # backups and sensitive archives
 Tindaagent_old_backup_20260426/
 *_backup_*/

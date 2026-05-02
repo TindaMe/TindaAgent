@@ -6,6 +6,7 @@ import os
 import re
 import socket
 import subprocess
+import threading
 from pathlib import Path
 
 import uvicorn
@@ -138,13 +139,20 @@ def _is_port_in_use_on_windows_side(port: int) -> bool:
 def _is_port_in_use_on_wsl_side(port: int) -> bool:
     if port <= 0 or port > 65535:
         return False
-    # Query WSL listen state from Windows side using shared tracking file.
-    # WSL side writes selected ports to .tinda_ports.list, which is visible from Windows.
+    # Query WSL listen state from Windows side using tracked-port records.
+    # When records are env-scoped, only WSL/Linux records are considered cross-env busy.
     try:
-        tracked = _load_tracked_ports()
+        records = _load_tracked_port_records()
     except Exception:
-        tracked = []
-    return int(port) in set(int(x) for x in tracked)
+        records = []
+    target = int(port)
+    for env_tag, p in records:
+        if int(p) != target:
+            continue
+        tag = _normalize_env_tag(env_tag)
+        if tag in {"legacy", "wsl", "linux"}:
+            return True
+    return False
 
 
 def _is_port_in_use_cross_env(port: int) -> bool:
@@ -200,8 +208,83 @@ def _is_wsl() -> bool:
         return False
 
 
-def _parse_ports_text(text: str) -> list[int]:
-    out: list[int] = []
+def _current_env_tag() -> str:
+    if _is_windows():
+        return "windows"
+    if _is_wsl():
+        return "wsl"
+    return "linux"
+
+
+def _normalize_env_tag(raw: str) -> str:
+    tag = str(raw or "").strip().lower()
+    if tag in {"", "legacy"}:
+        return "legacy"
+    if tag in {"win", "windows", "nt"}:
+        return "windows"
+    if tag in {"wsl"}:
+        return "wsl"
+    if tag in {"linux", "gnu/linux"}:
+        return "linux"
+    return tag
+
+
+def _get_wsl_ip() -> str:
+    try:
+        cp = subprocess.run(
+            ["ip", "-4", "route", "show", "default"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        if cp.returncode == 0 and cp.stdout.strip():
+            m = re.search(r"dev\s+(\S+)", cp.stdout)
+            if m:
+                iface = m.group(1)
+                cp2 = subprocess.run(
+                    ["ip", "-4", "-o", "addr", "show", iface],
+                    capture_output=True,
+                    text=True,
+                    timeout=3,
+                )
+                if cp2.returncode == 0:
+                    m2 = re.search(r"inet\s+([0-9.]+)", cp2.stdout)
+                    if m2:
+                        return m2.group(1)
+    except Exception:
+        pass
+    try:
+        cp = subprocess.run(
+            ["ip", "-4", "-o", "addr", "show", "eth0"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        if cp.returncode == 0:
+            m = re.search(r"inet\s+([0-9.]+)", cp.stdout)
+            if m:
+                return m.group(1)
+    except Exception:
+        pass
+    try:
+        cp = subprocess.run(
+            ["hostname", "-I"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        if cp.returncode == 0:
+            for token in (cp.stdout or "").strip().split():
+                t = token.strip()
+                if t and not t.startswith("127.") and not t.startswith("::1"):
+                    return t
+    except Exception:
+        pass
+    return ""
+
+
+def _parse_port_records_text(text: str, *, default_env: str = "legacy") -> list[tuple[str, int]]:
+    out: list[tuple[str, int]] = []
     if not text:
         return out
     normalized = text.replace(",", " ").replace(";", " ").replace("\n", " ").replace("\r", " ")
@@ -209,42 +292,110 @@ def _parse_ports_text(text: str) -> list[int]:
         t = token.strip()
         if not t or t == "\"\"":
             continue
-        if not t.isdigit():
+        env_tag = default_env
+        raw_port = t
+        if ":" in t:
+            head, tail = t.split(":", 1)
+            if head and tail:
+                env_tag = _normalize_env_tag(head)
+                raw_port = tail
+        if not raw_port.isdigit():
             continue
-        p = int(t)
+        p = int(raw_port)
         if p <= 0 or p > 65535:
             continue
+        item = (_normalize_env_tag(env_tag), p)
+        if item not in out:
+            out.append(item)
+    return out
+
+
+def _parse_ports_text(text: str) -> list[int]:
+    out: list[int] = []
+    for _, p in _parse_port_records_text(text, default_env="legacy"):
         if p not in out:
             out.append(p)
     return out
 
 
-def _load_tracked_ports(file_path: Path | None = None, env_value: str | None = None) -> list[int]:
+def _load_tracked_port_records(
+    file_path: Path | None = None,
+    env_value: str | None = None,
+    env_tag: str | None = None,
+) -> list[tuple[str, int]]:
     fp = file_path or _ports_file_path()
-    ports: list[int] = []
+    current_env = _normalize_env_tag(env_tag or _current_env_tag())
+    rows: list[tuple[str, int]] = []
     if fp.exists():
         try:
-            ports.extend(_parse_ports_text(fp.read_text(encoding="utf-8", errors="ignore")))
+            rows.extend(_parse_port_records_text(fp.read_text(encoding="utf-8", errors="ignore"), default_env="legacy"))
         except Exception:
             pass
     if env_value is None:
         env_value = str(os.environ.get(_PORTS_ENV_VAR, ""))
-    ports.extend(_parse_ports_text(str(env_value)))
-    dedup: list[int] = []
-    for p in ports:
-        if p not in dedup:
-            dedup.append(p)
+    rows.extend(_parse_port_records_text(str(env_value), default_env=current_env))
+    dedup: list[tuple[str, int]] = []
+    seen: set[tuple[str, int]] = set()
+    for env_key, p in rows:
+        key = (_normalize_env_tag(env_key), int(p))
+        if key in seen:
+            continue
+        seen.add(key)
+        dedup.append(key)
     return dedup
 
 
-def _write_tracked_ports_file(ports: list[int], file_path: Path | None = None) -> None:
+def _load_tracked_ports(
+    file_path: Path | None = None,
+    env_value: str | None = None,
+    *,
+    env_tag: str | None = None,
+    include_foreign: bool = True,
+    include_legacy: bool = True,
+) -> list[int]:
+    fp = file_path or _ports_file_path()
+    current_env = _normalize_env_tag(env_tag or _current_env_tag())
+    rows = _load_tracked_port_records(file_path=fp, env_value=env_value, env_tag=current_env)
+    ports: list[int] = []
+    for env_key, p in rows:
+        tag = _normalize_env_tag(env_key)
+        if tag == "legacy" and not include_legacy:
+            continue
+        if tag != "legacy" and not include_foreign and tag != current_env:
+            continue
+        if p not in ports:
+            ports.append(p)
+    return ports
+
+
+def _write_tracked_port_records_file(records: list[tuple[str, int]], file_path: Path | None = None) -> None:
     fp = file_path or _ports_file_path()
     fp.parent.mkdir(parents=True, exist_ok=True)
-    lines = [str(int(p)) for p in ports if int(p) > 0 and int(p) <= 65535]
+    lines: list[str] = []
+    for env_key, p in records:
+        port = int(p)
+        if port <= 0 or port > 65535:
+            continue
+        tag = _normalize_env_tag(env_key)
+        if tag == "legacy":
+            lines.append(str(port))
+        else:
+            lines.append(f"{tag}:{port}")
     tmp = fp.with_name(f"{fp.name}.tmp.{os.getpid()}")
     body = ("\n".join(lines) + "\n") if lines else ""
     tmp.write_text(body, encoding="utf-8")
     tmp.replace(fp)
+
+
+def _write_tracked_ports_file(ports: list[int], file_path: Path | None = None, *, env_tag: str | None = None) -> None:
+    tag = _normalize_env_tag(env_tag or _current_env_tag())
+    rows: list[tuple[str, int]] = []
+    for p in ports:
+        port = int(p)
+        if port <= 0 or port > 65535:
+            continue
+        rows.append((tag, port))
+    _write_tracked_port_records_file(rows, file_path=file_path)
 
 
 def _sync_windows_ports_env(value: str) -> None:
@@ -269,21 +420,37 @@ def _set_ports_env(ports: list[int], sync_windows_env: bool = True) -> None:
         _sync_windows_ports_env(value)
 
 
-def _update_tracked_port(port: int, add: bool, *, file_path: Path | None = None, sync_windows_env: bool = True) -> list[int]:
+def _update_tracked_port(
+    port: int,
+    add: bool,
+    *,
+    file_path: Path | None = None,
+    sync_windows_env: bool = True,
+    env_tag: str | None = None,
+) -> list[int]:
     # Keep tracking in run_web.py so all launchers (Windows .bat / Linux start.sh / direct python)
     # write the same source of truth, including real port after retry.
-    current = _load_tracked_ports(file_path=file_path)
-    merged = {int(p) for p in current if int(p) > 0 and int(p) <= 65535}
+    current_env = _normalize_env_tag(env_tag or _current_env_tag())
+    current = _load_tracked_port_records(file_path=file_path, env_tag=current_env)
+    merged = {
+        (_normalize_env_tag(env_key), int(p))
+        for env_key, p in current
+        if int(p) > 0 and int(p) <= 65535
+    }
     p = int(port)
     if p > 0 and p <= 65535:
+        scoped = (current_env, p)
         if add:
-            merged.add(p)
+            merged.add(scoped)
         else:
-            merged.discard(p)
-    ordered = sorted(merged)
-    _write_tracked_ports_file(ordered, file_path=file_path)
-    _set_ports_env(ordered, sync_windows_env=sync_windows_env)
-    return ordered
+            merged.discard(scoped)
+            # Backward-compat cleanup: remove legacy unscoped port when stopping.
+            merged.discard(("legacy", p))
+    ordered = sorted(merged, key=lambda x: (x[0], x[1]))
+    _write_tracked_port_records_file(ordered, file_path=file_path)
+    local_ports = sorted({int(pp) for env_key, pp in ordered if _normalize_env_tag(env_key) == current_env})
+    _set_ports_env(local_ports, sync_windows_env=sync_windows_env)
+    return local_ports
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="TindaAgent 启动器")
@@ -296,6 +463,7 @@ if __name__ == "__main__":
         help=f"端口占用时最多顺延重试次数（每次 +1，默认 {_DEFAULT_PORT_RETRIES}）",
     )
     parser.add_argument("--reload", action="store_true", help="启用热重载（默认关闭）")
+    parser.add_argument("--no-browser", action="store_true", help="禁用自动打开浏览器（默认会自动打开）")
     args = parser.parse_args()
 
     app_dir = _load_selected_app_dir()
@@ -303,7 +471,25 @@ if __name__ == "__main__":
     selected_port, offset = _pick_port_with_retry(args.host, int(args.port), int(args.port_retries))
     if offset > 0:
         print(f"[start] 端口 {args.port} 已占用，自动切换到 {selected_port}（+{offset}）")
-    print(f"[start] 服务地址: http://{_to_local_visit_host(args.host)}:{selected_port}")
+
+    visit_host = _to_local_visit_host(args.host)
+
+    if _is_wsl():
+        wsl_ip = _get_wsl_ip()
+        if wsl_ip:
+            visit_url = f"http://{wsl_ip}:{selected_port}"
+            print(f"[start] 服务地址: {visit_url}")
+            if wsl_ip != visit_host:
+                print(f"[start] 备用: http://{visit_host}:{selected_port} (若 WSL localhost 转发生效)")
+        else:
+            visit_url = f"http://{visit_host}:{selected_port}"
+            print(f"[start] 服务地址: {visit_url}")
+    else:
+        visit_url = f"http://{visit_host}:{selected_port}"
+        print(f"[start] 服务地址: {visit_url}")
+
+    if str(args.host).strip() in {"0.0.0.0", "::"}:
+        print("[start] 提示: 0.0.0.0 仅用于监听，浏览器请访问上面的服务地址")
 
     uvicorn_kw = {"host": args.host, "port": selected_port, "reload": bool(args.reload)}
     if app_dir is not None:
@@ -317,6 +503,60 @@ if __name__ == "__main__":
         tracking_ok = True
     except Exception as exc:
         print(f"[start] 端口追踪写入失败: {exc}")
+
+    if not args.no_browser:
+        def _open_browser(url: str, local_url: str) -> None:
+            import time as _time
+            _time.sleep(3.0)
+
+            local_ok = False
+            for _ in range(30):
+                try:
+                    import urllib.request as _ur
+                    req = _ur.Request(local_url, method="GET")
+                    with _ur.urlopen(req, timeout=2.0) as resp:
+                        if 200 <= int(getattr(resp, "status", 0) or 0) < 500:
+                            local_ok = True
+                            break
+                except Exception:
+                    _time.sleep(0.5)
+
+            if not local_ok:
+                print("[start] 警告: WSL 内本地自检超时，服务可能尚未完全就绪")
+                return
+
+            print("[start] 本地自检通过，正在打开浏览器...")
+            try:
+                if _is_wsl():
+                    subprocess.run(
+                        ["cmd.exe", "/c", "start", "", url],
+                        check=False,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=5,
+                    )
+                elif os.name == "nt":
+                    os.startfile(url)
+                else:
+                    for opener in ("xdg-open", "sensible-browser", "firefox", "google-chrome"):
+                        r = subprocess.run(
+                            [opener, url],
+                            check=False,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            timeout=5,
+                        )
+                        if r.returncode == 0:
+                            break
+            except Exception:
+                pass
+
+        threading.Thread(
+            target=_open_browser,
+            args=(visit_url, f"http://{visit_host}:{selected_port}"),
+            daemon=True,
+            name="browser-opener",
+        ).start()
 
     try:
         uvicorn.run(app_import, **uvicorn_kw)

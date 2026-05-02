@@ -1,10 +1,9 @@
 import os
 import json
 import re
-import time
 from pathlib import Path
 from typing import Any, Iterator
-from openai import OpenAI, APIConnectionError, APITimeoutError, APIStatusError, RateLimitError
+from openai import OpenAI
 from dotenv import load_dotenv
 from TindaAgent.Tool import tool as tool_registry
 from TindaAgent.Process.Observability import audit_event
@@ -12,48 +11,6 @@ from TindaAgent.Process.Observability import audit_event
 _ENV_PATH = Path(__file__).resolve().parent.parent.parent / ".env"
 load_dotenv(dotenv_path=_ENV_PATH)
 _THIS_FILE = str(Path(__file__).resolve())
-_LLM_RETRYABLE_STATUS = {408, 409, 425, 429, 500, 502, 503, 504}
-
-
-def _is_retryable_llm_error(err: Exception) -> bool:
-    if isinstance(err, (APIConnectionError, APITimeoutError, RateLimitError)):
-        return True
-    if isinstance(err, APIStatusError):
-        try:
-            status = int(getattr(err, "status_code", 0) or 0)
-        except Exception:
-            status = 0
-        return status in _LLM_RETRYABLE_STATUS
-    return False
-
-
-def _format_llm_error(err: Exception) -> tuple[str, str]:
-    """
-    返回 (error_code, user_message)
-    """
-    if isinstance(err, APIConnectionError):
-        return "upstream_connection_error", "模型服务连接失败，请稍后重试。"
-    if isinstance(err, APITimeoutError):
-        return "upstream_timeout", "模型服务响应超时，请稍后重试。"
-    if isinstance(err, RateLimitError):
-        return "upstream_rate_limited", "模型服务限流，请稍后重试。"
-    if isinstance(err, APIStatusError):
-        try:
-            status = int(getattr(err, "status_code", 0) or 0)
-        except Exception:
-            status = 0
-        if status == 401:
-            return "upstream_auth_failed", "模型服务鉴权失败，请检查 API Key。"
-        if status == 403:
-            return "upstream_forbidden", "模型服务拒绝访问，请检查账号权限。"
-        if status == 404:
-            return "upstream_model_not_found", "模型配置不存在，请检查模型名称。"
-        if status == 429:
-            return "upstream_rate_limited", "模型服务限流，请稍后重试。"
-        if status in {500, 502, 503, 504}:
-            return "upstream_server_error", "模型服务暂时不可用，请稍后重试。"
-        return "upstream_http_error", f"模型服务返回异常状态码：{status}。"
-    return "llm_runtime_error", f"模型调用失败：{type(err).__name__}。"
 
 
 def _parse_args(raw: str | None) -> dict[str, Any]:
@@ -119,16 +76,6 @@ def _build_done(reply, working_msgs, base_len, steps, tool_trace) -> dict:
         "tool_steps": steps,
         "tool_trace": tool_trace,
     }
-
-
-def _trace_has_pending_confirmation(trace: list[dict]) -> bool:
-    for step in trace:
-        r = step.get("result")
-        if isinstance(r, dict):
-            inner = r.get("result")
-            if isinstance(inner, dict) and inner.get("pending_confirmation") is True:
-                return True
-    return False
 
 
 def _detect_dsml_tool_calls(content: str, *, prefix: str) -> list[dict]:
@@ -221,32 +168,14 @@ def _build_tool_limit_fallback(tool_trace: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def _require_user_last_message(messages: list[dict], *, func: str) -> None:
-    rows = messages if isinstance(messages, list) else []
-    count = len(rows)
-    if count <= 0:
-        audit_event(
-            "SYSTEM_EXECUTE",
-            "ai",
-            func,
-            _THIS_FILE,
-            "invalid_messages_empty",
-            extra={"ok": False, "reason": "empty_messages"},
-        )
-        raise ValueError("messages empty: last role must be user")
-
-    last = rows[-1] if isinstance(rows[-1], dict) else {}
-    role = str(last.get("role", "")).strip().lower()
-    if role != "user":
-        audit_event(
-            "SYSTEM_EXECUTE",
-            "ai",
-            func,
-            _THIS_FILE,
-            "invalid_messages_last_role",
-            extra={"ok": False, "reason": "last_role_not_user", "last_role": role, "messages_count": count},
-        )
-        raise ValueError(f"invalid messages: last role must be user, got '{role or 'unknown'}'")
+def _detect_fake_tool_claim(text: str) -> bool:
+    """检测模型是否在文本中伪造了工具调用描述。轻量启发式，无海量正则。"""
+    if not text:
+        return False
+    lower = text.lower()
+    claims = ("调用工具", "执行成功", "全部通过", "全部成功", "所有工具", "工具调用完成",
+              "tool_calls", "当前可用工具", "可用工具列表")
+    return any(p in lower for p in claims)
 
 
 class LLMClient:
@@ -258,69 +187,23 @@ class LLMClient:
         self.api_key = api_key or os.getenv("DEEPSEEK_API_KEY")
         self.base_url = base_url or os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
         self.model = model or os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
-        self.max_retries = max(0, int(os.getenv("DEEPSEEK_MAX_RETRIES", "2")))
-        self.retry_backoff_sec = max(0.05, float(os.getenv("DEEPSEEK_RETRY_BACKOFF_SEC", "0.6")))
         if not self.api_key:
             raise ValueError("缺少 DEEPSEEK_API_KEY，请在 .env 中配置")
         self._client = OpenAI(api_key=self.api_key, base_url=self.base_url)
-
-    def _create_chat_completion_with_retry(self, *, func: str, stream: bool, **req):
-        max_attempts = 1 + int(self.max_retries)
-        attempt = 0
-        last_err: Exception | None = None
-        if "stream" not in req:
-            req["stream"] = bool(stream)
-        while attempt < max_attempts:
-            attempt += 1
-            try:
-                return self._client.chat.completions.create(**req)
-            except Exception as e:
-                last_err = e
-                retryable = _is_retryable_llm_error(e)
-                will_retry = retryable and attempt < max_attempts
-                audit_event(
-                    "SYSTEM_EXECUTE",
-                    "ai",
-                    func,
-                    _THIS_FILE,
-                    "llm_request_error",
-                    extra={
-                        "model": self.model,
-                        "stream": bool(stream),
-                        "attempt": attempt,
-                        "max_attempts": max_attempts,
-                        "retryable": bool(retryable),
-                        "will_retry": bool(will_retry),
-                        "error_type": type(e).__name__,
-                        "error": str(e),
-                    },
-                )
-                if not will_retry:
-                    break
-                sleep_s = self.retry_backoff_sec * (2 ** (attempt - 1))
-                time.sleep(sleep_s)
-        if last_err is not None:
-            raise last_err
-        raise RuntimeError("llm request failed without exception")
 
     def chat(self, messages: list[dict], temperature: float = 0.7) -> str:
         audit_event("SYSTEM_EXECUTE", "ai", "LLMClient.chat", _THIS_FILE, "llm_chat_start",
                      extra={"model": self.model, "messages_count": len(messages), "temperature": temperature})
         try:
-            resp = self._create_chat_completion_with_retry(
-                func="LLMClient.chat",
-                stream=False,
+            resp = self._client.chat.completions.create(
                 model=self.model, messages=messages, temperature=temperature)
             text = resp.choices[0].message.content
             audit_event("SYSTEM_EXECUTE", "ai", "LLMClient.chat", _THIS_FILE, "llm_chat_done",
                          extra={"model": self.model, "ok": True, "reply_len": len(text or "")})
             return text
         except Exception as e:
-            code, user_message = _format_llm_error(e)
-            audit_event("SYSTEM_EXECUTE", "ai", "LLMClient.chat", _THIS_FILE, f"llm_chat_failed code={code}",
-                         extra={"model": self.model, "ok": False, "error": str(e), "error_code": code})
-            setattr(e, "tinda_error_code", code)
-            setattr(e, "tinda_user_message", user_message)
+            audit_event("SYSTEM_EXECUTE", "ai", "LLMClient.chat", _THIS_FILE, f"llm_chat_failed err={e}",
+                         extra={"model": self.model, "ok": False, "error": str(e)})
             raise
 
     def _run_tools(self, tool_calls: list[dict], user_perm: int,
@@ -363,6 +246,35 @@ class LLMClient:
                          extra={"tool_name": name, "ok": True, "call_id": call_id})
         return steps
 
+    def _retry_with_tool_reminder(self, messages: list[dict], tools: list[dict],
+                                  user_perm: int, temperature: float,
+                                  round: int) -> dict:
+        """模型第一次返回假调用时，追加纠正提示后重试。"""
+        correction: dict = {
+            "role": "user",
+            "content": (
+                "[系统纠正] 你刚才以文本形式描述了工具调用执行情况，但并未实际通过 tool_calls API 发起调用。\n"
+                "请重新处理用户的请求：如果你认为需要执行工具，请使用 tool_calls 接口发起真实调用；"
+                "如果不需要任何工具，请直接给出有用回答，不要假装执行了工具。"
+            ),
+        }
+        retry_msgs = list(messages) + [correction]
+        resp = self._client.chat.completions.create(
+            model=self.model, messages=retry_msgs, temperature=temperature,
+            tools=tools, tool_choice="auto")
+        msg = resp.choices[0].message
+        rc = _concat_reasoning(getattr(msg, "reasoning_content", None))
+        calls = [_normalize_tool_call(
+            call_id=getattr(c, "id", None), call_type=getattr(c, "type", None),
+            function_name=getattr(c.function, "name", ""),
+            function_arguments=getattr(c.function, "arguments", None),
+            fallback_id=f"retry_{round}_{i}")
+            for i, c in enumerate(msg.tool_calls or [])]
+        if not calls:
+            calls = _detect_dsml_tool_calls(msg.content or "", prefix=f"dsml_retry_{round}")
+        return {"role": "assistant", "content": msg.content or "", "tool_calls": calls,
+                "reasoning_content": rc}
+
     def _process_tool_loop(self, messages: list[dict], user_perm: int, temperature: float,
                            max_tool_steps: int, stream: bool, base_len: int,
                            func: str) -> tuple[str, list[dict], int, list[dict]]:
@@ -371,37 +283,35 @@ class LLMClient:
         tools = tool_registry.build_agent_tool_schemas(user_perm)
         steps = 0
         trace = []
-        allow_tools = int(max_tool_steps) > 0
+        retried = False  # 每轮对话仅允许一次重试纠正
 
         while True:
-            force_finalize = allow_tools and steps >= max_tool_steps - 1 and len(trace) > 0
-            req: dict[str, Any] = {
-                "model": self.model,
-                "messages": msgs,
-                "temperature": temperature,
-            }
-            if allow_tools:
-                req["tools"] = tools
-                req["tool_choice"] = "none" if force_finalize else "auto"
-            resp = self._create_chat_completion_with_retry(
-                func=func,
-                stream=False,
-                **req,
-            )
+            force_finalize = steps >= max_tool_steps - 1 and len(trace) > 0
+            resp = self._client.chat.completions.create(
+                model=self.model, messages=msgs, temperature=temperature,
+                tools=tools, tool_choice="none" if force_finalize else "auto")
             msg = resp.choices[0].message
             rc = _concat_reasoning(getattr(msg, "reasoning_content", None))
             content = msg.content or ""
 
-            calls = []
-            if allow_tools:
-                calls = [_normalize_tool_call(
-                    call_id=getattr(c, "id", None), call_type=getattr(c, "type", None),
-                    function_name=getattr(c.function, "name", ""),
-                    function_arguments=getattr(c.function, "arguments", None),
-                    fallback_id=f"call_{steps}_{i}")
-                    for i, c in enumerate(msg.tool_calls or [])]
-                if not calls:
-                    calls = _detect_dsml_tool_calls(content, prefix=f"dsml_{steps}")
+            calls = [_normalize_tool_call(
+                call_id=getattr(c, "id", None), call_type=getattr(c, "type", None),
+                function_name=getattr(c.function, "name", ""),
+                function_arguments=getattr(c.function, "arguments", None),
+                fallback_id=f"call_{steps}_{i}")
+                for i, c in enumerate(msg.tool_calls or [])]
+            if not calls:
+                calls = _detect_dsml_tool_calls(content, prefix=f"dsml_{steps}")
+
+            # 没有实际 tool_call → 检查是否在伪造调用 → 重试一次
+            if not calls and _detect_fake_tool_claim(content) and not retried:
+                audit_event("SYSTEM_EXECUTE", "ai", func, _THIS_FILE, "fake_tool_claim_detected_retrying",
+                             extra={"model": self.model, "steps": steps})
+                retry = self._retry_with_tool_reminder(msgs, tools, user_perm, temperature, steps)
+                calls = retry["tool_calls"]
+                content = retry["content"]
+                rc = _concat_reasoning(retry.get("reasoning_content", ""))
+                retried = True
 
             if not calls:
                 msg_out = _attach_reasoning({"role": "assistant", "content": content}, rc)
@@ -412,11 +322,8 @@ class LLMClient:
                 {"role": "assistant", "content": content, "tool_calls": calls}, rc)
             msgs.append(msg_out)
             self._run_tools(calls, user_perm, msgs, trace, func)
+
             steps += 1
-
-            if _trace_has_pending_confirmation(trace):
-                return "", msgs[base_len:], steps, trace
-
             if steps >= max_tool_steps:
                 fallback = _build_tool_limit_fallback(trace)
                 msgs.append({"role": "assistant", "content": fallback})
@@ -425,7 +332,6 @@ class LLMClient:
     def chat_with_tools(self, messages: list[dict], user_perm: int,
                         temperature: float = 0.7, max_tool_steps: int = 6) -> dict:
         """支持工具调用的对话，自动纠正模型假调用。"""
-        _require_user_last_message(messages, func="LLMClient.chat_with_tools")
         base_len = len(messages)
         reply, delta, steps, trace = self._process_tool_loop(
             messages, user_perm, temperature, max_tool_steps, False, base_len, "LLMClient.chat_with_tools")
@@ -437,24 +343,22 @@ class LLMClient:
     def stream_chat_with_tools(self, messages: list[dict], user_perm: int,
                                temperature: float = 0.7, max_tool_steps: int = 6) -> Iterator[dict]:
         """流式对话（支持工具调用循环），自动纠正模型假调用。"""
-        _require_user_last_message(messages, func="LLMClient.stream_chat_with_tools")
         msgs = [m.copy() for m in messages]
         tools = tool_registry.build_agent_tool_schemas(user_perm)
         base_len = len(msgs)
         steps = 0
         trace = []
+        retried = False
         audit_event("SYSTEM_EXECUTE", "ai", "LLMClient.stream_chat_with_tools", _THIS_FILE,
                      "stream_start", extra={"model": self.model, "messages_count": len(messages),
                                             "user_perm": user_perm, "max_tool_steps": max_tool_steps})
 
         while True:
             force_finalize = steps >= max_tool_steps - 1 and len(trace) > 0
-            stream = self._create_chat_completion_with_retry(
-                func="LLMClient.stream_chat_with_tools",
-                stream=True,
+            stream = self._client.chat.completions.create(
                 model=self.model, messages=msgs, temperature=temperature,
                 tools=tools, tool_choice="none" if force_finalize else "auto",
-            )
+                stream=True)
             content_parts = []
             reasoning_parts = []
             tool_calls_map = {}
@@ -504,6 +408,23 @@ class LLMClient:
                 if not calls:
                     calls = _detect_dsml_tool_calls(content, prefix=f"dsml_{steps}")
 
+            # 流式场景：如果没有 tool_call，检查假调用并重试
+            if not calls and _detect_fake_tool_claim(content) and not retried:
+                # 流式模式下已发出去的 delta 不能撤回，追加纠正
+                correction = (
+                    "\n\n> [系统检测] 模型以文本描述了工具调用但未实际执行。正在重新处理…\n\n"
+                )
+                yield {"type": "delta", "content": correction}
+
+                retry = self._retry_with_tool_reminder(msgs, tools, user_perm, temperature, steps)
+                calls = retry["tool_calls"]
+                content = retry["content"]
+                rc = _concat_reasoning(retry.get("reasoning_content", ""))
+                retried = True
+                # 重试结果中如果有文本 delta，也发出去
+                if content:
+                    yield {"type": "delta", "content": content}
+
             if not calls:
                 msg_out = _attach_reasoning({"role": "assistant", "content": content}, rc)
                 msgs.append(msg_out)
@@ -522,14 +443,6 @@ class LLMClient:
                 yield {"type": "tool_step", "trace": step_trace}
 
             steps += 1
-
-            if _trace_has_pending_confirmation(trace):
-                audit_event("SYSTEM_EXECUTE", "ai", "LLMClient.stream_chat_with_tools", _THIS_FILE,
-                             "stream_pending_confirmation",
-                             extra={"model": self.model, "tool_steps": steps, "tool_trace_len": len(trace)})
-                yield {"type": "done", **(_build_done("", msgs, base_len, steps, trace))}
-                return
-
             if steps >= max_tool_steps:
                 fallback = _build_tool_limit_fallback(trace)
                 msgs.append({"role": "assistant", "content": fallback})
