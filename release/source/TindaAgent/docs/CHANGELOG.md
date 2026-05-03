@@ -24,6 +24,12 @@
 10. **CLI 设置持久化** — `~/.tinda/agent/cli-settings.json` 缓存模型和上次会话，支持 `/last` 恢复。
 11. **quick.sh / quick.bat / delete.sh / delete.bat** — 一键安装/卸载 `tinda` 系统命令。
 12. **pyproject.toml** — 新增 `[project.scripts]` 入口点，`pip install` 后直接可用 `tinda` 命令。
+13. **移除 call_backend_tool** — 所有工具直接暴露为 OpenAI native tool_calls，带类型化参数 schema，不再绕网关。
+14. **turn_id 全链路贯通** — /chat → pending → /terminal/confirm 统一携带 turn_id，前端同一轮回复合并到单个气泡，不再断裂。
+15. **tool marker `>_<` 保留** — done 事件不再覆盖 streamText，标记持久化到气泡中。
+16. **409 恢复路径** — /terminal/confirm 不再因 agent 淘汰返回 409，直接从 _terminal_pending 执行命令并重建上下文继续对话。
+17. **气泡不连续修复** — 确认回复追加到同 turnId，fallback 路径补上 turnId 参数。
+18. **多命令链全部放行** — && ; | || 不再拦截，一次 run_terminal 一次确认。
 
 ## v1.7.14 - 2026-05-02
 
