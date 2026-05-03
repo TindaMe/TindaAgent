@@ -2664,10 +2664,6 @@ async def terminal_confirm(req: TerminalConfirmRequest):
     tool_trace_raw = result.get("tool_trace", [])
     tool_trace = _sanitize_tool_trace_for_user(tool_trace_raw)
     tool_steps = int(result.get("tool_steps", 0))
-    tool_trace_raw = result.get("tool_trace", [])
-    tool_trace = _sanitize_tool_trace_for_user(tool_trace_raw)
-    tool_steps = int(result.get("tool_steps", 0))
-    reply = str(result.get("reply", ""))
 
     sanitized_reply = _sanitize_terminal_dump_reply(
         reply_text=reply,

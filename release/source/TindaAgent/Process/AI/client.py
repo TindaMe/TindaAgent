@@ -361,8 +361,8 @@ class LLMClient:
             # 所有工具均失败 → 不重试，直接返回错误让 LLM 解释
             if step_trace and all(_tool_failed(s) for s in step_trace):
                 errors = [_tool_error(s) for s in step_trace]
-                err_text = "；".join(e for e in errors if e) or "工具执行失败"
-                msgs.append({"role": "system", "content": f"All tool calls failed: {err_text}. Fix the parameters and retry. If you cannot fix them, explain the failure to the user in natural language and suggest alternatives. You MUST respond — silence is not acceptable."})
+                err_text = "; ".join(e for e in errors if e) or "tool execution failed"
+                msgs.append({"role": "system", "content": f"All tool calls failed: {err_text}. Fix the parameters and retry. If you cannot fix them, explain the failure to the user in natural language. You MUST respond."})
                 return err_text, msgs[base_len:], steps, trace
             if has_pending_confirmation:
                 pending_reply = content if str(content or "").strip() else "A terminal command requires your approval to proceed."
@@ -495,7 +495,8 @@ class LLMClient:
             steps += 1
             if step_trace and all(_tool_failed(s) for s in step_trace):
                 errors = [_tool_error(s) for s in step_trace]
-                err_text = "；".join(e for e in errors if e) or "工具执行失败"
+                err_text = "; ".join(e for e in errors if e) or "tool execution failed"
+                msgs.append({"role": "system", "content": f"All tool calls failed: {err_text}. Fix the parameters and retry. If you cannot fix them, explain the failure to the user in natural language. You MUST respond."})
                 yield {"type": "done", **(_build_done(err_text, msgs, base_len, steps, trace))}
                 return
             if has_pending_confirmation:

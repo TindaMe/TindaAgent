@@ -4895,8 +4895,8 @@
           }
         }
 
+        const doneTurnId = normalizeTurnId(donePayload?.turn_id || "");
         if (donePayload) {
-          const doneTurnId = normalizeTurnId(donePayload?.turn_id || "");
           // 以服务端最终回复为准，避免中途 delta 文本（含误注入工具明细）残留给用户
           if (typeof donePayload.reply === "string") {
             const doneReply = sanitizeAssistantDisplayText(String(donePayload.reply || ""));
