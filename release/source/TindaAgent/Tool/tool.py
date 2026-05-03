@@ -30,9 +30,6 @@ SYSTEM_TOOL: dict[str, dict[str, Any]] = {}
 # 备用工具注册表 {func_name: {"des": str, "perm": int, "func": function}}
 SPARE_TOOL: dict[str, dict[str, Any]] = {}
 
-AGENT_LIST_TOOLS_NAME = "list_available_tools"
-AGENT_CALL_TOOL_NAME = "call_backend_tool"
-
 MAX_TEXT_LEN = 8000
 DEFAULT_TIMEZONE = "Asia/Shanghai"
 MEMORY_MAX_ITEMS = 500
@@ -306,59 +303,55 @@ def list_tools(user_perm: int | None = None) -> dict[str, str]:
 
 
 def build_agent_tool_schemas(user_perm: int) -> list[dict[str, Any]]:
-    """
-    用处：构建供模型调用的工具 schema（OpenAI Chat Completions tools 格式）
-    """
-    tools = list_tools(user_perm)
-    tool_hint = ", ".join(sorted(tools.keys())) if tools else "无"
+    """Build OpenAI tool schemas — each tool exposed directly, params from signature."""
+    import inspect
 
-    schemas: list[dict[str, Any]] = [
-        {
+    tools = list_tools(user_perm)
+    schemas: list[dict[str, Any]] = []
+
+    for tool_name, tool_desc in sorted(tools.items()):
+        info = find_tool(tool_name)
+        properties: dict[str, Any] = {}
+        required: list[str] = []
+
+        if info:
+            has_var_positional = False
+            try:
+                sig = inspect.signature(info["func"])
+                for pname, param in sig.parameters.items():
+                    if pname.startswith("_") or pname in ("call_id", "command"):
+                        continue  # 内部参数/别名，不暴露给 LLM
+                    if param.kind == inspect.Parameter.VAR_POSITIONAL:
+                        has_var_positional = True
+                        continue
+                    if param.kind == inspect.Parameter.VAR_KEYWORD:
+                        continue
+                    ptype = "string"
+                    if param.annotation is not inspect.Parameter.empty:
+                        a = param.annotation
+                        if a is int: ptype = "integer"
+                        elif a is bool: ptype = "boolean"
+                    properties[pname] = {"type": ptype}
+                    if param.default is inspect.Parameter.empty:
+                        required.append(pname)
+                # 变长位置参数工具（如 echo）暴露 text 属性
+                if has_var_positional and not properties:
+                    properties["text"] = {"type": "string"}
+            except Exception:
+                pass
+
+        schema_params: dict[str, Any] = {"type": "object"}
+        if properties:
+            schema_params["properties"] = properties
+            schema_params["required"] = required
+        schemas.append({
             "type": "function",
             "function": {
-                "name": AGENT_LIST_TOOLS_NAME,
-                "description": "列出当前会话可调用的后端工具及用途。",
-                "parameters": {
-                    "type": "object",
-                    "properties": {},
-                    "additionalProperties": False,
-                },
+                "name": tool_name,
+                "description": tool_desc,
+                "parameters": schema_params,
             },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": AGENT_CALL_TOOL_NAME,
-                "description": (
-                    "调用一个后端工具。优先传字符串参数；短文本任务不必强制调用工具。"
-                    f"当前可用工具: {tool_hint}"
-                ),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "tool_name": {
-                            "type": "string",
-                            "description": "目标工具名称",
-                        },
-                        "args": {
-                            "type": "array",
-                            "description": "传给工具的位置参数列表（字符串）",
-                            "items": {"type": "string"},
-                            "default": [],
-                        },
-                        "kwargs": {
-                            "type": "object",
-                            "description": "传给工具的具名参数（值会按字符串处理）",
-                            "additionalProperties": {"type": "string"},
-                            "default": {},
-                        },
-                    },
-                    "required": ["tool_name"],
-                    "additionalProperties": False,
-                },
-            },
-        },
-    ]
+        })
     return schemas
 
 
@@ -370,122 +363,33 @@ def run_agent_tool(
     call_id: str | None = None,
 ) -> str:
     """
-    用处：执行模型可见的代理工具（统一入口，返回 JSON 字符串）
+    Execute a tool on behalf of the LLM agent. Returns JSON string.
+    agent_tool_name is the registered tool name. arguments are treated as kwargs.
     """
     payload = arguments if isinstance(arguments, dict) else {}
     call_id_text = str(call_id or "").strip()
-    audit_event(
-        op_type="TOOL_EXECUTE",
-        subsystem="tool",
-        func="run_agent_tool",
-        file_path=_THIS_FILE,
-        content=f"agent_tool_dispatch agent_tool={agent_tool_name}",
-        extra={
-            "agent_tool_name": str(agent_tool_name),
-            "user_perm": int(user_perm),
-            "has_arguments": isinstance(arguments, dict),
-            "call_id": call_id_text,
-        },
-    )
 
-    if agent_tool_name == AGENT_LIST_TOOLS_NAME:
-        audit_event(
-            op_type="TOOL_READ",
-            subsystem="tool",
-            func="run_agent_tool",
-            file_path=_THIS_FILE,
-            content="agent_list_tools",
-            extra={"user_perm": int(user_perm)},
-        )
-        out = {"ok": True, "tools": list_tools(user_perm)}
+    tool_name = str(agent_tool_name or "").strip()
+    if not find_tool(tool_name):
+        out = {"ok": False, "error": f"Unknown tool: {tool_name}"}
         if call_id_text:
             out["call_id"] = call_id_text
         return json.dumps(out, ensure_ascii=False)
 
-    # 兼容两种调用形态：
-    # 1) 标准封装：agent_tool_name=call_backend_tool，真实工具名在 payload.tool_name
-    # 2) 直接调用：agent_tool_name=echo/get_current_time/...，参数直接放在 payload
-    if agent_tool_name == AGENT_CALL_TOOL_NAME:
-        tool_name = str(payload.get("tool_name", "")).strip()
-        if not tool_name:
-            audit_event(
-                op_type="TOOL_EXECUTE",
-                subsystem="tool",
-                func="run_agent_tool",
-                file_path=_THIS_FILE,
-                content="agent_call_tool_missing_tool_name",
-                extra={"ok": False, "user_perm": int(user_perm)},
-            )
-            out = {"ok": False, "error": "tool_name is required"}
-            if call_id_text:
-                out["call_id"] = call_id_text
-            return json.dumps(out, ensure_ascii=False)
-    else:
-        tool_name = str(agent_tool_name or "").strip()
-        if not find_tool(tool_name):
-            audit_event(
-                op_type="TOOL_EXECUTE",
-                subsystem="tool",
-                func="run_agent_tool",
-                file_path=_THIS_FILE,
-                content=f"agent_tool_not_supported tool={agent_tool_name}",
-                extra={"ok": False, "user_perm": int(user_perm)},
-            )
-            out = {"ok": False, "error": f"Unsupported agent tool: {agent_tool_name}"}
-            if call_id_text:
-                out["call_id"] = call_id_text
-            return json.dumps(out, ensure_ascii=False)
+    # Extract positional args (for variadic functions like echo)
+    raw_args = payload.get("args")
+    call_args: list[str] = []
+    if isinstance(raw_args, list):
+        call_args = [str(x) for x in raw_args]
 
-    raw_args = payload.get("args", [])
-    if raw_args is None:
-        raw_args = []
-    if not isinstance(raw_args, list):
-        audit_event(
-            op_type="TOOL_EXECUTE",
-            subsystem="tool",
-            func="run_agent_tool",
-            file_path=_THIS_FILE,
-            content=f"agent_tool_invalid_args tool={tool_name}",
-            extra={"ok": False, "user_perm": int(user_perm)},
-        )
-        out = {"ok": False, "tool_name": tool_name, "error": "args 必须是数组"}
-        if call_id_text:
-            out["call_id"] = call_id_text
-        return json.dumps(out, ensure_ascii=False)
-    raw_kwargs = payload.get("kwargs", {})
-    if raw_kwargs is None:
-        raw_kwargs = {}
-    if not isinstance(raw_kwargs, dict):
-        audit_event(
-            op_type="TOOL_EXECUTE",
-            subsystem="tool",
-            func="run_agent_tool",
-            file_path=_THIS_FILE,
-            content=f"agent_tool_invalid_kwargs tool={tool_name}",
-            extra={"ok": False, "user_perm": int(user_perm)},
-        )
-        out = {"ok": False, "tool_name": tool_name, "error": "kwargs 必须是对象"}
-        if call_id_text:
-            out["call_id"] = call_id_text
-        return json.dumps(out, ensure_ascii=False)
-
-    call_args = [str(x) for x in raw_args]
+    # All other LLM arguments are kwargs — filter internal params
     call_kwargs: dict[str, str] = {}
-    for key, value in raw_kwargs.items():
+    for key, value in payload.items():
         clean_key = str(key).strip()
-        if not clean_key:
-            audit_event(
-                op_type="TOOL_EXECUTE",
-                subsystem="tool",
-                func="run_agent_tool",
-                file_path=_THIS_FILE,
-                content=f"agent_tool_empty_kwarg_key tool={tool_name}",
-                extra={"ok": False, "user_perm": int(user_perm)},
-            )
-            out = {"ok": False, "tool_name": tool_name, "error": "kwargs key cannot be empty"}
-            if call_id_text:
-                out["call_id"] = call_id_text
-            return json.dumps(out, ensure_ascii=False)
+        if not clean_key or clean_key.startswith("_"):
+            continue
+        if clean_key == "args":
+            continue  # already handled above
         call_kwargs[clean_key] = str(value)
 
     capture = io.StringIO()
@@ -588,11 +492,11 @@ def run_agent_tool(
     return json.dumps(payload, ensure_ascii=False, default=str)
 
 
-@tool(perm.PUBLIC_EXECUTE, "Print text lines to tool stdout", must=True)
-def echo(*content_list: str) -> None:
-    """
-    多次打印内容
-    """
+@tool(perm.PUBLIC_EXECUTE, "Print text to tool stdout (param: text)", must=True)
+def echo(text: str = "", *content_list: str) -> None:
+    """Print text to stdout."""
+    if text:
+        print(text)
     for content in content_list:
         print(content)
 

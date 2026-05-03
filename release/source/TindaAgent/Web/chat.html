@@ -4899,7 +4899,13 @@
           const doneTurnId = normalizeTurnId(donePayload?.turn_id || "");
           // 以服务端最终回复为准，避免中途 delta 文本（含误注入工具明细）残留给用户
           if (typeof donePayload.reply === "string") {
-            streamText = sanitizeAssistantDisplayText(String(donePayload.reply || ""));
+            const doneReply = sanitizeAssistantDisplayText(String(donePayload.reply || ""));
+            // 保留流式阶段注入的 >_< 标记，不覆盖
+            if (doneReply && !streamText.includes(doneReply)) {
+              streamText = streamText ? streamText + "\n\n" + doneReply : doneReply;
+            } else if (!streamText) {
+              streamText = doneReply;
+            }
             if (renderDelta && streamBot) {
               streamBot.bubble.dataset.rawMd = streamText;
               streamBot.bubble.innerHTML = renderMarkdown(streamText);
@@ -4941,7 +4947,7 @@
         } else if (typingRow) {
           clearTypingPlaceholder();
           if (!renderDelta) {
-            upsertAssistantTurnBubble(streamText || "（无回复）");
+            upsertAssistantTurnBubble(streamText || "（无回复）", { turnId: doneTurnId });
           }
         }
         return;

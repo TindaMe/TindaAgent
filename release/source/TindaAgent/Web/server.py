@@ -735,6 +735,7 @@ def _set_terminal_pending(session_id: str, items: list[dict] | None) -> None:
                 "approval": None if item.get("approval") is None else bool(item.get("approval")),
                 "status": str(item.get("status", "pending") or "pending"),
                 "created_at": str(item.get("created_at", "") or _now_iso()),
+                "turn_id": str(item.get("turn_id", "") or "").strip(),
             }
         )
     with _terminal_pending_lock:
@@ -2271,6 +2272,7 @@ async def chat(req: ChatRequest):
         return JSONResponse({"error": "session_id required"}, status_code=400)
 
     _store.ensure_session(sid)
+    turn_id = f"turn_{uuid.uuid4().hex[:12]}"
     pending_count = _pending_confirm_count(sid)
     if pending_count > 0:
         payload = _build_pending_required_payload(sid)
@@ -2278,7 +2280,7 @@ async def chat(req: ChatRequest):
     agent = _get_agent(sid)
     message = str(req.message or "").strip()
     if not message:
-        return JSONResponse({"reply": "", "tool_trace": [], "tool_steps": 0})
+        return JSONResponse({"reply": "", "tool_trace": [], "tool_steps": 0, "turn_id": turn_id})
 
     if message.startswith("/"):
         profile = _get_web_profile()
@@ -2333,6 +2335,8 @@ async def chat(req: ChatRequest):
     tool_steps = int(result.get("tool_steps", 0))
     reply = str(result.get("reply", ""))
     pending_items = _extract_pending_confirmation_items(tool_trace_raw)
+    for it in pending_items:
+        it["turn_id"] = turn_id
     _set_terminal_pending(sid, pending_items)
 
     sanitized_reply = _sanitize_terminal_dump_reply(
@@ -2371,6 +2375,7 @@ async def chat(req: ChatRequest):
             "reply": reply,
             "tool_trace": tool_trace,
             "tool_steps": tool_steps,
+            "turn_id": turn_id,
             "pending_confirmation": len(pending_items) > 0,
             "pending_confirm_count": len(pending_items),
             "pending": pending_items,
@@ -2388,11 +2393,12 @@ async def chat_stream(
     meta_time_iso: str | None = None,
     meta_time_text: str | None = None,
 ):
+    turn_id = f"turn_{uuid.uuid4().hex[:12]}"
     current = _require_login()
     if not _has_llm_perm(current):
         chunks = [
             _sse_event("error", {"message": "权限不足：当前账户不可调用 LLM 对话"}),
-            _sse_event("done", {"reply": "", "tool_trace": [], "tool_steps": 0}),
+            _sse_event("done", {"reply": "", "tool_trace": [], "tool_steps": 0, "turn_id": turn_id}),
         ]
         return HTMLResponse("".join(chunks), media_type="text/event-stream")
     sid = str(session_id or "").strip()
@@ -2516,8 +2522,11 @@ async def chat_stream(
                 "reply": final_reply,
                 "tool_trace": safe_tool_trace,
                 "tool_steps": safe_tool_steps,
+                "turn_id": turn_id,
             }
             pending_items = _extract_pending_confirmation_items(done_payload.get("tool_trace", []))
+            for it in pending_items:
+                it["turn_id"] = turn_id
             _set_terminal_pending(sid, pending_items)
             done_payload["pending_confirmation"] = len(pending_items) > 0
             done_payload["pending_confirm_count"] = len(pending_items)
@@ -2629,25 +2638,32 @@ async def terminal_confirm(req: TerminalConfirmRequest):
     action = "allow" if approval else "deny"
 
     agent = _get_agent(sid, refresh_context=False)
-    if not bool(getattr(agent, "has_pending_confirmation", lambda: False)()):
-        _clear_terminal_pending(sid)
-        return JSONResponse(
-            {
-                "ok": False,
-                "error": "no pending confirmation for this session",
-                "error_code": "no_pending_confirmation",
-                "pending_confirm_count": 0,
-                "pending": [],
-            },
-            status_code=409,
-        )
+    fresh = not bool(getattr(agent, "has_pending_confirmation", lambda: False)())
 
-    decision = {
-        "approval": approval,
-        "action": action,
-        "confirm_id": str(target.get("confirm_id", "") or target.get("call_id", "")),
-    }
-    result = agent.resume_with_confirmations([decision])
+    if fresh:
+        # Agent 被淘汰或 _held_messages 丢失时，直接执行命令并重建上下文继续
+        from TindaAgent.Tool.tool import run_terminal
+        import json as _json
+        cmd = str(target.get("cmd", "")).strip()
+        exec_result = run_terminal(cmd=cmd, _caller_perm=int(getattr(agent, "perm", 0)), _approval=approval)
+        rows = _store.get_context_messages(sid)
+        agent_rows, _ = _store_to_agent_messages(rows)
+        agent.replace_conversation(agent_rows)
+        agent.history.append({"role": "tool", "tool_call_id": f"tc_recover_{sid}",
+                              "content": _json.dumps(exec_result, ensure_ascii=False)})
+        result = agent._ensure_client().chat_with_tools(agent.history, user_perm=agent.perm, temperature=0.7)
+    else:
+        decision = {
+            "approval": approval,
+            "action": action,
+            "confirm_id": str(target.get("confirm_id", "") or target.get("call_id", "")),
+        }
+        result = agent.resume_with_confirmations([decision])
+
+    reply = str(result.get("reply", ""))
+    tool_trace_raw = result.get("tool_trace", [])
+    tool_trace = _sanitize_tool_trace_for_user(tool_trace_raw)
+    tool_steps = int(result.get("tool_steps", 0))
     tool_trace_raw = result.get("tool_trace", [])
     tool_trace = _sanitize_tool_trace_for_user(tool_trace_raw)
     tool_steps = int(result.get("tool_steps", 0))
@@ -2699,9 +2715,12 @@ async def terminal_confirm(req: TerminalConfirmRequest):
         dedup_next.append(row)
     _set_terminal_pending(sid, dedup_next)
 
+    # 回传原始 turn_id 以便前端合并气泡
+    confirm_turn_id = str(target.get("turn_id", "") or "").strip() or f"turn_{uuid.uuid4().hex[:12]}"
     return JSONResponse(
         {
             "ok": True,
+            "turn_id": confirm_turn_id,
             "session_id": sid,
             "approval": approval,
             "action": action,

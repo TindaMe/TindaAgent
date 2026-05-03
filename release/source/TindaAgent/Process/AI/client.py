@@ -107,35 +107,11 @@ def _detect_dsml_tool_calls(content: str, *, prefix: str) -> list[dict]:
         if not fn:
             continue
 
-        if fn == "call_backend_tool":
-            args = {"tool_name": params.get("tool_name", "")}
-            raw_args = params.get("args", "")
-            if raw_args:
-                try:
-                    parsed = json.loads(raw_args)
-                    if isinstance(parsed, list):
-                        args["args"] = parsed
-                except Exception:
-                    pass
-            raw_kwargs = params.get("kwargs", "")
-            if raw_kwargs:
-                try:
-                    parsed = json.loads(raw_kwargs)
-                    if isinstance(parsed, dict):
-                        args["kwargs"] = parsed
-                except Exception:
-                    pass
-            result.append({
-                "id": f"{prefix}_{idx}",
-                "type": "function",
-                "function": {"name": "call_backend_tool", "arguments": json.dumps(args, ensure_ascii=False)},
-            })
-        else:
-            result.append({
-                "id": f"{prefix}_{idx}",
-                "type": "function",
-                "function": {"name": fn, "arguments": json.dumps(params, ensure_ascii=False)},
-            })
+        result.append({
+            "id": f"{prefix}_{idx}",
+            "type": "function",
+            "function": {"name": fn, "arguments": json.dumps(params, ensure_ascii=False)},
+        })
     return result
 
 
@@ -386,7 +362,7 @@ class LLMClient:
             if step_trace and all(_tool_failed(s) for s in step_trace):
                 errors = [_tool_error(s) for s in step_trace]
                 err_text = "；".join(e for e in errors if e) or "工具执行失败"
-                msgs.append({"role": "system", "content": f"All tool calls in this round failed: {err_text}. Fix the parameters and retry."})
+                msgs.append({"role": "system", "content": f"All tool calls failed: {err_text}. Fix the parameters and retry. If you cannot fix them, explain the failure to the user in natural language and suggest alternatives. You MUST respond — silence is not acceptable."})
                 return err_text, msgs[base_len:], steps, trace
             if has_pending_confirmation:
                 pending_reply = content if str(content or "").strip() else "A terminal command requires your approval to proceed."
