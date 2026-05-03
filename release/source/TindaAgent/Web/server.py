@@ -1254,7 +1254,7 @@ def _save_chat_messages(
             {
                 "id": f"m_{uuid.uuid4().hex[:16]}",
                 "role": "assistant",
-                "content": "> --调用工具中--",
+                "content": "> >_<\n> --调用工具中--",
                 "entry_type": "tool_marker",
                 "created_at": _now_iso(),
                 "is_summary": False,
@@ -1303,7 +1303,7 @@ def _append_assistant_continuation_messages(
             {
                 "id": f"m_{uuid.uuid4().hex[:16]}",
                 "role": "assistant",
-                "content": "> --调用工具中--",
+                "content": "> >_<\n> --调用工具中--",
                 "entry_type": "tool_marker",
                 "created_at": _now_iso(),
                 "is_summary": False,
@@ -2306,7 +2306,7 @@ async def chat(req: ChatRequest):
                 {
                     "id": f"m_{uuid.uuid4().hex[:16]}",
                     "role": "assistant",
-                    "content": "> --调用工具中--",
+                    "content": "> >_<\n> --调用工具中--",
                     "entry_type": "tool_marker",
                     "is_summary": False,
                     "created_at": _now_iso(),
@@ -2453,7 +2453,7 @@ async def chat_stream(
                 {
                     "id": f"m_{uuid.uuid4().hex[:16]}",
                     "role": "assistant",
-                    "content": "> --调用工具中--",
+                    "content": "> >_<\n> --调用工具中--",
                     "entry_type": "tool_marker",
                     "is_summary": False,
                     "created_at": _now_iso(),
@@ -2463,7 +2463,7 @@ async def chat_stream(
 
         chunks = [
             _sse_event("reset", {}),
-            _sse_event("delta", {"content": "> --调用工具中--"}),
+            _sse_event("delta", {"content": "> >_<\n> --调用工具中--"}),
             _sse_event(
                 "done",
                 {

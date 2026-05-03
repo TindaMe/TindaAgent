@@ -778,9 +778,7 @@ def run_terminal(
                 "cmd": command, "note": note_text}
 
     sys_ops = terminal_policy.detect_system_operations(command)
-    if sys_ops and (_caller_perm & perm.SYSTEM_EXECUTE) != perm.SYSTEM_EXECUTE:
-        return {"ok": False, "error": f"Command involves system operations ({', '.join(sys_ops)}), requires SYSTEM_EXECUTE permission",
-                "cmd": command, "note": note_text}
+    needs_sys_perm = bool(sys_ops) and (_caller_perm & perm.SYSTEM_EXECUTE) != perm.SYSTEM_EXECUTE
 
     approval = _approval if isinstance(_approval, bool) else None
 
@@ -795,7 +793,7 @@ def run_terminal(
             "output": "Execution denied by user",
         }
 
-    if not terminal_policy.is_bypass_enabled(_caller_perm):
+    if not terminal_policy.is_bypass_enabled(_caller_perm) or needs_sys_perm:
         if approval is None:
             import uuid
             _confirm_id = str(call_id).strip() if str(call_id).strip() else f"tcf_{uuid.uuid4().hex[:12]}"
