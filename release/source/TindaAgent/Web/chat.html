@@ -2288,15 +2288,17 @@
         throw new Error(String(data?.error || `http ${res.status}`));
       }
       const replyText = sanitizeAssistantDisplayText(String(data?.reply || ""));
-      if (replyText) {
+      const confirmPending = Array.isArray(data?.pending) ? data.pending : null;
+      const hasMorePending = confirmPending && confirmPending.length > 0;
+      // 只在所有待确认命令处理完后才追加 LLM 回复，避免中间态系统消息污染气泡
+      if (replyText && !hasMorePending) {
         upsertAssistantTurnBubble(replyText, { turnId: data?.turn_id, append: true });
       }
       if (Array.isArray(data?.tool_trace) && data.tool_trace.length > 0) {
         renderToolTraceToTerminal(data.tool_trace, { sessionId: sid, persist: false });
       }
-      const pending = Array.isArray(data?.pending) ? data.pending : null;
-      if (pending) {
-        setPendingConfirmFromList(pending);
+      if (confirmPending) {
+        setPendingConfirmFromList(confirmPending);
       } else {
         await syncPendingConfirmationsFromServer(sid, { silent: true });
       }
