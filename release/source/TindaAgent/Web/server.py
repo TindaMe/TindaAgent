@@ -1279,18 +1279,21 @@ def _append_assistant_continuation_messages(
     session_id: str,
     assistant_text: str,
     *,
+    turn_id: str = "",
     tool_marker: bool = False,
     tool_trace: list[dict] | None = None,
 ) -> None:
     items: list[dict] = []
     reply = str(assistant_text or "")
+    tid = str(turn_id or "").strip()
     if reply.strip():
         items.append(
             {
                 "id": f"m_{uuid.uuid4().hex[:16]}",
                 "role": "assistant",
                 "content": reply,
-                "entry_type": "chat_continuation",
+                "entry_type": "chat",
+                "turn_id": tid,
                 "created_at": _now_iso(),
                 "is_summary": False,
             }
@@ -2685,16 +2688,22 @@ async def terminal_confirm(req: TerminalConfirmRequest):
         )
         reply = sanitized_reply
 
+    confirm_turn_id = str(target.get("turn_id", "") or "").strip() or f"turn_{uuid.uuid4().hex[:12]}"
+
     _append_assistant_continuation_messages(
         sid,
         reply,
+        turn_id=confirm_turn_id,
         tool_marker=False,
         tool_trace=tool_trace,
     )
     _generate_title_from_first_round(sid)
 
     remaining = [row for idx, row in enumerate(pending) if idx != target_index]
-    next_pending = remaining + _extract_pending_confirmation_items(tool_trace_raw)
+    next_new = _extract_pending_confirmation_items(tool_trace_raw)
+    for it in next_new:
+        it["turn_id"] = confirm_turn_id
+    next_pending = remaining + next_new
     dedup_next: list[dict] = []
     seen_next: set[tuple[str, str]] = set()
     for row in next_pending:
@@ -2712,7 +2721,6 @@ async def terminal_confirm(req: TerminalConfirmRequest):
     _set_terminal_pending(sid, dedup_next)
 
     # 回传原始 turn_id 以便前端合并气泡
-    confirm_turn_id = str(target.get("turn_id", "") or "").strip() or f"turn_{uuid.uuid4().hex[:12]}"
     return JSONResponse(
         {
             "ok": True,
