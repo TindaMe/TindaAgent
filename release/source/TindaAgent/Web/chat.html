@@ -2289,10 +2289,12 @@
       }
       const replyText = sanitizeAssistantDisplayText(String(data?.reply || ""));
       const confirmPending = Array.isArray(data?.pending) ? data.pending : null;
-      const hasMorePending = confirmPending && confirmPending.length > 0;
-      // 只在所有待确认命令处理完后才追加 LLM 回复，避免中间态系统消息污染气泡
-      if (replyText && !hasMorePending) {
-        upsertAssistantTurnBubble(replyText, { turnId: data?.turn_id, append: true });
+      const toolSteps = Math.max(0, Number(data?.tool_steps || 0));
+      // confirm 不走 SSE，手动补 >_< 标记
+      const marker = (toolSteps > 0) ? "\n\n> >_<\n> --调用工具中--\n" : "";
+      const finalReply = marker ? marker + replyText : replyText;
+      if (finalReply.trim()) {
+        upsertAssistantTurnBubble(finalReply, { turnId: data?.turn_id, append: true });
       }
       if (Array.isArray(data?.tool_trace) && data.tool_trace.length > 0) {
         renderToolTraceToTerminal(data.tool_trace, { sessionId: sid, persist: false });
