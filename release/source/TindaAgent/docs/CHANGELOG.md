@@ -2,6 +2,29 @@
 
 本文档用于补录 TindaAgent 的版本演进历史，后续按版本持续维护。
 
+## v1.7.15 - 2026-05-04
+
+1. **CLI 正式发布** — 基于 prompt_toolkit 的 `tinda` 命令：流式对话、Tab 补全、↑↓ 历史、会话管理（/sessions /session /new /delete /reset /last /model /version /quit）、模型选择（↑↓ + Enter）、标题异步生成、启动版本检测。
+2. **CLI 终端确认链路** — 完整的 `request → pending → confirm → resume → reply` 工作流，支持 allow/deny、链式命令、多轮确认。
+3. **run_terminal 全线加固**：
+   - 环境变量脱敏（过滤 KEY/TOKEN/SECRET）
+   - `reasoning_content` 原样回传（DeepSeek V4 thinking 模式要求）
+   - lone surrogate 编码清理
+   - 全部失败检测（不再无脑重试到 max_tool_steps）
+   - 错误返回统一携带 `cmd` + `note` 字段
+   - 退出码非零时新增 `success: False` 字段
+   - 移除死参数 `_confirmed`
+   - `cwd` 不存在时返回 `cwd_note` 提示
+4. **agent.py 系统提示全面英文化** — 所有注入 LLM 的消息、工具描述、错误提示改为英文。
+5. **fewshot 幻觉修复** — 移除伪造对话轮次，身份示例移入 system prompt 文本。
+6. **Stream 路径补全** — `stream_chat_with_tools` 同步 `_process_tool_loop` 的全部失败跳断逻辑。
+7. **resume 工作流修复** — 确认后强制 LLM 继续回复，空回复时自动生成工具结果摘要。
+8. **Web 端会话污染修复** — pending 时不再保存系统提示文字到对话历史。
+9. **空会话清理** — 网页端启动时自动清理 `message_count=0` 的会话，CLI 延迟创建（不发消息不留文件）。
+10. **CLI 设置持久化** — `~/.tinda/agent/cli-settings.json` 缓存模型和上次会话，支持 `/last` 恢复。
+11. **quick.sh / quick.bat / delete.sh / delete.bat** — 一键安装/卸载 `tinda` 系统命令。
+12. **pyproject.toml** — 新增 `[project.scripts]` 入口点，`pip install` 后直接可用 `tinda` 命令。
+
 ## v1.7.14 - 2026-05-02
 
 1. server.py 大瘦身（3820 → 2472 行），模型列表/日志读取/脱敏/token 估算推回各自模块，Web 层只保留路由与核心业务。
@@ -12,6 +35,11 @@
 6. 新增 12 个测试：Header v1.7.8 校验、端口重试、启动/停止脚本、状态脚本、日志归档回退、settings 路由等。
 7. 新增 DEVELOPMENT_POLICY.md、WSL_WINDOWS_ACCESS.md。
 8. CHANGELOG 精简整理。
+9. 修复终端确认会话态：新增内存级 pending registry（`_terminal_pending`）和 `GET /terminal/pending`，前端可在确认态漂移时重同步。
+10. 修复终端确认严格校验：`POST /terminal/confirm` 增加 `no_pending_for_session`、`confirm_id_not_found_or_expired` 错误码，防止误确认。
+11. 修复确认链路重复执行：确认接口不再在 Web 层提前执行 `run_terminal`，统一由 Agent 恢复流程执行一次，避免重复命令。
+12. 修复 pending 态丢失：`_get_agent(... preserve_pending=True)` 在确认流程中避免回灌清空挂起态，降低 “no pending confirmation for this session” 假报错。
+13. 新增终端确认回归测试：覆盖 pending 列表查询、确认错误码、chat pending 拦截、preserve_pending 不重载、前端无随机 confirm_id 兜底。
 
 ## v1.7.9 - 2026-04-29
 

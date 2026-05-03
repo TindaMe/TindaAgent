@@ -60,8 +60,9 @@ echo " TindaAgent 启动中..."
 echo "   工作目录: $PWD"
 echo "   监听地址: ${HOST}:${PORT}（起始端口，实际端口见 run_web.py 输出）"
 echo "   端口重试: ${PORT_RETRIES} 次（占用时每次 +1）"
+echo "   首端口等待: 1800ms（Ctrl+C 后优先复用起始端口）"
 echo "   按 Ctrl+C 停止"
 echo ""
 
 # Keep wrapper transparent; run_web.py handles port retry/selection and prints final URL.
-exec "$PY_BIN" run_web.py --host "$HOST" --port "$PORT" --port-retries "$PORT_RETRIES"
+exec "$PY_BIN" run_web.py --host "$HOST" --port "$PORT" --port-retries "$PORT_RETRIES" --first-port-wait-ms 1800

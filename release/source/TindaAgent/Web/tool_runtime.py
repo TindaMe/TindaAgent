@@ -308,6 +308,27 @@ class ToolRuntimeManager:
                 )
                 return
 
+        # 检测终端命令挂起确认
+        pending = False
+        if isinstance(result, dict) and result.get("pending_confirmation") is True:
+            pending = True
+            cid = str(result.get("confirm_id", ""))
+            with self._lock:
+                self._append_event_locked(
+                    session_id,
+                    {
+                        "type": "terminal_confirm",
+                        "job_id": job_id,
+                        "confirm_id": cid,
+                        "cmd": str(result.get("cmd", "")),
+                        "status": "pending",
+                        "ts": _now_iso(),
+                    },
+                )
+            self._emit_step(session_id, job_id, "out", f"[warn] 等待确认: {str(result.get('cmd', ''))[:80]}", cls="info")
+            self._set_job_status(session_id, job_id, "pending_confirm")
+            return
+
         printed = capture.getvalue().strip()
         self._emit_step(session_id, job_id, "out", f"tool: {tool_name}", cls="info")
         if printed:

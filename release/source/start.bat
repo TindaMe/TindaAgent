@@ -21,6 +21,7 @@ echo [TindaAgent] starting...
 echo [TindaAgent] workdir: %CD%
 echo [TindaAgent] start port: %PORT%
 echo [TindaAgent] port retries: %PORT_RETRIES%
+echo [TindaAgent] first-port wait: 1800ms
 if "%RELOAD%"=="1" (
   echo [TindaAgent] reload: on
 ) else (
@@ -89,7 +90,7 @@ if not exist "run_web.py" (
   exit /b 2
 )
 
-set "RUN_ARGS=run_web.py --port %PORT% --port-retries %PORT_RETRIES%"
+set "RUN_ARGS=run_web.py --port %PORT% --port-retries %PORT_RETRIES% --first-port-wait-ms 1800"
 if "%RELOAD%"=="1" set "RUN_ARGS=%RUN_ARGS% --reload"
 
 "%PY_EXE%" %PY_PRE_ARGS% %RUN_ARGS%

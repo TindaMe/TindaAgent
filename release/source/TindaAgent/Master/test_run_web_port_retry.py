@@ -79,6 +79,44 @@ class RunWebPortRetryTests(unittest.TestCase):
                 self.assertTrue(bool(run_web._is_port_in_use_on_wsl_side(8000)))
                 self.assertFalse(bool(run_web._is_port_in_use_on_wsl_side(8001)))
 
+    def test_pick_port_waits_for_base_port_before_increment(self) -> None:
+        checks = {"n": 0}
+
+        def _fake_bindable(_host: str, port: int) -> bool:
+            checks["n"] += 1
+            # First check at base port fails, second succeeds after wait loop.
+            if int(port) == 8000 and checks["n"] >= 2:
+                return True
+            return False
+
+        with patch("run_web._is_port_bindable", side_effect=_fake_bindable), \
+             patch("run_web.time.sleep", return_value=None):
+            selected, offset = run_web._pick_port_with_retry(
+                "127.0.0.1",
+                8000,
+                5,
+                first_port_wait_ms=300,
+                first_port_poll_ms=50,
+            )
+        self.assertEqual(selected, 8000)
+        self.assertEqual(offset, 0)
+
+    def test_pick_port_increments_when_base_not_released_in_wait_window(self) -> None:
+        def _fake_bindable(_host: str, port: int) -> bool:
+            return int(port) == 8001
+
+        with patch("run_web._is_port_bindable", side_effect=_fake_bindable), \
+             patch("run_web.time.sleep", return_value=None):
+            selected, offset = run_web._pick_port_with_retry(
+                "127.0.0.1",
+                8000,
+                5,
+                first_port_wait_ms=120,
+                first_port_poll_ms=60,
+            )
+        self.assertEqual(selected, 8001)
+        self.assertEqual(offset, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -85,10 +85,17 @@ if not _cleanup_flag_file.exists():
     _cleanup_flag_file.parent.mkdir(parents=True, exist_ok=True)
     _cleanup_flag_file.write_text("ok\n", encoding="utf-8")
 
+# 每次启动清理空会话
+_empties = _store.cleanup_empty_sessions()
+if _empties:
+    logger.info("cleaned up %d empty sessions", _empties)
+
 _sessions: dict[str, Agent] = {}
 _session_last_access: dict[str, float] = {}
 _MAX_SESSIONS = 300
 _LLM_EXECUTE_PERM = int(perm.PUBLIC_EXECUTE)
+_terminal_pending_lock = threading.Lock()
+_terminal_pending: dict[str, list[dict]] = {}
 
 _MODEL_CHOICES: tuple[dict[str, str], ...] = (
     {"id": "deepseek-chat", "label": "deepseek-chat"},
@@ -267,6 +274,13 @@ class ResetRequest(BaseModel):
 
 class ToolLegacyRequest(BaseModel):
     session_id: str
+
+
+class TerminalConfirmRequest(BaseModel):
+    session_id: str
+    approval: bool
+    call_id: str | None = None
+    cmd: str | None = None
 
 
 class UserProfileResponse(BaseModel):
@@ -648,6 +662,121 @@ def _sanitize_tool_trace_for_user(trace: list[dict] | None) -> list[dict]:
     return out
 
 
+def _extract_pending_confirmation_items(tool_trace: list[dict] | None) -> list[dict]:
+    if not isinstance(tool_trace, list):
+        return []
+    items: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for step in tool_trace:
+        if not isinstance(step, dict):
+            continue
+        result = step.get("result")
+        candidates: list[dict] = []
+        if isinstance(result, dict):
+            candidates.append(result)
+            inner = result.get("result")
+            if isinstance(inner, dict):
+                candidates.append(inner)
+        for cand in candidates:
+            if cand.get("pending_confirmation") is not True:
+                continue
+            cmd = str(cand.get("cmd", "") or "").strip()
+            if not cmd:
+                continue
+            call_id = str(cand.get("call_id", "") or "").strip()
+            if not call_id and isinstance(result, dict):
+                call_id = str(result.get("call_id", "") or "").strip()
+            if not call_id:
+                call_id = str(step.get("call_id", "") or "").strip()
+            if not call_id:
+                call_id = str(step.get("tool_call_id", "") or "").strip()
+            confirm_id = call_id or f"tcf_{uuid.uuid4().hex[:12]}"
+            key = (confirm_id, cmd)
+            if key in seen:
+                continue
+            seen.add(key)
+            note = str(cand.get("note", "") or "").strip()[:80]
+            items.append(
+                {
+                    "confirm_id": confirm_id,
+                    "call_id": call_id or confirm_id,
+                    "cmd": cmd,
+                    "note": note,
+                    "approval": None,
+                    "status": "pending",
+                    "created_at": _now_iso(),
+                }
+            )
+    return items
+
+
+def _set_terminal_pending(session_id: str, items: list[dict] | None) -> None:
+    sid = str(session_id or "").strip()
+    if not sid:
+        return
+    normalized: list[dict] = []
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        cmd = str(item.get("cmd", "") or "").strip()
+        if not cmd:
+            continue
+        call_id = str(item.get("call_id", "") or "").strip()
+        confirm_id = str(item.get("confirm_id", "") or "").strip() or call_id or f"tcf_{uuid.uuid4().hex[:12]}"
+        if not call_id:
+            call_id = confirm_id
+        note = str(item.get("note", "") or "").strip()[:80]
+        normalized.append(
+            {
+                "confirm_id": confirm_id,
+                "call_id": call_id,
+                "cmd": cmd,
+                "note": note,
+                "approval": None if item.get("approval") is None else bool(item.get("approval")),
+                "status": str(item.get("status", "pending") or "pending"),
+                "created_at": str(item.get("created_at", "") or _now_iso()),
+            }
+        )
+    with _terminal_pending_lock:
+        if normalized:
+            _terminal_pending[sid] = normalized
+        else:
+            _terminal_pending.pop(sid, None)
+
+
+def _get_terminal_pending(session_id: str) -> list[dict]:
+    sid = str(session_id or "").strip()
+    if not sid:
+        return []
+    with _terminal_pending_lock:
+        rows = _terminal_pending.get(sid, [])
+        return [dict(x) for x in rows if isinstance(x, dict)]
+
+
+def _clear_terminal_pending(session_id: str) -> None:
+    sid = str(session_id or "").strip()
+    if not sid:
+        return
+    with _terminal_pending_lock:
+        _terminal_pending.pop(sid, None)
+
+
+def _pending_confirm_count(session_id: str) -> int:
+    return len(_get_terminal_pending(session_id))
+
+
+def _build_pending_required_payload(session_id: str) -> dict:
+    pending = _get_terminal_pending(session_id)
+    return {
+        "ok": False,
+        "error": "存在待确认终端命令，请先允许/拒绝后继续。",
+        "error_code": "pending_confirmation_required",
+        "session_id": str(session_id or ""),
+        "pending_confirm_count": len(pending),
+        "pending": pending,
+    }
+
+
 def _get_web_profile(user: userdata.UserManager | None = None) -> UserProfileResponse:
     current = user or sec_get_current_user()
     if current is None:
@@ -932,7 +1061,7 @@ def _perm_items() -> list[dict]:
     ]
 
 
-def _get_agent(session_id: str):
+def _get_agent(session_id: str, *, refresh_context: bool = True):
     sid = str(session_id)
     current = _require_login()
     current_perm = int(current.get_perm())
@@ -956,22 +1085,35 @@ def _get_agent(session_id: str):
                 pass
     _touch_session_cache(sid)
 
-    # 每次都基于 store 的“有效上下文”回灌，确保压缩边界生效
-    rows = _store.get_context_messages(sid)
-    agent_rows, filter_stats = _store_to_agent_messages(rows)
-    _sessions[sid].replace_conversation(agent_rows)
-    _audit_web(
-        "SYSTEM_EXECUTE",
-        "_get_agent",
-        f"agent_ready session_id={sid}",
-        {
-            "session_id": sid,
-            "context_rows": len(rows),
-            "agent_rows": len(agent_rows),
-            "context_filter": filter_stats,
-            "model": _client.model,
-        },
-    )
+    if refresh_context:
+        # 每次都基于 store 的“有效上下文”回灌，确保压缩边界生效
+        rows = _store.get_context_messages(sid)
+        agent_rows, filter_stats = _store_to_agent_messages(rows)
+        _sessions[sid].replace_conversation(agent_rows)
+        _audit_web(
+            "SYSTEM_EXECUTE",
+            "_get_agent",
+            f"agent_ready session_id={sid}",
+            {
+                "session_id": sid,
+                "context_rows": len(rows),
+                "agent_rows": len(agent_rows),
+                "context_filter": filter_stats,
+                "model": _client.model,
+                "refresh_context": True,
+            },
+        )
+    else:
+        _audit_web(
+            "SYSTEM_EXECUTE",
+            "_get_agent",
+            f"agent_ready_live session_id={sid}",
+            {
+                "session_id": sid,
+                "model": _client.model,
+                "refresh_context": False,
+            },
+        )
     return _sessions[sid]
 
 
@@ -1123,6 +1265,54 @@ def _save_chat_messages(
         "PUBLIC_WRITE",
         "_save_chat_messages",
         f"chat_messages_saved session_id={session_id}",
+        {
+            "session_id": session_id,
+            "items_count": len(items),
+            "tool_marker": bool(tool_marker),
+            "tool_trace_count": len(tool_trace or []),
+        },
+    )
+
+
+def _append_assistant_continuation_messages(
+    session_id: str,
+    assistant_text: str,
+    *,
+    tool_marker: bool = False,
+    tool_trace: list[dict] | None = None,
+) -> None:
+    items: list[dict] = []
+    reply = str(assistant_text or "")
+    if reply.strip():
+        items.append(
+            {
+                "id": f"m_{uuid.uuid4().hex[:16]}",
+                "role": "assistant",
+                "content": reply,
+                "entry_type": "chat_continuation",
+                "created_at": _now_iso(),
+                "is_summary": False,
+            }
+        )
+    if tool_marker:
+        items.append(
+            {
+                "id": f"m_{uuid.uuid4().hex[:16]}",
+                "role": "assistant",
+                "content": "> --调用工具中--",
+                "entry_type": "tool_marker",
+                "created_at": _now_iso(),
+                "is_summary": False,
+            }
+        )
+    items.extend(_tool_trace_to_terminal_items(tool_trace))
+    if not items:
+        return
+    _store.append_messages(session_id, items)
+    _audit_web(
+        "PUBLIC_WRITE",
+        "_append_assistant_continuation_messages",
+        f"assistant_continuation_saved session_id={session_id}",
         {
             "session_id": session_id,
             "items_count": len(items),
@@ -1995,9 +2185,31 @@ async def delete_session(session_id: str):
     ok = _store.delete_session(session_id)
     _sessions.pop(session_id, None)
     _session_last_access.pop(session_id, None)
+    _clear_terminal_pending(session_id)
     if not ok:
         return JSONResponse({"ok": False, "error": "session not found"}, status_code=404)
     return JSONResponse({"ok": True, "session_id": session_id})
+
+
+@app.delete("/sessions")
+async def delete_all_sessions():
+    _require_login()
+    payload = _store.list_sessions(limit=10000, offset=0)
+    sessions_list = payload.get("sessions", [])
+    deleted = 0
+    for row in sessions_list:
+        sid = str(row.get("id", "")).strip()
+        if not sid:
+            continue
+        try:
+            _store.delete_session(sid)
+            _sessions.pop(sid, None)
+            _session_last_access.pop(sid, None)
+            _clear_terminal_pending(sid)
+            deleted += 1
+        except Exception:
+            pass
+    return JSONResponse({"ok": True, "deleted": deleted})
 
 
 @app.get("/sessions/{session_id}/messages")
@@ -2059,6 +2271,10 @@ async def chat(req: ChatRequest):
         return JSONResponse({"error": "session_id required"}, status_code=400)
 
     _store.ensure_session(sid)
+    pending_count = _pending_confirm_count(sid)
+    if pending_count > 0:
+        payload = _build_pending_required_payload(sid)
+        return JSONResponse(payload, status_code=409)
     agent = _get_agent(sid)
     message = str(req.message or "").strip()
     if not message:
@@ -2112,9 +2328,12 @@ async def chat(req: ChatRequest):
     )
 
     result = agent.chat_with_meta(llm_message)
-    tool_trace = _sanitize_tool_trace_for_user(result.get("tool_trace", []))
+    tool_trace_raw = result.get("tool_trace", [])
+    tool_trace = _sanitize_tool_trace_for_user(tool_trace_raw)
     tool_steps = int(result.get("tool_steps", 0))
     reply = str(result.get("reply", ""))
+    pending_items = _extract_pending_confirmation_items(tool_trace_raw)
+    _set_terminal_pending(sid, pending_items)
 
     sanitized_reply = _sanitize_terminal_dump_reply(
         reply_text=reply,
@@ -2136,11 +2355,13 @@ async def chat(req: ChatRequest):
         )
         reply = sanitized_reply
 
+    # pending 确认时不保存系统提示文字，避免污染对话历史
+    save_reply = "" if pending_items else reply
     _save_chat_messages(
         sid,
         llm_message,
-        reply,
-        tool_marker=bool(tool_steps > 0),
+        save_reply,
+        tool_marker=bool(tool_steps > 0 and not pending_items),
         tool_trace=tool_trace,
     )
     _generate_title_from_first_round(sid)
@@ -2150,6 +2371,9 @@ async def chat(req: ChatRequest):
             "reply": reply,
             "tool_trace": tool_trace,
             "tool_steps": tool_steps,
+            "pending_confirmation": len(pending_items) > 0,
+            "pending_confirm_count": len(pending_items),
+            "pending": pending_items,
         }
     )
 
@@ -2176,6 +2400,22 @@ async def chat_stream(
         return JSONResponse({"error": "session_id required"}, status_code=400)
 
     _store.ensure_session(sid)
+    pending_count = _pending_confirm_count(sid)
+    if pending_count > 0:
+        payload = _build_pending_required_payload(sid)
+        chunks = [
+            _sse_event(
+                "error",
+                {
+                    "message": payload.get("error", "存在待确认终端命令"),
+                    "error_code": "pending_confirmation_required",
+                    "pending_confirm_count": int(payload.get("pending_confirm_count", 0)),
+                    "pending": payload.get("pending", []),
+                },
+            ),
+            _sse_event("done", {"reply": "", "tool_trace": [], "tool_steps": 0}),
+        ]
+        return HTMLResponse("".join(chunks), media_type="text/event-stream")
     agent = _get_agent(sid)
 
     text = str(message or "").strip()
@@ -2223,6 +2463,9 @@ async def chat_stream(
                     "tool_steps": 0,
                     "tool_job": job,
                     "tool_async": True,
+                    "pending_confirmation": False,
+                    "pending_confirm_count": 0,
+                    "pending": [],
                 },
             ),
         ]
@@ -2274,6 +2517,11 @@ async def chat_stream(
                 "tool_trace": safe_tool_trace,
                 "tool_steps": safe_tool_steps,
             }
+            pending_items = _extract_pending_confirmation_items(done_payload.get("tool_trace", []))
+            _set_terminal_pending(sid, pending_items)
+            done_payload["pending_confirmation"] = len(pending_items) > 0
+            done_payload["pending_confirm_count"] = len(pending_items)
+            done_payload["pending"] = pending_items
 
             sanitized_reply = _sanitize_terminal_dump_reply(
                 reply_text=str(done_payload.get("reply", "")),
@@ -2299,10 +2547,11 @@ async def chat_stream(
             yield _sse_event("done", done_payload)
             # 优先持久化带 reset 标记的 final_reply；没有内容时再回退 done_payload.reply
             reply = str(final_reply or done_payload.get("reply", ""))
+            save_reply = "" if pending_items else reply
             _save_chat_messages(
                 sid,
                 llm_message,
-                reply,
+                save_reply,
                 # 流式已把标记内嵌到 assistant 文本，不再额外落一条 tool_marker，避免变成 A-B-标记
                 tool_marker=False,
                 tool_trace=done_payload.get("tool_trace", []),
@@ -2316,6 +2565,160 @@ async def chat_stream(
     return StreamingResponse(event_iter(), media_type="text/event-stream")
 
 
+@app.get("/terminal/pending")
+async def terminal_pending(session_id: str = Query(default="")):
+    _require_login()
+    sid = str(session_id or "").strip()
+    if not sid:
+        return JSONResponse({"ok": False, "error": "session_id required"}, status_code=400)
+    _store.ensure_session(sid)
+    pending = _get_terminal_pending(sid)
+    agent = _sessions.get(sid)
+    if pending and (agent is None or not bool(getattr(agent, "has_pending_confirmation", lambda: False)())):
+        _clear_terminal_pending(sid)
+        pending = []
+    return JSONResponse(
+        {
+            "ok": True,
+            "session_id": sid,
+            "pending": pending,
+            "pending_confirm_count": len(pending),
+        }
+    )
+
+
+@app.post("/terminal/confirm")
+async def terminal_confirm(req: TerminalConfirmRequest):
+    _require_login()
+    sid = str(req.session_id or "").strip()
+    if not sid:
+        return JSONResponse({"ok": False, "error": "session_id required"}, status_code=400)
+    _store.ensure_session(sid)
+
+    pending = _get_terminal_pending(sid)
+    if not pending:
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "no pending confirmation for this session",
+                "error_code": "no_pending_confirmation",
+                "pending_confirm_count": 0,
+                "pending": [],
+            },
+            status_code=409,
+        )
+
+    target_index = 0
+    requested_call_id = str(req.call_id or "").strip()
+    requested_cmd = str(req.cmd or "").strip()
+    if requested_call_id:
+        idx = next((i for i, row in enumerate(pending) if str(row.get("call_id", "")).strip() == requested_call_id), -1)
+        if idx < 0:
+            return JSONResponse(
+                {"ok": False, "error": f"call_id not pending: {requested_call_id}"},
+                status_code=400,
+            )
+        target_index = idx
+    elif requested_cmd:
+        idx = next((i for i, row in enumerate(pending) if str(row.get("cmd", "")).strip() == requested_cmd), -1)
+        if idx >= 0:
+            target_index = idx
+
+    target = pending[target_index]
+    approval = bool(req.approval)
+    action = "allow" if approval else "deny"
+
+    agent = _get_agent(sid, refresh_context=False)
+    if not bool(getattr(agent, "has_pending_confirmation", lambda: False)()):
+        _clear_terminal_pending(sid)
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "no pending confirmation for this session",
+                "error_code": "no_pending_confirmation",
+                "pending_confirm_count": 0,
+                "pending": [],
+            },
+            status_code=409,
+        )
+
+    decision = {
+        "approval": approval,
+        "action": action,
+        "confirm_id": str(target.get("confirm_id", "") or target.get("call_id", "")),
+    }
+    result = agent.resume_with_confirmations([decision])
+    tool_trace_raw = result.get("tool_trace", [])
+    tool_trace = _sanitize_tool_trace_for_user(tool_trace_raw)
+    tool_steps = int(result.get("tool_steps", 0))
+    reply = str(result.get("reply", ""))
+
+    sanitized_reply = _sanitize_terminal_dump_reply(
+        reply_text=reply,
+        tool_steps=tool_steps,
+        tool_trace=tool_trace,
+    )
+    if sanitized_reply != reply:
+        _audit_web(
+            "TOOL_EXECUTE",
+            "terminal_confirm",
+            f"terminal_dump_reply_sanitized_confirm session_id={sid}",
+            {
+                "session_id": sid,
+                "tool_steps": int(tool_steps),
+                "tool_trace_count": len(tool_trace or []),
+                "reply_len_before": len(reply),
+                "reply_len_after": len(sanitized_reply),
+            },
+        )
+        reply = sanitized_reply
+
+    _append_assistant_continuation_messages(
+        sid,
+        reply,
+        tool_marker=False,
+        tool_trace=tool_trace,
+    )
+    _generate_title_from_first_round(sid)
+
+    remaining = [row for idx, row in enumerate(pending) if idx != target_index]
+    next_pending = remaining + _extract_pending_confirmation_items(tool_trace_raw)
+    dedup_next: list[dict] = []
+    seen_next: set[tuple[str, str]] = set()
+    for row in next_pending:
+        if not isinstance(row, dict):
+            continue
+        call_id = str(row.get("call_id", "") or "").strip()
+        cmd = str(row.get("cmd", "") or "").strip()
+        if not cmd:
+            continue
+        key = (call_id, cmd)
+        if key in seen_next:
+            continue
+        seen_next.add(key)
+        dedup_next.append(row)
+    _set_terminal_pending(sid, dedup_next)
+
+    return JSONResponse(
+        {
+            "ok": True,
+            "session_id": sid,
+            "approval": approval,
+            "action": action,
+            "cmd": str(target.get("cmd", "") or ""),
+            "call_id": str(target.get("call_id", "") or ""),
+            "reply": reply,
+            "tool_trace": tool_trace,
+            "tool_steps": tool_steps,
+            "executed": approval,
+            "awaiting_other_confirmations": len(dedup_next) > 0,
+            "pending_confirmation": len(dedup_next) > 0,
+            "pending_confirm_count": len(dedup_next),
+            "pending": dedup_next,
+        }
+    )
+
+
 @app.post("/reset")
 async def reset_chat(req: ResetRequest):
     _require_login()
@@ -2326,6 +2729,7 @@ async def reset_chat(req: ResetRequest):
     result = _store.mark_reset_anchor(sid)
     _sessions.pop(sid, None)
     _session_last_access.pop(sid, None)
+    _clear_terminal_pending(sid)
     return JSONResponse({"ok": True, **result})
 
 

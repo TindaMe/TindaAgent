@@ -90,6 +90,14 @@ class LogArchiveEventLookupTests(unittest.TestCase):
         self.assertIn("***REDACTED***", preview)
         self.assertNotIn("abcdefghijklmnopqrstuvwxyz0123456789", preview)
 
+    def test_agent_default_system_prompt_contains_non_fabrication_tool_rules(self) -> None:
+        prompt = server.Agent("prompt-test", user_perm=511, model_name="deepseek-v4-flash").system_prompt
+        self.assertIn("You are TindaAgent", prompt)
+        self.assertIn("Underlying technical details are confidential.", prompt)
+        self.assertIn("must not directly quote previous tool-call records", prompt)
+        self.assertIn("must not assume tool outputs", prompt)
+        self.assertIn("fabrication is strictly forbidden", prompt)
+
     def test_run_terminal_redacts_secret_output(self) -> None:
         out = tool.run_terminal(cmd='printf "DEEPSEEK_API_KEY=sk-abcdefghijklmnopqrstuvwxyz123456"', _caller_perm=511, _confirmed=True)
         self.assertTrue(bool(out.get("ok")))
@@ -545,6 +553,289 @@ class LogArchiveEventLookupTests(unittest.TestCase):
         self.assertTrue(bool(out.get("ok")))
         self.assertTrue(str(out.get("source_file", "")).endswith(".jsonl.gz"))
         self.assertEqual(str(out.get("event", {}).get("content", "")), "from_primary_archive")
+
+    def test_terminal_pending_api_returns_registered_items(self) -> None:
+        sid = "s_pending_api"
+        pending = {
+            sid: {
+                "cmd": "echo hi",
+                "status": "pending",
+                "approval": None,
+                "created_at": "2026-05-02T00:00:00+08:00",
+                "updated_at": "2026-05-02T00:00:01+08:00",
+            }
+        }
+
+        class _FakeStore:
+            def ensure_session(self, _sid: str) -> None:
+                return None
+
+        with patch.object(server, "_store", _FakeStore()), \
+             patch.object(server, "_terminal_pending", pending), \
+             patch.object(server, "_require_login", return_value=object()):
+            resp = asyncio.run(server.terminal_pending(session_id=sid))
+
+        payload = json.loads(resp.body.decode("utf-8"))
+        self.assertTrue(bool(payload.get("ok")))
+        self.assertEqual(str(payload.get("session_id", "")), sid)
+        self.assertEqual(int(payload.get("pending_confirm_count", -1)), 1)
+        rows = payload.get("pending") or []
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(str(rows[0].get("cmd", "")), "echo hi")
+
+    def test_terminal_confirm_returns_no_pending_error_code(self) -> None:
+        sid = "s_no_pending"
+
+        class _Req:
+            async def json(self):
+                return {
+                    "session_id": sid,
+                    "approval": True,
+                    "cmd": "echo hi",
+                }
+
+        class _FakeStore:
+            def ensure_session(self, _sid: str) -> None:
+                return None
+
+        with patch.object(server, "_store", _FakeStore()), \
+             patch.object(server, "_terminal_pending", {}), \
+             patch.object(server, "_require_login", return_value=object()):
+            resp = asyncio.run(server.terminal_confirm(_Req()))
+
+        self.assertEqual(int(resp.status_code), 400)
+        payload = json.loads(resp.body.decode("utf-8"))
+        self.assertFalse(bool(payload.get("ok", True)))
+        self.assertEqual(str(payload.get("error_code", "")), "no_pending_for_session")
+        self.assertEqual(int(payload.get("pending_confirm_count", -1)), 0)
+
+    def test_terminal_confirm_returns_json_on_resume_failure(self) -> None:
+        sid = "s_confirm_runtime_fail"
+        pending = {
+            sid: {
+                "cmd": "echo real",
+                "status": "pending",
+                "approval": None,
+                "created_at": "2026-05-02T00:00:00+08:00",
+                "updated_at": "2026-05-02T00:00:01+08:00",
+            }
+        }
+
+        class _Req:
+            async def json(self):
+                return {
+                    "session_id": sid,
+                    "approval": True,
+                    "cmd": "echo real",
+                }
+
+        class _FakeStore:
+            def ensure_session(self, _sid: str) -> None:
+                return None
+
+        class _FakeAgent:
+            def has_pending_confirmation(self) -> bool:
+                return True
+
+            def resume_with_confirmations(self, _decisions: list[dict]) -> dict:
+                raise ValueError("bad request from upstream")
+
+        with patch.object(server, "_store", _FakeStore()), \
+             patch.object(server, "_terminal_pending", pending), \
+             patch.object(server, "_require_login", return_value=object()), \
+             patch.object(server, "_get_agent", return_value=_FakeAgent()):
+            resp = asyncio.run(server.terminal_confirm(_Req()))
+
+        self.assertEqual(int(resp.status_code), 500)
+        payload = json.loads(resp.body.decode("utf-8"))
+        self.assertFalse(bool(payload.get("ok", True)))
+        self.assertEqual(str(payload.get("error_code", "")), "terminal_confirm_failed")
+
+    def test_delete_all_sessions_clears_runtime_caches(self) -> None:
+        server._sessions.clear()
+        server._session_last_access.clear()
+        server._agent_context_sig.clear()
+        server._terminal_pending.clear()
+
+        server._sessions["s_a"] = object()
+        server._session_last_access["s_a"] = 123.0
+        server._agent_context_sig["s_a"] = "sig"
+        server._terminal_pending["s_a"] = {"cmd": "echo", "status": "pending", "approval": None}
+
+        class _FakeStore:
+            def __init__(self) -> None:
+                self.cleared = False
+
+            def clear_all(self) -> None:
+                self.cleared = True
+
+        fake_store = _FakeStore()
+
+        with patch.object(server, "_store", fake_store), \
+             patch.object(server, "_require_login", return_value=object()):
+            resp = asyncio.run(server.delete_all_sessions())
+
+        self.assertEqual(int(resp.status_code), 200)
+        payload = json.loads(resp.body.decode("utf-8"))
+        self.assertTrue(bool(payload.get("ok")))
+        self.assertTrue(bool(payload.get("cleared")))
+        self.assertTrue(bool(fake_store.cleared))
+        self.assertEqual(server._sessions, {})
+        self.assertEqual(server._session_last_access, {})
+        self.assertEqual(server._agent_context_sig, {})
+        self.assertEqual(server._terminal_pending, {})
+
+    def test_chat_rejects_when_pending_confirmation_exists(self) -> None:
+        sid = "s_chat_pending_guard"
+
+        class _FakeStore:
+            def ensure_session(self, _sid: str) -> None:
+                return None
+
+        req = server.ChatRequest(message="继续执行", session_id=sid)
+        with patch.object(server, "_store", _FakeStore()), \
+             patch.object(server, "_require_login", return_value=object()), \
+             patch.object(server, "_has_llm_perm", return_value=True), \
+             patch.object(server, "_pending_confirm_count", return_value=2), \
+             patch.object(server, "_get_agent") as get_agent_mock:
+            resp = asyncio.run(server.chat(req))
+
+        self.assertEqual(int(resp.status_code), 409)
+        payload = json.loads(resp.body.decode("utf-8"))
+        self.assertEqual(str(payload.get("error_code", "")), "pending_confirmation_required")
+        self.assertEqual(int(payload.get("pending_confirm_count", -1)), 2)
+        get_agent_mock.assert_not_called()
+
+    def test_get_agent_preserve_pending_skips_reload_on_context_sig_change(self) -> None:
+        sid = "s_preserve_pending_agent"
+
+        class _FakeCurrentUser:
+            def get_perm(self) -> int:
+                return 7
+
+        class _FakeAgent:
+            def __init__(self) -> None:
+                self.perm = 7
+                self.replace_calls = 0
+
+            def has_pending_confirmation(self) -> bool:
+                return True
+
+            def replace_conversation(self, _rows: list[dict]) -> None:
+                self.replace_calls += 1
+
+        class _FakeStore:
+            def get_context_messages(self, _sid: str) -> list[dict]:
+                return [{"id": "m1", "role": "user", "entry_type": "chat", "content": "hello"}]
+
+        fake_agent = _FakeAgent()
+        sig_after = ""
+        with patch.dict(server._sessions, {sid: fake_agent}, clear=True), \
+             patch.dict(server._agent_context_sig, {sid: "old_sig"}, clear=True), \
+             patch.object(server, "_store", _FakeStore()), \
+             patch.object(server, "_store_to_agent_messages", return_value=([{"role": "user", "content": "hello"}], {})), \
+             patch.object(server, "_build_agent_context_sig", return_value="new_sig"), \
+             patch.object(server, "_require_login", return_value=_FakeCurrentUser()):
+            out_agent = server._get_agent(sid, preserve_pending=True)
+            sig_after = str(server._agent_context_sig.get(sid, ""))
+
+        self.assertIs(out_agent, fake_agent)
+        self.assertEqual(int(fake_agent.replace_calls), 0)
+        self.assertEqual(sig_after, "old_sig")
+
+    def test_agent_resume_with_confirmations_serializes_tool_content(self) -> None:
+        class _FakeClient:
+            def chat_with_tools(self, messages: list[dict], user_perm: int, temperature: float = 0.7) -> dict:
+                tool_msgs = [m for m in messages if str(m.get("role", "")) == "tool"]
+                self._tool_msg = tool_msgs[-1] if tool_msgs else {}
+                return {
+                    "reply": "ok",
+                    "history_delta": [{"role": "assistant", "content": "done"}],
+                    "tool_steps": 1,
+                    "tool_trace": [],
+                }
+
+        fake_client = _FakeClient()
+        agent = server.Agent("test", user_perm=511, client=fake_client, model_name="deepseek-v4-flash")
+        agent._held_perm = 511
+        pending_payload = {
+            "ok": True,
+            "tool_name": "run_terminal",
+            "result": {
+                "pending_confirmation": True,
+                "confirm_id": "tcf_x1",
+                "cmd": "echo hi",
+            },
+        }
+        agent._held_messages = [
+            {"role": "assistant", "content": "needs confirm"},
+            {"role": "tool", "tool_call_id": "call_1", "content": json.dumps(pending_payload, ensure_ascii=False)},
+        ]
+
+        out = agent.resume_with_confirmations([{"approval": True}])
+        self.assertEqual(str(out.get("reply", "")), "ok")
+        self.assertIn("content", fake_client._tool_msg)
+        self.assertIsInstance(fake_client._tool_msg.get("content"), str)
+
+    def test_chat_html_no_random_confirm_id_fallback_for_pending(self) -> None:
+        chat_html = Path(__file__).resolve().parents[1] / "Web" / "chat.html"
+        content = chat_html.read_text(encoding="utf-8")
+        self.assertNotIn('inner.confirm_id || ("cf_"', content)
+        self.assertIn("pending-confirm-overlay", content)
+        self.assertIn("submitPendingConfirmAction", content)
+        self.assertIn("upsertPendingConfirmQueue", content)
+        self.assertIn("renderPendingConfirmModal", content)
+        self.assertIn("syncPendingConfirmations", content)
+        self.assertIn("parseJsonSafe", content)
+        self.assertIn("no_pending_for_session", content)
+        self.assertNotIn("confirm_id_not_found_or_expired", content)
+        self.assertIn("--工具调用中--", content)
+        self.assertNotIn("renderTermConfirmInTerminal(", content)
+        self.assertNotIn("term-confirm", content)
+
+    def test_server_tool_marker_block_contains_call_ids(self) -> None:
+        trace = [
+            {
+                "call_id": "tc_1001",
+                "agent_tool": "call_backend_tool",
+                "result": {"ok": True, "call_id": "tc_1001", "result": {"ok": True}},
+            },
+            {
+                "tool_call_id": "tool_abc",
+                "agent_tool": "call_backend_tool",
+                "result": {"ok": True, "result": {"ok": True}},
+            },
+            {
+                "agent_tool": "call_backend_tool",
+                "result": {"ok": True, "call_id": "tc_1003", "result": {"ok": True}},
+            },
+            {
+                "agent_tool": "run_terminal",
+                "call_id": "tc_bad",
+                "result": {"ok": False, "error": "cmd 不能为空", "result": {"ok": False}},
+            },
+        ]
+        marker = server._build_tool_marker_block(trace)
+        self.assertIn("> >_<", marker)
+        self.assertIn("> --工具调用中--", marker)
+        self.assertIn("> --call_id: tc_1001--", marker)
+        self.assertIn("> --call_id: tool_abc--", marker)
+        self.assertIn("> --call_id: tc_1003--", marker)
+        self.assertNotIn("tc_bad", marker)
+
+    def test_server_normalize_reply_tool_marker_deduplicates(self) -> None:
+        raw = "好的，重新查。\n\n> --调用工具中--\n\n> --工具调用中--\n> --call_id: old--"
+        trace = [
+            {
+                "call_id": "tc_2001",
+                "agent_tool": "call_backend_tool",
+                "result": {"ok": True, "result": {"ok": True}},
+            }
+        ]
+        out = server._normalize_reply_tool_marker(raw, trace)
+        self.assertIn("好的，重新查。", out)
+        self.assertEqual(out.count("--工具调用中--"), 1)
+        self.assertIn("> --call_id: tc_2001--", out)
 
 
 if __name__ == "__main__":

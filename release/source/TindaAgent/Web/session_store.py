@@ -18,7 +18,7 @@ class SessionStoreError(ValueError):
 
 
 ROLE_SET = {"user", "assistant", "system"}
-ENTRY_TYPES = {"chat", "notice", "tool_marker", "terminal"}
+ENTRY_TYPES = {"chat", "notice", "tool_marker", "terminal", "terminal_confirm", "terminal_exec", "attachment"}
 TERMINAL_KINDS = {"", "cmd", "out", "sep"}
 TERMINAL_CLASSES = {"", "err", "info", "dim"}
 MAX_MSG_CHARS = 64000
@@ -244,7 +244,6 @@ class SessionStore:
         if not sid:
             sid = f"s_{uuid.uuid4().hex[:12]}"
         with self._lock:
-            # 确保唯一
             payload = self._read_sessions()
             exists = {str(x.get("id", "")) for x in payload.get("sessions", [])}
             base = sid
@@ -340,6 +339,22 @@ class SessionStore:
                 extra={"ok": True, "session_id": sid},
             )
             return True
+
+    def cleanup_empty_sessions(self) -> int:
+        """删除所有 message_count=0 的空会话，返回删除数。"""
+        payload = self._read_sessions()
+        old = payload.get("sessions", [])
+        empty = [it for it in old if int(it.get("message_count", 0)) <= 0]
+        if not empty:
+            return 0
+        new_rows = [it for it in old if int(it.get("message_count", 0)) > 0]
+        payload["sessions"] = new_rows
+        self._write_sessions(payload)
+        for it in empty:
+            sid = str(it.get("id", ""))
+            if sid:
+                self._messages_path(sid).unlink(missing_ok=True)
+        return len(empty)
 
     def _normalize_message(self, raw: dict[str, Any]) -> dict[str, Any] | None:
         if not isinstance(raw, dict):

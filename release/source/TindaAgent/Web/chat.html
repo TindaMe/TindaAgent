@@ -1576,6 +1576,84 @@
     }
     .config-dialog .btn.save:hover { color: #fff; opacity: 0.88; }
 
+    .pending-confirm-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 380;
+      background: rgba(14, 18, 26, 0.56);
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+    }
+    .pending-confirm-overlay.show { display: flex; }
+    .pending-confirm-dialog {
+      width: min(680px, 96vw);
+      border-radius: 16px;
+      border: 1.5px solid rgba(245, 158, 11, 0.42);
+      background: linear-gradient(180deg, #fffdf6 0%, #fff7e5 100%);
+      box-shadow: 0 20px 56px rgba(14, 18, 26, 0.25);
+      padding: 16px;
+      color: #78350f;
+    }
+    .pending-confirm-title {
+      font-size: 15px;
+      font-weight: 800;
+      margin: 0 0 6px;
+    }
+    .pending-confirm-meta {
+      font-size: 12px;
+      color: #92400e;
+      margin-bottom: 10px;
+    }
+    .pending-confirm-cmd {
+      background: #141824;
+      border-radius: 10px;
+      color: #e2e8f0;
+      font-family: "JetBrains Mono", "Fira Code", monospace;
+      font-size: 12px;
+      line-height: 1.55;
+      padding: 10px 12px;
+      min-height: 52px;
+      max-height: 240px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
+      border: 1px solid rgba(148, 163, 184, 0.3);
+    }
+    .pending-confirm-actions {
+      margin-top: 12px;
+      display: flex;
+      gap: 10px;
+      justify-content: flex-end;
+    }
+    .pending-confirm-actions button {
+      border: 1.5px solid transparent;
+      border-radius: 999px;
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 700;
+      padding: 8px 14px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .pending-confirm-actions .allow {
+      background: #16a34a;
+      color: #fff;
+      border-color: #15803d;
+    }
+    .pending-confirm-actions .allow:hover:not(:disabled) { filter: brightness(0.94); }
+    .pending-confirm-actions .deny {
+      background: #fff;
+      color: #dc2626;
+      border-color: #fca5a5;
+    }
+    .pending-confirm-actions .deny:hover:not(:disabled) { background: #fef2f2; }
+    .pending-confirm-actions button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
     .term-confirm {
       background: linear-gradient(180deg, #fffbeb 0%, #fef3c7 100%);
       border: 1.5px solid rgba(245,158,11,0.4);
@@ -1729,6 +1807,18 @@
   </div>
 </div>
 
+<div id="pendingConfirmOverlay" class="pending-confirm-overlay">
+  <div class="pending-confirm-dialog" role="dialog" aria-modal="true" aria-label="终端命令确认">
+    <h3 class="pending-confirm-title">终端命令请求确认</h3>
+    <div id="pendingConfirmMeta" class="pending-confirm-meta">等待确认</div>
+    <div id="pendingConfirmCmd" class="pending-confirm-cmd"></div>
+    <div class="pending-confirm-actions">
+      <button id="pendingConfirmDenyBtn" class="deny" type="button">拒绝</button>
+      <button id="pendingConfirmAllowBtn" class="allow" type="button">允许执行</button>
+    </div>
+  </div>
+</div>
+
 <div class="content-wrap">
   <div class="chat-col">
     <div id="messages-wrap">
@@ -1818,6 +1908,7 @@
     <div class="records-actions">
       <button type="button" onclick="createSessionFromPanel()">新建</button>
       <button type="button" onclick="deleteCurrentSessionFromPanel()">删除当前</button>
+      <button type="button" onclick="deleteAllSessionsFromPanel()">删除全部</button>
       <button type="button" onclick="refreshRecords()">刷新</button>
       <button type="button" onclick="closeRecordsPanel()">关闭</button>
     </div>
@@ -1849,6 +1940,11 @@
   const recordsPanelEl = document.getElementById("recordsPanel");
   const recordsListEl = document.getElementById("recordsList");
   const recordsSearchInputEl = document.getElementById("recordsSearchInput");
+  const pendingConfirmOverlayEl = document.getElementById("pendingConfirmOverlay");
+  const pendingConfirmMetaEl = document.getElementById("pendingConfirmMeta");
+  const pendingConfirmCmdEl = document.getElementById("pendingConfirmCmd");
+  const pendingConfirmAllowBtnEl = document.getElementById("pendingConfirmAllowBtn");
+  const pendingConfirmDenyBtnEl = document.getElementById("pendingConfirmDenyBtn");
   const toastEl = document.getElementById("tindaToast");
   const statusPillEl = document.getElementById("statusPill");
   const statusDotEl = statusPillEl ? statusPillEl.querySelector(".status-dot") : null;
@@ -1954,13 +2050,15 @@
   let messageSendInFlight = false;
   let terminalConfirmLockActive = false;
   let terminalConfirmPendingCount = 0;
+  let pendingConfirmCurrent = null;
+  let pendingConfirmSubmitting = false;
   const TOOL_EVENTS_ERROR_REPORT_INTERVAL_MS = 15000;
   const TOOL_EVENTS_ERROR_AUTO_PAUSE_STREAK = 12;
   const GATEWAY_HEARTBEAT_INTERVAL_MS = 12000;
   const TERM_MAX_LINES = 500;
   const TERM_FLUSH_BATCH = 120;
   const INPUT_PLACEHOLDER_DEFAULT = "跟 Tinda 说说话吧 ...";
-  const INPUT_PLACEHOLDER_CONFIRM_LOCK = "存在待确认终端命令，请先在终端全部允许/拒绝";
+  const INPUT_PLACEHOLDER_CONFIRM_LOCK = "存在待确认终端命令，请先在弹窗中允许/拒绝";
   let termPersistBuffer = [];
   let termPersistTimer = 0;
   let termRequestGroup = null;
@@ -2080,14 +2178,148 @@
     refreshComposerDisabledState();
   }
 
+  function normalizePendingConfirmItem(raw) {
+    if (!raw || typeof raw !== "object") return null;
+    const cmd = String(raw.cmd || "").trim();
+    if (!cmd) return null;
+    const callId = String(raw.call_id || raw.confirm_id || "").trim();
+    const confirmId = String(raw.confirm_id || callId || "").trim() || ("tcf_" + Date.now().toString(36));
+    return {
+      confirm_id: confirmId,
+      call_id: callId || confirmId,
+      cmd,
+      status: "pending",
+    };
+  }
+
+  function setPendingConfirmFromList(items) {
+    const list = Array.isArray(items) ? items : [];
+    const first = list.length > 0 ? normalizePendingConfirmItem(list[0]) : null;
+    pendingConfirmCurrent = first;
+    renderPendingConfirmOverlay();
+    setTerminalConfirmLock(!!first, list.length);
+  }
+
+  function clearPendingConfirm() {
+    pendingConfirmCurrent = null;
+    hidePendingConfirmOverlay();
+    setPendingConfirmButtonsDisabled(false);
+    setTerminalConfirmLock(false, 0);
+  }
+
+  function showPendingConfirmOverlay() {
+    if (!pendingConfirmOverlayEl) return;
+    pendingConfirmOverlayEl.classList.add("show");
+  }
+
+  function hidePendingConfirmOverlay() {
+    if (!pendingConfirmOverlayEl) return;
+    pendingConfirmOverlayEl.classList.remove("show");
+  }
+
+  function setPendingConfirmButtonsDisabled(disabled) {
+    const locked = !!disabled;
+    if (pendingConfirmAllowBtnEl) pendingConfirmAllowBtnEl.disabled = locked;
+    if (pendingConfirmDenyBtnEl) pendingConfirmDenyBtnEl.disabled = locked;
+  }
+
+  function renderPendingConfirmOverlay() {
+    if (!pendingConfirmOverlayEl || !pendingConfirmMetaEl || !pendingConfirmCmdEl) return;
+    if (!pendingConfirmCurrent) {
+      pendingConfirmMetaEl.textContent = "等待确认";
+      pendingConfirmCmdEl.textContent = "";
+      hidePendingConfirmOverlay();
+      setPendingConfirmButtonsDisabled(false);
+      return;
+    }
+    pendingConfirmMetaEl.textContent = "待确认";
+    pendingConfirmCmdEl.textContent = String(pendingConfirmCurrent.cmd || "");
+    showPendingConfirmOverlay();
+    setPendingConfirmButtonsDisabled(pendingConfirmSubmitting);
+  }
+
+  async function syncPendingConfirmationsFromServer(sessionId = getSessionId(), { silent = true } = {}) {
+    const sid = String(sessionId || getSessionId()).trim();
+    if (!sid) {
+      clearPendingConfirm();
+      return [];
+    }
+    try {
+      const params = new URLSearchParams({ session_id: sid });
+      const res = await apiFetch(`/terminal/pending?${params.toString()}`, { method: "GET" });
+      const data = await res.json();
+      if (!res.ok || data?.ok === false) throw new Error(String(data?.error || `http ${res.status}`));
+      const pending = Array.isArray(data?.pending) ? data.pending : [];
+      setPendingConfirmFromList(pending);
+      return pending;
+    } catch (e) {
+      if (!silent) {
+        showToast(`同步确认状态失败：${String(e?.message || e)}`, "err");
+      }
+      return [];
+    }
+  }
+
+  async function submitPendingConfirmation(approval) {
+    if (pendingConfirmSubmitting) return;
+    const currentEl = pendingConfirmCurrent;
+    if (!currentEl) return;
+    const sid = String(getSessionId() || "").trim();
+    if (!sid) return;
+
+    pendingConfirmSubmitting = true;
+    setPendingConfirmButtonsDisabled(true);
+    hidePendingConfirmOverlay();
+    pendingConfirmCurrent = null;
+
+    try {
+      const res = await apiFetch("/terminal/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          session_id: sid,
+          approval: !!approval,
+          call_id: currentEl.call_id || "",
+          cmd: currentEl.cmd || "",
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || data?.ok === false) {
+        throw new Error(String(data?.error || `http ${res.status}`));
+      }
+      const replyText = sanitizeAssistantDisplayText(String(data?.reply || ""));
+      if (replyText) {
+        upsertAssistantTurnBubble(replyText, { turnId: data?.turn_id, append: true });
+      }
+      if (Array.isArray(data?.tool_trace) && data.tool_trace.length > 0) {
+        renderToolTraceToTerminal(data.tool_trace, { sessionId: sid, persist: false });
+      }
+      const pending = Array.isArray(data?.pending) ? data.pending : null;
+      if (pending) {
+        setPendingConfirmFromList(pending);
+      } else {
+        await syncPendingConfirmationsFromServer(sid, { silent: true });
+      }
+      showToast(approval ? "已允许执行" : "已拒绝执行");
+    } catch (e) {
+      showToast(`操作失败：${String(e?.message || e)}`, "err");
+      await syncPendingConfirmationsFromServer(sid, { silent: false });
+    } finally {
+      pendingConfirmSubmitting = false;
+      renderPendingConfirmOverlay();
+      syncTerminalConfirmLockFromDom();
+    }
+  }
+
   function syncTerminalConfirmLockFromDom() {
     if (!termBodyEl) {
-      setTerminalConfirmLock(false, 0);
-      return 0;
+      setTerminalConfirmLock(!!pendingConfirmCurrent, pendingConfirmCurrent ? 1 : 0);
+      return pendingConfirmCurrent ? 1 : 0;
     }
-    const pending = Array.from(termBodyEl.querySelectorAll(".term-confirm"))
+    const pendingInDom = Array.from(termBodyEl.querySelectorAll(".term-confirm"))
       .filter((node) => String(node?.dataset?.status || "").trim() === "pending")
       .length;
+    const pending = Math.max(pendingConfirmCurrent ? 1 : 0, pendingInDom);
     setTerminalConfirmLock(pending > 0, pending);
     return pending;
   }
@@ -2434,12 +2666,19 @@
       if (result && typeof result === "object") {
         const inner = result.result;
         if (inner && typeof inner === "object" && inner.pending_confirmation === true) {
-          const confirmId = inner.confirm_id || ("cf_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 8));
-          const confirmData = JSON.stringify({ cmd: String(inner.cmd || ""), status: "pending" });
-          const confirmEntry = { id: confirmId, role: "user", content: confirmData, entry_type: "terminal_confirm" };
-          if (persist) enqueueSessionEntries([confirmEntry], { sessionId });
-          renderTermConfirmInTerminal(confirmEntry, { noScroll: false });
-          addTermLine("out", `[warn] 需要确认: ${String(inner.cmd || "").slice(0, 80)}`, "info", { sessionId, persist });
+          const cmd = String(inner.cmd || "").trim();
+          const callId = String(inner.call_id || result.call_id || step?.call_id || step?.tool_call_id || "").trim();
+          if (cmd) {
+            syncPendingConfirmationsFromServer(getSessionId(), { silent: true });
+            addTermLine("out", `[warn] 需要确认: ${cmd.slice(0, 80)}`, "info", { sessionId, persist });
+          }
+        } else if (result.pending_confirmation === true) {
+          const cmd = String(result.cmd || "").trim();
+          const callId = String(result.call_id || step?.call_id || step?.tool_call_id || "").trim();
+          if (cmd) {
+            syncPendingConfirmationsFromServer(getSessionId(), { silent: true });
+            addTermLine("out", `[warn] 需要确认: ${cmd.slice(0, 80)}`, "info", { sessionId, persist });
+          }
         } else if (result.ok === false) {
           if (result.error_code === "permission_denied" && result.expose_to_user === false) {
             addTermLine("out", `[error] ${result.user_message || "该工具当前不可用，请尝试其它方式。"}`, "err", { sessionId, persist });
@@ -2520,12 +2759,33 @@
 
   async function ensureActiveSession() {
     let sid = String(localStorage.getItem(SESSION_KEY) || "").trim();
+    if (sid) {
+      try {
+        const res = await apiFetch("/sessions?limit=500&offset=0");
+        if (res.ok) {
+          const data = await res.json();
+          const list = Array.isArray(data?.sessions) ? data.sessions : [];
+          const found = list.find((x) => String(x?.id || "") === sid);
+          if (!found) {
+            localStorage.removeItem(SESSION_KEY);
+            sid = "";
+          }
+        }
+      } catch {
+        // 网络不通时保留本地 ID，不做清除
+      }
+    }
     if (!sid) {
       try {
+        const currentInStore = String(localStorage.getItem(SESSION_KEY) || "").trim();
         const res = await apiFetch("/sessions", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ title: "新对话" }),
+          body: JSON.stringify({
+            title: "新对话",
+            current_session_id: currentInStore || undefined,
+            reuse_if_current_empty: true,
+          }),
         });
         const data = await res.json();
         sid = String(data?.session?.id || "").trim();
@@ -2548,6 +2808,7 @@
     if (!silent) showToast(`已切换会话：${activeSessionTitle}`);
     toolLastSeq = 0;
     processedTerminalSeq.clear();
+    clearPendingConfirm();
   }
 
   async function createSessionAndSwitch(title = "新对话", { silent = false } = {}) {
@@ -2813,6 +3074,7 @@
       setActiveSession(row.id, { title: row.title || "新对话", silent: true });
       showEmptyState();
       clearTerm();
+      clearPendingConfirm();
       await refreshRecords();
       addSystemNotice("已新建会话", { pinTop: true, sessionId: row.id, persist: false });
       startToolPolling(row.id);
@@ -2862,11 +3124,48 @@
         stopToolPolling();
         showEmptyState();
         clearTerm();
+        clearPendingConfirm();
         addSystemNotice("当前会话已删除", { pinTop: true, sessionId: sid, persist: false });
       }
     } catch (e) {
       reportErrorToTerminal(`删除会话失败：${String(e?.message || e)}`, { source: "session_delete" });
       addSystemNotice(`删除会话失败：${String(e?.message || e)}`);
+    }
+  }
+
+  async function deleteAllSessionsFromPanel() {
+    if (!confirm("确定要删除全部会话吗？此操作不可撤销。")) return;
+
+    try {
+      const res = await apiFetch("/sessions", { method: "DELETE" });
+      let data = {};
+      const bodyText = await res.text();
+      if (bodyText) {
+        try {
+          data = JSON.parse(bodyText);
+        } catch {
+          data = { ok: false, error: `HTTP ${res.status} ${bodyText.slice(0, 120)}` };
+        }
+      }
+      if (!res.ok || data?.ok === false) {
+        throw new Error(String(data?.error || `http ${res.status}`));
+      }
+      const count = Number(data?.deleted || 0);
+      localStorage.removeItem(SESSION_KEY);
+      activeSessionTitle = "无会话";
+      statusContextUsageLength = 0;
+      renderHeaderStatus();
+      toolLastSeq = 0;
+      processedTerminalSeq.clear();
+      stopToolPolling();
+      showEmptyState();
+      clearTerm();
+      clearPendingConfirm();
+      await refreshRecords();
+      addSystemNotice(`已删除 ${count} 个会话`, { pinTop: true, persist: false });
+    } catch (e) {
+      reportErrorToTerminal(`删除全部会话失败：${String(e?.message || e)}`, { source: "session_delete_all" });
+      addSystemNotice(`删除全部会话失败：${String(e?.message || e)}`);
     }
   }
 
@@ -3032,7 +3331,13 @@
       }
 
       if (entryType === "terminal_confirm") {
-        hasTerminal = renderTermConfirmInTerminal(entry) || hasTerminal;
+        let parsed = {};
+        try { parsed = JSON.parse(String(entry?.content || "{}")); } catch { parsed = {}; }
+        const cmd = String(parsed?.cmd || "").trim();
+        const status = String(parsed?.status || "pending").toLowerCase();
+        if (cmd && status === "pending") {
+          syncPendingConfirmationsFromServer(getSessionId(), { silent: true });
+        }
         return;
       }
 
@@ -3053,28 +3358,34 @@
         return;
       }
       if (role === "assistant") {
-        if (entryType === "chat") {
-          const legacy = parseLegacyContextEntry(content);
-          if (legacy) {
-            if (legacy.kind === "terminal") {
-              hasTerminal = renderImportedTerminalEntry(legacy) || hasTerminal;
-              return;
-            }
-            if (legacy.kind === "notice") {
-              hasChatBubble = renderImportedNotice(legacy.content) || hasChatBubble;
-              return;
-            }
-            if (legacy.kind === "tool_marker") {
-              clearEmptyState();
-              const bubble = upsertAssistantTurnBubble(legacy.content, { turnId, append: true, isCommand: true });
-              hasChatBubble = Boolean(bubble) || hasChatBubble;
-              return;
+        if (entryType === "chat_continuation") {
+          clearEmptyState();
+          const bubble = upsertAssistantTurnBubble(content, { turnId, append: true });
+          hasChatBubble = Boolean(bubble) || hasChatBubble;
+        } else {
+          if (entryType === "chat") {
+            const legacy = parseLegacyContextEntry(content);
+            if (legacy) {
+              if (legacy.kind === "terminal") {
+                hasTerminal = renderImportedTerminalEntry(legacy) || hasTerminal;
+                return;
+              }
+              if (legacy.kind === "notice") {
+                hasChatBubble = renderImportedNotice(legacy.content) || hasChatBubble;
+                return;
+              }
+              if (legacy.kind === "tool_marker") {
+                clearEmptyState();
+                const bubble = upsertAssistantTurnBubble(legacy.content, { turnId, append: true, isCommand: true });
+                hasChatBubble = Boolean(bubble) || hasChatBubble;
+                return;
+              }
             }
           }
+          clearEmptyState();
+          const bubble = upsertAssistantTurnBubble(content, { turnId, append: false });
+          hasChatBubble = Boolean(bubble) || hasChatBubble;
         }
-        clearEmptyState();
-        const bubble = upsertAssistantTurnBubble(content, { turnId, append: false });
-        hasChatBubble = Boolean(bubble) || hasChatBubble;
       }
     });
     if (!hasChatBubble) showEmptyState();
@@ -3115,6 +3426,7 @@
       const data = await res.json();
       const entries = Array.isArray(data.entries) ? data.entries : [];
       renderImportedEntries(entries);
+      await syncPendingConfirmationsFromServer(sid, { silent: true });
       await refreshContextUsageLength(sid);
     } catch (e) {
       reportErrorToTerminal(`读取当前会话记录失败：${String(e?.message || e)}`, { source: "session_record" });
@@ -3449,75 +3761,16 @@
   }
 
   async function confirmTerminalAction(confirmId, action, wrapperEl, cmd) {
-    const sid = getSessionId();
-    if (!sid) return;
-    try {
-      const res = await apiFetch("/terminal/confirm", {
-        method: "POST",
-        headers: {"Content-Type":"application/json"},
-        body: JSON.stringify({ session_id: sid, confirm_id: confirmId, action, cmd }),
-      });
-      const data = await res.json();
-      if (!res.ok || data?.ok === false) throw new Error(data?.error || "failed");
-      showToast(action === "allow" ? "命令已允许" : "命令已拒绝");
-      if (wrapperEl) {
-        wrapperEl.classList.add("collapsed");
-        wrapperEl.dataset.status = action === "allow" ? "allowed" : "denied";
-        const head = wrapperEl.querySelector(".term-confirm-head span:last-child");
-        if (head) head.textContent = action === "allow" ? "已允许" : "已拒绝";
-        const dot = wrapperEl.querySelector(".dot");
-        if (dot) { dot.classList.remove("pending"); dot.classList.add(action === "allow" ? "allowed" : "denied"); }
-        const body = wrapperEl.querySelector(".term-confirm-body");
-        if (body) {
-          body.innerHTML = `<div class="term-confirm-result ${action === "allow" ? "allowed" : "denied"}">${
-            action === "allow" ? "已允许执行" : "已拒绝执行"
-          }<span class="toggle-expand" onclick="this.closest('.term-confirm').classList.toggle('collapsed')">展开</span></div>`;
-        }
-      }
-      if (action === "allow") {
-        if (data?.executed) {
-          const cmdText = String(data?.cmd || cmd || "").trim();
-          const outText = String(data?.output || "(no output)");
-          showTerm();
-          addTermLine("cmd", cmdText, "", { sessionId: sid, persist: false });
-          String(outText).split("\n").forEach((line) => addTermLine("out", line, "", { sessionId: sid, persist: false }));
-          if (data?.returncode !== undefined && data?.returncode !== null) {
-            addTermLine("out", `[returncode] ${String(data.returncode)}`, "dim", { sessionId: sid, persist: false });
-          }
-          addTermSep({ sessionId: sid, persist: false });
-        }
-        const replyText = sanitizeAssistantDisplayText(data?.reply || "");
-        if (replyText) {
-          upsertAssistantTurnBubble(replyText, { turnId: data?.turn_id, append: true });
-        } else if (!data?.executed) {
-          const cmdText = String(data?.cmd || cmd || "").trim();
-          if (cmdText) addTermLine("out", `[info] 命令已允许: ${cmdText}`, "info", { sessionId: sid, persist: false });
-        }
-        if (Array.isArray(data.tool_trace) && data.tool_trace.length > 0) {
-          renderToolTraceToTerminal(data.tool_trace, { sessionId: sid, persist: false });
-        }
-      } else if (action === "deny") {
-        const denyReply = sanitizeAssistantDisplayText(data?.reply || "");
-        if (denyReply) {
-          upsertAssistantTurnBubble(denyReply, { turnId: data?.turn_id, append: true });
-        } else {
-          const cmdText = String(data?.cmd || cmd || "").trim();
-          if (cmdText) addTermLine("out", `[info] 已拒绝执行命令: ${cmdText}`, "info", { sessionId: sid, persist: false });
-          addTermSep({ sessionId: sid, persist: false });
-        }
-      }
-      if (data?.awaiting_other_confirmations) {
-        const pendingCount = Math.max(0, Number(data?.pending_confirm_count || 0));
-        setTerminalConfirmLock(true, pendingCount);
-        showToast(`已记录本条确认，仍有 ${pendingCount} 条待处理`, "warn");
-      } else if (Number(data?.pending_confirm_count || 0) <= 0) {
-        syncTerminalConfirmLockFromDom();
-      } else {
-        setTerminalConfirmLock(true, Number(data?.pending_confirm_count || 0));
-      }
-    } catch(e) {
-      showToast(`操作失败：${String(e?.message || e)}`, "error");
+    const callId = String(confirmId || "").trim();
+    const cmdText = String(cmd || "").trim();
+    if (callId || cmdText) {
+      syncPendingConfirmationsFromServer(getSessionId(), { silent: true });
     }
+    if (wrapperEl) {
+      wrapperEl.classList.add("collapsed");
+      wrapperEl.dataset.status = action === "allow" ? "allowed" : "denied";
+    }
+    await submitPendingConfirmation(action === "allow");
   }
 
   function appendMarkdownToBotBubble(bubbleEl, extraText) {
@@ -4512,7 +4765,7 @@
   // --- Actions ---
   async function sendMessage() {
     if (syncTerminalConfirmLockFromDom() > 0) {
-      showToast("存在待确认终端命令，请先全部允许/拒绝。", "warn");
+      showToast("存在待确认终端命令，请先在弹窗中允许/拒绝。", "warn");
       inputEl?.focus();
       return;
     }
@@ -4635,6 +4888,7 @@
               const pendingCount = Math.max(0, Number(payload?.pending_confirm_count || 0));
               if (pendingCount > 0) {
                 setTerminalConfirmLock(true, pendingCount);
+                await syncPendingConfirmationsFromServer(sid, { silent: true });
               }
               throw new Error(payload.message || "stream failed");
             }
@@ -4678,6 +4932,12 @@
               showToast("本轮工具调用没有终端输出", "warn");
             }
           }
+          const donePendingCount = Math.max(0, Number(donePayload?.pending_confirm_count || 0));
+          if (donePendingCount > 0 || donePayload?.pending_confirmation === true) {
+            await syncPendingConfirmationsFromServer(sid, { silent: true });
+          } else {
+            clearPendingConfirm();
+          }
         } else if (typingRow) {
           clearTypingPlaceholder();
           if (!renderDelta) {
@@ -4701,6 +4961,7 @@
         const pendingCount = Math.max(0, Number(data?.pending_confirm_count || 0));
         if (pendingCount > 0) {
           setTerminalConfirmLock(true, pendingCount);
+          await syncPendingConfirmationsFromServer(sid, { silent: true });
         }
         throw new Error(String(data?.detail || data?.error || `http ${res.status}`));
       }
@@ -4725,13 +4986,19 @@
           showToast("本轮工具调用没有终端输出", "warn");
         }
       }
+      const responsePendingCount = Math.max(0, Number(data?.pending_confirm_count || 0));
+      if (responsePendingCount > 0 || data?.pending_confirmation === true) {
+        await syncPendingConfirmationsFromServer(sid, { silent: true });
+      } else {
+        clearPendingConfirm();
+      }
     } catch (e) {
       const errText = String(e?.message || e || "");
       clearTypingPlaceholder();
       clearDraftBotBubble();
       if (errText.includes("待确认终端命令")) {
         showToast(errText, "warn");
-        syncTerminalConfirmLockFromDom();
+        await syncPendingConfirmationsFromServer(sid, { silent: true });
       } else {
         reportErrorToTerminal(`请求失败：${errText}`, { source: "chat", sessionId: sid });
         if (!echo) addBubble("请求失败，请确认服务已启动。", "bot");
@@ -4758,6 +5025,7 @@
       closeRecordsPanel();
       clearEmptyState();
       clearTerm();
+      clearPendingConfirm();
       addSystemNotice("上下文已清理，当前会话已开始新上下文", { pinTop: true, sessionId: sid });
       await refreshRecords();
       startToolPolling(sid);
@@ -4773,6 +5041,12 @@
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); }
   });
   inputEl.addEventListener("input", autoResize);
+  pendingConfirmAllowBtnEl?.addEventListener("click", () => {
+    submitPendingConfirmation(true);
+  });
+  pendingConfirmDenyBtnEl?.addEventListener("click", () => {
+    submitPendingConfirmation(false);
+  });
   recordsSearchInputEl?.addEventListener("keydown", (e) => {
     if (e.key === "Enter") {
       e.preventDefault();

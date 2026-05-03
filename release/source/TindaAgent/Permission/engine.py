@@ -157,11 +157,11 @@ def build_permission_denied_payload(tool_name: str, user_perm: int, required_per
         "user_perm_labels": user_labels,
         "missing_perm_labels": missing_labels,
         "llm_message": (
-            f"调用工具 {tool_name} 失败：权限不足。"
-            f"当前权限={up}({ ' | '.join(user_labels) if user_labels else 'NONE' })；"
-            f"所需最小权限={rp}({ ' | '.join(req_labels) if req_labels else 'NONE' })；"
-            f"缺失权限={', '.join(missing_labels) if missing_labels else 'UNKNOWN'}。"
-            "请改用无需该权限的工具，或在不依赖该工具的情况下继续回答。"
+            f"Permission denied for tool {tool_name}. "
+            f"Current permission={up}({ ' | '.join(user_labels) if user_labels else 'NONE' }); "
+            f"Required={rp}({ ' | '.join(req_labels) if req_labels else 'NONE' }); "
+            f"Missing={', '.join(missing_labels) if missing_labels else 'UNKNOWN'}. "
+            "Use a different tool that does not require this permission, or continue without it."
         ),
         "user_message": "该工具当前不可用，请尝试其它方式。",
         "expose_to_user": False,

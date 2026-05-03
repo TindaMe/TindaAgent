@@ -3,6 +3,7 @@ from __future__ import annotations
 import gzip
 import json
 import os
+import re
 import shutil
 import threading
 from dataclasses import dataclass
@@ -50,6 +51,28 @@ def _truncate_text(text: Any, *, max_len: int = 4000) -> str:
     if len(value) <= max_len:
         return value
     return value[:max_len]
+
+
+_REDACT_VALUE = "***REDACTED***"
+_SENSITIVE_KEY_VALUE_RE = re.compile(
+    r"(?i)\b("
+    r"(?:deepseek|openai)?[_-]?api[_-]?key|"
+    r"access[_-]?token|refresh[_-]?token|auth[_-]?token|"
+    r"authorization|secret|password"
+    r")\b(\s*[:=]\s*)([^\n]+)"
+)
+_SENSITIVE_BEARER_RE = re.compile(r"(?i)\b(Bearer\s+)([A-Za-z0-9._~+/=-]{10,})")
+_SENSITIVE_SK_RE = re.compile(r"\bsk-[A-Za-z0-9]{16,}\b")
+
+
+def redact_sensitive_text(text: Any) -> str:
+    raw = str(text if text is not None else "")
+    if not raw:
+        return raw
+    out = _SENSITIVE_KEY_VALUE_RE.sub(lambda m: f"{m.group(1)}{m.group(2)}{_REDACT_VALUE}", raw)
+    out = _SENSITIVE_BEARER_RE.sub(lambda m: f"{m.group(1)}{_REDACT_VALUE}", out)
+    out = _SENSITIVE_SK_RE.sub(_REDACT_VALUE, out)
+    return out
 
 
 @dataclass

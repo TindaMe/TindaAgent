@@ -4,9 +4,21 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "TindaAgent"
-version = "1.7.14"
-description = "Powerful agent system"
+version = "1.7.15"
+description = "TindaAgent — AI agent CLI and web platform"
 requires-python = ">=3.9"
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "openai",
+    "python-dotenv",
+    "pydantic",
+    "prompt-toolkit>=3.0",
+    "questionary",
+]
+
+[project.scripts]
+tinda = "TindaAgent.CLI.main:main"
 
 [tool.setuptools.packages.find]
 include = ["TindaAgent", "TindaAgent.*"]

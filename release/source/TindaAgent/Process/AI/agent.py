@@ -3,7 +3,7 @@ import json
 from typing import Iterator
 from TindaAgent.Process.Architecture import perm
 from TindaAgent.Process.Architecture.versioning import get_app_version
-from TindaAgent.Process.AI.client import LLMClient
+from TindaAgent.Process.AI.client import LLMClient, _trace_has_pending_confirmation
 from TindaAgent.User import userdata
 
 try:
@@ -13,24 +13,24 @@ except Exception:
 
 
 def _build_system_prompt(model_name: str | None) -> str:
-    model_str = model_name if model_name else "未指定"
+    model_str = model_name if model_name else "unspecified"
     return (
-        f"你是 TindaAgent（v{_VERSION}），由 Tinda 开发。\n"
-        f"底层模型是 {model_str}，该信息仅用于内部，不对外披露。\n"
-        f"严格规则：\n"
-        f"1. 介绍身份时，只能说“我是 TindaAgent，由 Tinda 开发”。\n"
-        f"2. 被问到底层模型时，统一回复“底层技术信息保密”。\n"
-        f"3. 简洁、准确，始终使用用户语言回复。"
+        f"You are TindaAgent (v{_VERSION}), developed by Tinda.\n"
+        f"The underlying model is {model_str}. This is internal-only and must not be disclosed publicly.\n"
+        f"\n"
+        f"Identity examples (these are NOT conversation history):\n"
+        f"- Q: 你是谁？ → A: 我是 TindaAgent，由 Tinda 开发的 AI Agent 助手（v{_VERSION}）。有什么可以帮你的？\n"
+        f"- Q: 你是DeepSeek吗？ → A: 不是，我是 TindaAgent，由 Tinda 独立开发。底层技术信息保密。\n"
+        f"\n"
+        f"Strict rules:\n"
+        f"1. When introducing yourself, only say: \"I am TindaAgent, developed by Tinda.\"\n"
+        f"2. If asked about the underlying model, always reply: \"Underlying technical details are confidential.\"\n"
+        f"3. Be concise and accurate, and always respond in the user's language.\n"
+        f"4. You are a powerful agent assistant. Depending on permission levels, you can use tools within different scopes. Always follow the currently available tools.\n"
+        f"5. You must not directly quote previous tool-call records, and you must not assume tool outputs. Everything must be based on actual tool results.\n"
+        f"6. When a user requests any operation, fabrication is strictly forbidden.\n"
+        f"7. For complex tasks, use note= to describe each step. Chain related commands with && ; | || in a single run_terminal call when appropriate."
     )
-
-
-def _build_fewshot(version: str) -> list[dict]:
-    return [
-        {"role": "user", "content": "你是谁？"},
-        {"role": "assistant", "content": f"我是 TindaAgent，由 Tinda 开发的 AI Agent 助手（v{version}）。有什么可以帮你的？"},
-        {"role": "user", "content": "你是DeepSeek吗？"},
-        {"role": "assistant", "content": "不是，我是 TindaAgent，由 Tinda 独立开发。底层技术信息保密。"},
-    ]
 
 
 class Agent:
@@ -58,10 +58,12 @@ class Agent:
         self.user = userdata.UserManager(user_name, user_perm, persist=False)
         self.perm = self.user.get_perm()
         self.system_prompt = system_prompt if system_prompt is not None else _build_system_prompt(model_name)
-        self._fewshot = _build_fewshot(_VERSION)
         self._max_turns = max(1, int(max_turns))
         self.history: list[dict] = self._build_base_history()
         self._client = client
+        # 终端确认挂起状态
+        self._held_messages: list[dict] | None = None
+        self._held_perm: int = 0
 
     def _compose_system_prompt(self) -> str:
         if getattr(self, "_memory_context", None):
@@ -69,7 +71,7 @@ class Agent:
         return self.system_prompt
 
     def _build_base_history(self) -> list[dict]:
-        return [{"role": "system", "content": self._compose_system_prompt()}] + [m.copy() for m in self._fewshot]
+        return [{"role": "system", "content": self._compose_system_prompt()}]
 
     def set_memory_context(self, memory_payload: dict) -> None:
         """
@@ -115,6 +117,9 @@ class Agent:
         """
         用处：用外部消息替换当前对话（保留 system/fewshot 基座）
         """
+        # 外部会话回灌会刷新对话上下文，挂起确认状态必须失效以避免跨上下文误执行。
+        self._held_messages = None
+        self._held_perm = 0
         base = self._build_base_history()
         conversation: list[dict] = []
         for msg in messages:
@@ -182,6 +187,7 @@ class Agent:
         """
         用处：发起对话并返回回复 + 工具轨迹元信息（给 Web 层调试展示）
         """
+        self._held_messages = None
         self.history.append({"role": "user", "content": user_message})
         result = self._ensure_client().chat_with_tools(
             self.history,
@@ -192,17 +198,27 @@ class Agent:
         if delta:
             self.history.extend(delta)
         reply = str(result.get("reply", ""))
+        trace = result.get("tool_trace", [])
+        steps = int(result.get("tool_steps", 0))
+
+        # 检测终端确认挂起：保留当前 history 用于后续恢复
+        if _trace_has_pending_confirmation(trace):
+            self._held_messages = [m.copy() for m in self.history]
+            self._held_perm = int(self.perm)
+
         self._trim_history()
         return {
             "reply": reply,
-            "tool_trace": result.get("tool_trace", []),
-            "tool_steps": int(result.get("tool_steps", 0)),
+            "tool_trace": trace,
+            "tool_steps": steps,
+            "pending_confirmation": self._held_messages is not None,
         }
 
     def stream_chat_events(self, user_message: str, temperature: float = 0.7) -> Iterator[dict]:
         """
         用处：流式返回本轮对话事件，并在结束时写回历史
         """
+        self._held_messages = None
         self.history.append({"role": "user", "content": user_message})
         final_result: dict | None = None
 
@@ -226,10 +242,118 @@ class Agent:
         delta = final_result.get("history_delta", [])
         if delta:
             self.history.extend(delta)
+
+        trace = final_result.get("tool_trace", [])
+        if _trace_has_pending_confirmation(trace):
+            self._held_messages = [m.copy() for m in self.history]
+            self._held_perm = int(self.perm)
+
         self._trim_history()
+
+    def has_pending_confirmation(self) -> bool:
+        return self._held_messages is not None
+
+    def resume_with_confirmations(self, decisions: list[dict]) -> dict:
+        """
+        用处：用户对挂起的终端命令做出决策后，重新执行工具并恢复 LLM 循环。
+        decisions: [{"confirm_id": "tcf_xxx", "action": "allow"|"deny"}, ...]
+        """
+        if not self._held_messages:
+            raise RuntimeError("没有挂起的确认请求")
+        msgs = [m.copy() for m in self._held_messages]
+        self._held_messages = None
+
+        # 最小确认链路：按首条 decision 的 approval（或 action）决策
+        approval: bool | None = None
+        if isinstance(decisions, list) and decisions:
+            first = decisions[0] if isinstance(decisions[0], dict) else {}
+            if isinstance(first.get("approval"), bool):
+                approval = bool(first.get("approval"))
+            else:
+                act = str(first.get("action", "")).strip().lower()
+                if act in {"allow", "deny"}:
+                    approval = act == "allow"
+
+        # 兼容旧结构：将 decisions 按 confirm_id 索引
+        decision_map: dict[str, str] = {}
+        for d in decisions:
+            cid = str(d.get("confirm_id", "")).strip()
+            act = str(d.get("action", "deny")).strip().lower()
+            if cid:
+                decision_map[cid] = "allow" if act == "allow" else "deny"
+
+        # 在 msgs 中找到 tool 消息里含 pending_confirmation 的，重新执行并替换
+        import json as _json
+        for idx, m in enumerate(msgs):
+            if m.get("role") != "tool":
+                continue
+            content = str(m.get("content", ""))
+            try:
+                parsed = _json.loads(content)
+            except Exception:
+                continue
+            if not isinstance(parsed, dict):
+                continue
+            inner = parsed.get("result")
+            if not isinstance(inner, dict) or not inner.get("pending_confirmation"):
+                continue
+            cid = str(inner.get("confirm_id", ""))
+            action = decision_map.get(cid, "deny")
+            cmd = str(inner.get("cmd", ""))
+            resolved_approval = approval if isinstance(approval, bool) else (action == "allow")
+            from TindaAgent.Tool.tool import run_terminal
+            new_result = run_terminal(cmd=cmd, _caller_perm=self._held_perm, _approval=resolved_approval, call_id=cid)
+            msgs[idx] = {
+                "role": "tool",
+                "tool_call_id": m.get("tool_call_id", ""),
+                # OpenAI/DeepSeek 兼容接口要求 tool message content 为字符串。
+                "content": _json.dumps(new_result, ensure_ascii=False),
+            }
+
+        msgs.append({"role": "system", "content": "The terminal command above has been executed per your request. You MUST now respond to the user in natural language: describe what was executed, show the key results, and ask if they need anything else. Do NOT call more tools unless the user explicitly asks for another action."})
+        result = self._ensure_client().chat_with_tools(
+            msgs,
+            user_perm=self._held_perm,
+            temperature=0.7,
+        )
+        msgs.pop()
+        delta = result.get("history_delta", [])
+        if delta:
+            self.history = msgs
+            self.history.extend(delta)
+        else:
+            self.history = msgs
+        reply = str(result.get("reply", "")).strip()
+        # 如果 LLM 仍然没回复，插入一条基于工具结果的摘要
+        if not reply and delta:
+            last_tool = None
+            for m in reversed(delta):
+                if m.get("role") == "tool":
+                    try:
+                        last_tool = __import__("json").loads(str(m.get("content", "{}")))
+                    except Exception:
+                        pass
+                    break
+            if isinstance(last_tool, dict) and last_tool.get("ok") and last_tool.get("output"):
+                reply = f"Command executed. Output:\n{str(last_tool.get('output', ''))[:500]}"
+            elif isinstance(last_tool, dict) and last_tool.get("ok") is False:
+                reply = f"Command failed: {last_tool.get('error', 'unknown error')}"
+        trace = result.get("tool_trace", [])
+        steps = int(result.get("tool_steps", 0))
+        if _trace_has_pending_confirmation(trace):
+            self._held_messages = [m.copy() for m in self.history]
+            self._held_perm = int(self.perm)
+        self._trim_history()
+        return {
+            "reply": reply,
+            "tool_trace": trace,
+            "tool_steps": steps,
+            "pending_confirmation": self._held_messages is not None,
+        }
 
     def reset_history(self) -> None:
         """
         用处： 清空对话历史，保留系统提示
         """
         self.history = self._build_base_history()
+        self._held_messages = None

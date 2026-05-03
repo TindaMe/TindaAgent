@@ -2,7 +2,10 @@ import functools
 import contextlib
 import io
 import json
+import os
 import re
+import subprocess
+import gzip
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
@@ -11,7 +14,9 @@ from typing import Any, Callable
 from TindaAgent.Process.Architecture import perm
 from TindaAgent.Process.Architecture.paths import get_memory_file
 from TindaAgent.Process.Observability import audit_event
+from TindaAgent.Process.Observability.audit import redact_sensitive_text
 from TindaAgent.Process.Architecture.paths import get_log_root, get_legacy_log_root
+from TindaAgent.Process.Security import terminal_policy
 from TindaAgent.Permission import (
     has_perm,
     validate_registered_tool_perm,
@@ -226,7 +231,7 @@ def run_tool(tool_name: str, user_perm: int, *args, **kwargs):
             content=f"tool_not_registered tool={tool_name}",
             extra={"tool_name": tool_name, "user_perm": int(user_perm), "ok": False},
         )
-        raise ValueError(f"工具 {tool_name} 未注册")
+        raise ValueError(f"Tool not registered: {tool_name}")
 
     required = int(tool_info["perm"])
     if not has_perm(int(user_perm), required):
@@ -244,7 +249,7 @@ def run_tool(tool_name: str, user_perm: int, *args, **kwargs):
             },
         )
         payload = build_permission_denied_payload(tool_name, int(user_perm), required)
-        raise PermissionDeniedError(f"调用 {tool_name} 权限不足", payload=payload)
+        raise PermissionDeniedError(f"Permission denied for {tool_name}", payload=payload)
 
     audit_event(
         op_type="TOOL_EXECUTE",
@@ -411,7 +416,7 @@ def run_agent_tool(
                 content="agent_call_tool_missing_tool_name",
                 extra={"ok": False, "user_perm": int(user_perm)},
             )
-            out = {"ok": False, "error": "tool_name 不能为空"}
+            out = {"ok": False, "error": "tool_name is required"}
             if call_id_text:
                 out["call_id"] = call_id_text
             return json.dumps(out, ensure_ascii=False)
@@ -426,7 +431,7 @@ def run_agent_tool(
                 content=f"agent_tool_not_supported tool={agent_tool_name}",
                 extra={"ok": False, "user_perm": int(user_perm)},
             )
-            out = {"ok": False, "error": f"不支持的 agent 工具: {agent_tool_name}"}
+            out = {"ok": False, "error": f"Unsupported agent tool: {agent_tool_name}"}
             if call_id_text:
                 out["call_id"] = call_id_text
             return json.dumps(out, ensure_ascii=False)
@@ -477,7 +482,7 @@ def run_agent_tool(
                 content=f"agent_tool_empty_kwarg_key tool={tool_name}",
                 extra={"ok": False, "user_perm": int(user_perm)},
             )
-            out = {"ok": False, "tool_name": tool_name, "error": "kwargs 的键不能为空"}
+            out = {"ok": False, "tool_name": tool_name, "error": "kwargs key cannot be empty"}
             if call_id_text:
                 out["call_id"] = call_id_text
             return json.dumps(out, ensure_ascii=False)
@@ -554,7 +559,11 @@ def run_agent_tool(
         return json.dumps(out, ensure_ascii=False)
 
     printed = capture.getvalue().strip()
-    payload: dict[str, Any] = {"ok": True, "tool_name": tool_name}
+    inner_ok = result.get("ok") if isinstance(result, dict) else True
+    inner_error = result.get("error", "") if isinstance(result, dict) else ""
+    payload: dict[str, Any] = {"ok": inner_ok, "tool_name": tool_name}
+    if not inner_ok and inner_error:
+        payload["error"] = inner_error  # 提到外层方便展示
     if call_id_text:
         payload["call_id"] = call_id_text
     if printed:
@@ -570,7 +579,7 @@ def run_agent_tool(
         file_path=_THIS_FILE,
         content=f"agent_tool_done tool={tool_name}",
         extra={
-            "ok": True,
+            "ok": inner_ok,
             "user_perm": int(user_perm),
             "has_stdout": bool(printed),
             "has_result": result is not None,
@@ -579,7 +588,7 @@ def run_agent_tool(
     return json.dumps(payload, ensure_ascii=False, default=str)
 
 
-@tool(perm.PUBLIC_EXECUTE, "按行输出文本到工具 stdout（可传多段）", must=True)
+@tool(perm.PUBLIC_EXECUTE, "Print text lines to tool stdout", must=True)
 def echo(*content_list: str) -> None:
     """
     多次打印内容
@@ -588,7 +597,7 @@ def echo(*content_list: str) -> None:
         print(content)
 
 
-@tool(perm.PUBLIC_READ, "获取 Tinda 的个人简介（供模型了解用户背景）", must=True)
+@tool(perm.PUBLIC_READ, "Get Tinda's profile for context about the user", must=True)
 def get_tinda_profile() -> str:
     """
     返回 Tinda 的个人简介文本（不输出终端，仅返回给调用方）
@@ -602,7 +611,7 @@ def get_tinda_profile() -> str:
     )
 
 
-@tool(perm.PUBLIC_READ, "获取当前时间（支持传入 tz 时区，如 Asia/Shanghai）", must=True)
+@tool(perm.PUBLIC_READ, "Get current time (param: tz=timezone, e.g. Asia/Shanghai)", must=True)
 def get_current_time(tz: str = DEFAULT_TIMEZONE) -> dict[str, Any]:
     """
     返回当前时间信息，供日期计算、截止时间判断等场景使用
@@ -630,7 +639,7 @@ def get_current_time(tz: str = DEFAULT_TIMEZONE) -> dict[str, Any]:
     return payload
 
 
-@tool(perm.PUBLIC_READ, "摘要长文本（输入 text，可选 max_sentences=1-8，兼容 sentences/n_sentences）", must=True)
+@tool(perm.PUBLIC_READ, "Summarize long text (params: text, max_sentences=1-8)", must=True)
 def summarize_text(
     text: str,
     max_sentences: str = "3",
@@ -676,7 +685,7 @@ def summarize_text(
     return "。".join(selected)
 
 
-@tool(perm.PUBLIC_READ, "提取关键词（输入 text，可选 top_k=1-20，兼容 n_keywords）", must=True)
+@tool(perm.PUBLIC_READ, "Extract keywords from text (params: text, top_k=1-20)", must=True)
 def extract_keywords(text: str, top_k: str = "8", n_keywords: str | None = None) -> list[str]:
     """
     从文本中抽取高频关键词，便于检索与标签化
@@ -699,7 +708,7 @@ def extract_keywords(text: str, top_k: str = "8", n_keywords: str | None = None)
     return [word for word, _ in freq.most_common(limit)]
 
 
-@tool(perm.PUBLIC_READ, "读取 Tinda 资料片段（key: full/bio/project/contact/slogan）", must=True)
+@tool(perm.PUBLIC_READ, "Read Tinda profile snippet by key: full/bio/project/contact/slogan", must=True)
 def read_profile_snippet(key: str = "full") -> str:
     """
     读取预置个人资料片段；仅白名单键，不支持任意文件读取
@@ -723,7 +732,7 @@ def read_profile_snippet(key: str = "full") -> str:
     target = alias_map.get(normalized)
     if target is None:
         valid_keys = ", ".join(sorted(alias_map.keys()))
-        return f"不支持的 key: {key}。可用 key: {valid_keys}"
+        return f"Unsupported key: {key}. Available keys: {valid_keys}"
 
     if target == "full":
         return (
@@ -736,7 +745,7 @@ def read_profile_snippet(key: str = "full") -> str:
     return PROFILE_SNIPPETS[target]
 
 
-@tool(perm.PUBLIC_READ, "读取全局记忆 JSON（time/data）", must=True)
+@tool(perm.PUBLIC_READ, "Read global memory as JSON (time/data entries)", must=True)
 def read_memories() -> dict[str, Any]:
     """
     读取全局记忆；损坏时自动回退到空结构
@@ -744,14 +753,14 @@ def read_memories() -> dict[str, Any]:
     return _load_memory_payload()
 
 
-@tool(perm.PUBLIC_WRITE, "写入一条全局记忆（参数: data, 可选 time）", must=True)
+@tool(perm.PUBLIC_WRITE, "Write a global memory entry (params: data, time optional)", must=True)
 def save_memory(data: str, time: str = "") -> dict[str, Any]:
     """
     写入一条长期记忆，自动更新 updated_at
     """
     content = str(data or "").strip()
     if not content:
-        raise ValueError("data 不能为空")
+        raise ValueError("data is required")
     if len(content) > MEMORY_MAX_DATA_LEN:
         content = content[:MEMORY_MAX_DATA_LEN]
 
@@ -778,14 +787,14 @@ def save_memory(data: str, time: str = "") -> dict[str, Any]:
     }
 
 
-@tool(perm.PUBLIC_WRITE, "删除全局记忆（按包含文本匹配 data，参数: contains）", must=True)
+@tool(perm.PUBLIC_WRITE, "Delete memory entries by text match (param: contains)", must=True)
 def delete_memory(contains: str) -> dict[str, Any]:
     """
     按子串匹配删除记忆，便于人工清理错误记忆
     """
     keyword = str(contains or "").strip()
     if not keyword:
-        raise ValueError("contains 不能为空")
+        raise ValueError("contains is required")
 
     payload = _load_memory_payload()
     items = payload.get("items", [])
@@ -812,12 +821,135 @@ def delete_memory(contains: str) -> dict[str, Any]:
     }
 
 
-@tool(perm.USER_ADMIN, "空工具（仅满权限可调用，用于权限验证）", must=True)
+@tool(perm.USER_ADMIN, "No-op tool for admin permission verification only", must=True)
 def admin_noop() -> dict[str, Any]:
     """
     用于权限系统联调：该工具不执行任何业务逻辑，仅返回固定结果。
     """
     return {"ok": True, "message": "admin_noop executed"}
+
+
+# 子进程不应继承的敏感环境变量
+_SENSITIVE_ENV_KEYS = frozenset({
+    "DEEPSEEK_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY",
+    "DEEPSEEK_BASE_URL", "OPENAI_BASE_URL",
+    "TINDA_API_KEY", "TINDA_USER_TOKEN",
+    "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY",
+    "GITHUB_TOKEN", "GITLAB_TOKEN",
+})
+
+
+def _safe_env() -> dict[str, str]:
+    """返回过滤掉敏感变量后的环境变量副本。"""
+    return {
+        k: v for k, v in os.environ.items()
+        if k.upper() not in _SENSITIVE_ENV_KEYS
+        and "KEY" not in k.upper().split("_")
+        and "TOKEN" not in k.upper().split("_")
+        and "SECRET" not in k.upper().split("_")
+    }
+
+
+@tool(perm.TOOL_EXECUTE | perm.PUBLIC_EXECUTE, "Execute a shell command in terminal. Parameters: cmd=command string; note=purpose (max 80 chars); timeout=seconds (default 30); cwd=working dir (optional). System operations (rm/mv/chmod etc) require SYSTEM_EXECUTE permission.", must=True)
+def run_terminal(
+    cmd: str = "",
+    timeout: int = 30,
+    cwd: str | None = None,
+    command: str | None = None,
+    note: str = "",
+    _caller_perm: int = 0,
+    _approval: bool | None = None,
+    call_id: str = "",
+) -> dict[str, Any]:
+    command = str(cmd or command or "").strip().replace("\r", "").replace("\n", "")
+    note_text = str(note or "").strip()[:80]
+    cwd_info = ""
+
+    if not command:
+        return {"ok": False, "error": "cmd is required", "cmd": "", "note": note_text}
+
+    blacklisted = terminal_policy.check_blacklist(command)
+    if blacklisted:
+        return {"ok": False, "error": f"Command blocked by blacklist: {', '.join(blacklisted)}",
+                "cmd": command, "note": note_text}
+
+    sys_ops = terminal_policy.detect_system_operations(command)
+    if sys_ops and (_caller_perm & perm.SYSTEM_EXECUTE) != perm.SYSTEM_EXECUTE:
+        return {"ok": False, "error": f"Command involves system operations ({', '.join(sys_ops)}), requires SYSTEM_EXECUTE permission",
+                "cmd": command, "note": note_text}
+
+    approval = _approval if isinstance(_approval, bool) else None
+
+    if approval is False:
+        return {
+            "ok": True,
+            "pending_confirmation": False,
+            "cmd": command,
+            "note": note_text,
+            "approval": False,
+            "returncode": None,
+            "output": "Execution denied by user",
+        }
+
+    if not terminal_policy.is_bypass_enabled(_caller_perm):
+        if approval is None:
+            import uuid
+            _confirm_id = str(call_id).strip() if str(call_id).strip() else f"tcf_{uuid.uuid4().hex[:12]}"
+            return {
+                "ok": True,
+                "pending_confirmation": True,
+                "confirm_id": _confirm_id,
+                "call_id": _confirm_id,
+                "cmd": command,
+                "note": note_text,
+                "approval": None,
+                "message": f"Command '{command}' is waiting for user confirmation.",
+            }
+
+    try:
+        work_dir = str(cwd).strip() if cwd else None
+        if work_dir and not Path(work_dir).is_dir():
+            cwd_info = f" (cwd 不存在，已用当前目录)"
+            work_dir = None
+        exec_cwd = work_dir or os.getcwd()
+        result = subprocess.run(
+            command,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=max(1, min(int(timeout), 120)),
+            cwd=work_dir,
+            env={**_safe_env(), "PYTHONUNBUFFERED": "1"},
+        )
+        stdout_raw = result.stdout or ""
+        stderr_raw = result.stderr or ""
+        out = stdout_raw + stderr_raw
+        if len(out) > 8000:
+            out = out[:8000] + "\n...(output truncated)"
+        safe_stdout = redact_sensitive_text(stdout_raw)
+        safe_stderr = redact_sensitive_text(stderr_raw)
+        safe_output = redact_sensitive_text(out.strip() or "(no output)")
+        ret = {
+            "ok": True,
+            "success": result.returncode == 0,
+            "cmd": command,
+            "note": note_text,
+            "cwd": exec_cwd,
+            "stdout": safe_stdout,
+            "stderr": safe_stderr,
+            "returncode": result.returncode,
+            "output": safe_output,
+            "pending_confirmation": False,
+            "approval": True if approval is True else approval,
+        }
+        if cwd_info:
+            ret["cwd_note"] = cwd_info
+        return ret
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": f"Command timed out (>{timeout}s): {command[:120]}",
+                "cmd": command, "note": note_text}
+    except Exception as e:
+        return {"ok": False, "error": str(e), "cmd": command[:120], "note": note_text}
 
 
 def _parse_event_id(raw: str | int | None) -> int | None:
@@ -855,14 +987,14 @@ def _iter_total_jsonl_candidates() -> list[Path]:
     return paths
 
 
-@tool(perm.PUBLIC_READ, "按审计ID查询日志事件（id 支持纯数字或 tc_ 前缀）", must=True)
+@tool(perm.PUBLIC_READ, "Look up audit log event by ID (numeric or tc_ prefix)", must=True)
 def get_log_event_by_id(id: str) -> dict[str, Any]:
     """
     根据审计事件 ID 查询 total.jsonl 中的原始事件。
     """
     parsed_id = _parse_event_id(id)
     if parsed_id is None:
-        raise ValueError("id 无效，支持纯数字或 tc_前缀")
+        raise ValueError("Invalid id, expected numeric or tc_ prefix")
 
     for path in _iter_total_jsonl_candidates():
         try:

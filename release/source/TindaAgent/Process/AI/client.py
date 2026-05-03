@@ -141,8 +141,8 @@ def _detect_dsml_tool_calls(content: str, *, prefix: str) -> list[dict]:
 
 def _build_tool_limit_fallback(tool_trace: list[dict]) -> str:
     if not tool_trace:
-        return "本轮工具调用次数达到上限，已停止继续调用。"
-    lines = ["本轮工具调用较多，已停止继续调用。已获取信息摘要："]
+        return "Tool call limit reached, stopping further calls."
+    lines = ["Tool call limit reached. Summary of results:"]
     for idx, step in enumerate(tool_trace[-4:], start=1):
         name = step.get("agent_tool", "unknown_tool")
         result = step.get("result")
@@ -164,7 +164,7 @@ def _build_tool_limit_fallback(tool_trace: list[dict]) -> str:
         if len(text) > 140:
             text = text[:140] + "..."
         lines.append(f"{idx}. {name}: {text or '调用完成'}")
-    lines.append("如果你希望更精准结果，请缩小问题范围后再试。")
+    lines.append("Try narrowing your request for more precise results.")
     return "\n".join(lines)
 
 
@@ -173,9 +173,56 @@ def _detect_fake_tool_claim(text: str) -> bool:
     if not text:
         return False
     lower = text.lower()
-    claims = ("调用工具", "执行成功", "全部通过", "全部成功", "所有工具", "工具调用完成",
-              "tool_calls", "当前可用工具", "可用工具列表")
+    claims = ("tool_calls", "current tools", "available tools")
     return any(p in lower for p in claims)
+
+
+def _result_has_pending_confirmation(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    if payload.get("pending_confirmation") is True:
+        return True
+    inner = payload.get("result")
+    return isinstance(inner, dict) and inner.get("pending_confirmation") is True
+
+
+def _tool_failed(step: dict) -> bool:
+    """工具步骤是否执行失败（外层或内层 ok 为 False）。"""
+    r = step.get("result", {})
+    if isinstance(r, dict):
+        if r.get("ok") is False:
+            return True
+        inner = r.get("result")
+        if isinstance(inner, dict) and inner.get("ok") is False:
+            return True
+    return False
+
+
+def _tool_error(step: dict) -> str:
+    """提取工具步骤的错误信息。"""
+    r = step.get("result", {})
+    if isinstance(r, dict):
+        inner = r.get("result")
+        if isinstance(inner, dict):
+            return str(inner.get("error", "") or "")
+        return str(r.get("error", "") or "")
+    return ""
+
+
+def _trace_has_pending_confirmation(trace: list[dict] | None) -> bool:
+    if not isinstance(trace, list):
+        return False
+    for step in trace:
+        if not isinstance(step, dict):
+            continue
+        if _result_has_pending_confirmation(step.get("result")):
+            return True
+        raw = step.get("raw_result")
+        if isinstance(raw, str) and raw.strip():
+            parsed = _parse_json(raw)
+            if _result_has_pending_confirmation(parsed):
+                return True
+    return False
 
 
 class LLMClient:
@@ -190,13 +237,17 @@ class LLMClient:
         if not self.api_key:
             raise ValueError("缺少 DEEPSEEK_API_KEY，请在 .env 中配置")
         self._client = OpenAI(api_key=self.api_key, base_url=self.base_url)
+        # 思考模式拉到最大
+        self._thinking = {"type": "enabled"}
+        self._extra_body = {"thinking": self._thinking}
 
     def chat(self, messages: list[dict], temperature: float = 0.7) -> str:
         audit_event("SYSTEM_EXECUTE", "ai", "LLMClient.chat", _THIS_FILE, "llm_chat_start",
                      extra={"model": self.model, "messages_count": len(messages), "temperature": temperature})
         try:
             resp = self._client.chat.completions.create(
-                model=self.model, messages=messages, temperature=temperature)
+                model=self.model, messages=messages, temperature=temperature,
+                extra_body=self._extra_body)
             text = resp.choices[0].message.content
             audit_event("SYSTEM_EXECUTE", "ai", "LLMClient.chat", _THIS_FILE, "llm_chat_done",
                          extra={"model": self.model, "ok": True, "reply_len": len(text or "")})
@@ -207,9 +258,10 @@ class LLMClient:
             raise
 
     def _run_tools(self, tool_calls: list[dict], user_perm: int,
-                   msgs: list[dict], trace: list[dict], func: str) -> list[dict]:
+                   msgs: list[dict], trace: list[dict], func: str) -> tuple[list[dict], bool]:
         """执行工具调用，写入消息历史与轨迹。"""
         steps = []
+        has_pending_confirmation = False
         for call in tool_calls:
             name = call["function"]["name"]
             args = _parse_args(call["function"].get("arguments", ""))
@@ -225,9 +277,11 @@ class LLMClient:
             if isinstance(parsed, dict):
                 parsed.setdefault("call_id", call_id)
                 user_safe.setdefault("call_id", call_id)
+                if _result_has_pending_confirmation(parsed):
+                    has_pending_confirmation = True
                 if parsed.get("error_code") == "permission_denied" and parsed.get("expose_to_user") is False:
                     model_view = dict(parsed)
-                    model_view["error"] = parsed.get("llm_message") or parsed.get("error") or "权限不足"
+                    model_view["error"] = parsed.get("llm_message") or parsed.get("error") or "permission denied"
                     model_content = json.dumps(model_view, ensure_ascii=False)
 
                     safe = dict(parsed)
@@ -236,6 +290,8 @@ class LLMClient:
                               "required_perm_bits", "user_perm", "user_perm_labels"):
                         safe.pop(k, None)
                     user_safe = safe
+            if _result_has_pending_confirmation(user_safe):
+                has_pending_confirmation = True
 
             trace.append({"agent_tool": name, "call_id": call_id, "tool_call_id": model_id,
                           "arguments": args, "result": user_safe, "raw_result": raw})
@@ -244,24 +300,25 @@ class LLMClient:
             msgs.append({"role": "tool", "tool_call_id": call["id"], "content": model_content})
             audit_event("TOOL_EXECUTE", "ai", func, _THIS_FILE, f"tool_done tool={name}",
                          extra={"tool_name": name, "ok": True, "call_id": call_id})
-        return steps
+        return steps, has_pending_confirmation
 
     def _retry_with_tool_reminder(self, messages: list[dict], tools: list[dict],
                                   user_perm: int, temperature: float,
                                   round: int) -> dict:
         """模型第一次返回假调用时，追加纠正提示后重试。"""
         correction: dict = {
-            "role": "user",
+            "role": "system",
             "content": (
-                "[系统纠正] 你刚才以文本形式描述了工具调用执行情况，但并未实际通过 tool_calls API 发起调用。\n"
-                "请重新处理用户的请求：如果你认为需要执行工具，请使用 tool_calls 接口发起真实调用；"
-                "如果不需要任何工具，请直接给出有用回答，不要假装执行了工具。"
+                "You described tool execution results in text without actually calling tools via the tool_calls API. "
+                "Re-process the user's request: if tools are needed, use the tool_calls interface to make real calls. "
+                "If no tools are needed, give a helpful answer directly. Never pretend to have executed tools."
             ),
         }
         retry_msgs = list(messages) + [correction]
         resp = self._client.chat.completions.create(
             model=self.model, messages=retry_msgs, temperature=temperature,
-            tools=tools, tool_choice="auto")
+            tools=tools, tool_choice="auto",
+            extra_body=self._extra_body)
         msg = resp.choices[0].message
         rc = _concat_reasoning(getattr(msg, "reasoning_content", None))
         calls = [_normalize_tool_call(
@@ -289,7 +346,8 @@ class LLMClient:
             force_finalize = steps >= max_tool_steps - 1 and len(trace) > 0
             resp = self._client.chat.completions.create(
                 model=self.model, messages=msgs, temperature=temperature,
-                tools=tools, tool_choice="none" if force_finalize else "auto")
+                tools=tools, tool_choice="none" if force_finalize else "auto",
+                extra_body=self._extra_body)
             msg = resp.choices[0].message
             rc = _concat_reasoning(getattr(msg, "reasoning_content", None))
             content = msg.content or ""
@@ -321,9 +379,18 @@ class LLMClient:
             msg_out = _attach_reasoning(
                 {"role": "assistant", "content": content, "tool_calls": calls}, rc)
             msgs.append(msg_out)
-            self._run_tools(calls, user_perm, msgs, trace, func)
+            step_trace, has_pending_confirmation = self._run_tools(calls, user_perm, msgs, trace, func)
 
             steps += 1
+            # 所有工具均失败 → 不重试，直接返回错误让 LLM 解释
+            if step_trace and all(_tool_failed(s) for s in step_trace):
+                errors = [_tool_error(s) for s in step_trace]
+                err_text = "；".join(e for e in errors if e) or "工具执行失败"
+                msgs.append({"role": "system", "content": f"All tool calls in this round failed: {err_text}. Fix the parameters and retry."})
+                return err_text, msgs[base_len:], steps, trace
+            if has_pending_confirmation:
+                pending_reply = content if str(content or "").strip() else "A terminal command requires your approval to proceed."
+                return pending_reply, msgs[base_len:], steps, trace
             if steps >= max_tool_steps:
                 fallback = _build_tool_limit_fallback(trace)
                 msgs.append({"role": "assistant", "content": fallback})
@@ -358,7 +425,8 @@ class LLMClient:
             stream = self._client.chat.completions.create(
                 model=self.model, messages=msgs, temperature=temperature,
                 tools=tools, tool_choice="none" if force_finalize else "auto",
-                stream=True)
+                stream=True,
+                extra_body=self._extra_body)
             content_parts = []
             reasoning_parts = []
             tool_calls_map = {}
@@ -412,7 +480,7 @@ class LLMClient:
             if not calls and _detect_fake_tool_claim(content) and not retried:
                 # 流式模式下已发出去的 delta 不能撤回，追加纠正
                 correction = (
-                    "\n\n> [系统检测] 模型以文本描述了工具调用但未实际执行。正在重新处理…\n\n"
+                    "\n\n> The model described tool calls in text without actually executing them. Retrying...\n\n"
                 )
                 yield {"type": "delta", "content": correction}
 
@@ -438,11 +506,34 @@ class LLMClient:
             msg_out = _attach_reasoning(
                 {"role": "assistant", "content": content, "tool_calls": calls}, rc)
             msgs.append(msg_out)
-            step_trace = self._run_tools(calls, user_perm, msgs, trace, "LLMClient.stream_chat_with_tools")
+            step_trace, has_pending_confirmation = self._run_tools(
+                calls,
+                user_perm,
+                msgs,
+                trace,
+                "LLMClient.stream_chat_with_tools",
+            )
             if step_trace:
                 yield {"type": "tool_step", "trace": step_trace}
 
             steps += 1
+            if step_trace and all(_tool_failed(s) for s in step_trace):
+                errors = [_tool_error(s) for s in step_trace]
+                err_text = "；".join(e for e in errors if e) or "工具执行失败"
+                yield {"type": "done", **(_build_done(err_text, msgs, base_len, steps, trace))}
+                return
+            if has_pending_confirmation:
+                pending_reply = content if str(content or "").strip() else "A terminal command requires your approval to proceed."
+                yield {"type": "done", **(_build_done(pending_reply, msgs, base_len, steps, trace))}
+                audit_event(
+                    "SYSTEM_EXECUTE",
+                    "ai",
+                    "LLMClient.stream_chat_with_tools",
+                    _THIS_FILE,
+                    "stream_paused_pending_confirmation",
+                    extra={"model": self.model, "tool_steps": steps, "tool_trace_len": len(trace)},
+                )
+                return
             if steps >= max_tool_steps:
                 fallback = _build_tool_limit_fallback(trace)
                 msgs.append({"role": "assistant", "content": fallback})

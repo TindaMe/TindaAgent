@@ -7,6 +7,7 @@ import re
 import socket
 import subprocess
 import threading
+import time
 from pathlib import Path
 
 import uvicorn
@@ -16,6 +17,8 @@ from TindaAgent.Process.Architecture.paths import get_runtime_root
 _DEFAULT_PORT = 8000
 _DEFAULT_HOST = "0.0.0.0"
 _DEFAULT_PORT_RETRIES = 20
+_DEFAULT_FIRST_PORT_WAIT_MS = 1800
+_DEFAULT_FIRST_PORT_POLL_MS = 120
 _PORTS_FILE_NAME = ".tinda_ports.list"
 _PORTS_ENV_VAR = "TINDA_ACTIVE_PORTS"
 
@@ -174,10 +177,35 @@ def _is_port_bindable(host: str, port: int) -> bool:
     return True
 
 
-def _pick_port_with_retry(host: str, start_port: int, retries: int) -> tuple[int, int]:
+def _pick_port_with_retry(
+    host: str,
+    start_port: int,
+    retries: int,
+    *,
+    first_port_wait_ms: int = _DEFAULT_FIRST_PORT_WAIT_MS,
+    first_port_poll_ms: int = _DEFAULT_FIRST_PORT_POLL_MS,
+) -> tuple[int, int]:
     max_retries = max(0, int(retries))
     base = int(start_port)
-    for offset in range(max_retries + 1):
+
+    if 0 < base <= 65535:
+        if _is_port_bindable(host, base):
+            return base, 0
+
+        # Ctrl+C 之后端口释放可能有短暂延迟（尤其是 WSL/Windows 端口转发层）。
+        # 先给起始端口一个小等待窗口，避免“第一次重启总跳到 +1”。
+        wait_ms = max(0, int(first_port_wait_ms))
+        poll_ms = max(10, int(first_port_poll_ms))
+        if wait_ms > 0:
+            deadline = time.monotonic() + (wait_ms / 1000.0)
+            while time.monotonic() < deadline:
+                sleep_sec = min(poll_ms / 1000.0, max(0.0, deadline - time.monotonic()))
+                if sleep_sec > 0:
+                    time.sleep(sleep_sec)
+                if _is_port_bindable(host, base):
+                    return base, 0
+
+    for offset in range(1, max_retries + 1):
         candidate = base + offset
         if candidate <= 0 or candidate > 65535:
             break
@@ -462,13 +490,24 @@ if __name__ == "__main__":
         default=_DEFAULT_PORT_RETRIES,
         help=f"端口占用时最多顺延重试次数（每次 +1，默认 {_DEFAULT_PORT_RETRIES}）",
     )
+    parser.add_argument(
+        "--first-port-wait-ms",
+        type=int,
+        default=_DEFAULT_FIRST_PORT_WAIT_MS,
+        help=f"起始端口不可用时的等待窗口（毫秒，默认 {_DEFAULT_FIRST_PORT_WAIT_MS}）",
+    )
     parser.add_argument("--reload", action="store_true", help="启用热重载（默认关闭）")
     parser.add_argument("--no-browser", action="store_true", help="禁用自动打开浏览器（默认会自动打开）")
     args = parser.parse_args()
 
     app_dir = _load_selected_app_dir()
     app_import = _pick_app_import(app_dir)
-    selected_port, offset = _pick_port_with_retry(args.host, int(args.port), int(args.port_retries))
+    selected_port, offset = _pick_port_with_retry(
+        args.host,
+        int(args.port),
+        int(args.port_retries),
+        first_port_wait_ms=int(args.first_port_wait_ms),
+    )
     if offset > 0:
         print(f"[start] 端口 {args.port} 已占用，自动切换到 {selected_port}（+{offset}）")
 
