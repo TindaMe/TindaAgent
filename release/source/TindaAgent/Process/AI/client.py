@@ -365,7 +365,7 @@ class LLMClient:
                 msgs.append({"role": "system", "content": f"All tool calls failed: {err_text}. Fix the parameters and retry. If you cannot fix them, explain the failure to the user in natural language. You MUST respond."})
                 return err_text, msgs[base_len:], steps, trace
             if has_pending_confirmation:
-                pending_reply = content if str(content or "").strip() else "A terminal command requires your approval to proceed."
+                pending_reply = content if str(content or "").strip() else ""
                 return pending_reply, msgs[base_len:], steps, trace
             if steps >= max_tool_steps:
                 fallback = _build_tool_limit_fallback(trace)
@@ -500,7 +500,7 @@ class LLMClient:
                 yield {"type": "done", **(_build_done(err_text, msgs, base_len, steps, trace))}
                 return
             if has_pending_confirmation:
-                pending_reply = content if str(content or "").strip() else "A terminal command requires your approval to proceed."
+                pending_reply = content if str(content or "").strip() else ""
                 yield {"type": "done", **(_build_done(pending_reply, msgs, base_len, steps, trace))}
                 audit_event(
                     "SYSTEM_EXECUTE",
