@@ -2652,7 +2652,12 @@ async def terminal_confirm(req: TerminalConfirmRequest):
         rows = _store.get_context_messages(sid)
         agent_rows, _ = _store_to_agent_messages(rows)
         agent.replace_conversation(agent_rows)
-        agent.history.append({"role": "tool", "tool_call_id": f"tc_recover_{sid}",
+        call_id = f"call_recover_{sid}"
+        agent.history.append({"role": "assistant", "content": None,
+                              "tool_calls": [{"id": call_id, "type": "function",
+                                              "function": {"name": "run_terminal",
+                                                           "arguments": _json.dumps({"cmd": cmd}, ensure_ascii=False)}}]})
+        agent.history.append({"role": "tool", "tool_call_id": call_id,
                               "content": _json.dumps(exec_result, ensure_ascii=False)})
         result = agent._ensure_client().chat_with_tools(agent.history, user_perm=agent.perm, temperature=0.7)
     else:
