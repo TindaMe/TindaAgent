@@ -132,6 +132,10 @@ class Agent:
             if role in {"user", "assistant"} and not content.strip():
                 continue
             item = {"role": role, "content": content}
+            if role == "assistant":
+                rc = msg.get("reasoning_content")
+                if rc is not None:
+                    item["reasoning_content"] = rc
             if role == "tool":
                 tool_call_id = str(msg.get("tool_call_id", "")).strip()
                 if tool_call_id:

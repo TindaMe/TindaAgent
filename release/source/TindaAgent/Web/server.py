@@ -939,7 +939,10 @@ def _store_to_agent_messages(rows: list[dict]) -> tuple[list[dict], dict[str, in
             out.append({"role": "assistant", "content": f"[系统摘要] {content}"})
             stats["included_notice"] += 1
         else:
-            out.append({"role": role, "content": content})
+            msg = {"role": role, "content": content}
+            if role == "assistant" and item.get("reasoning_content") is not None:
+                msg["reasoning_content"] = item["reasoning_content"]
+            out.append(msg)
             if entry_type == "notice":
                 stats["included_notice"] += 1
             else:
@@ -1228,6 +1231,7 @@ def _save_chat_messages(
     user_text: str,
     assistant_text: str,
     *,
+    reasoning_content: str | None = None,
     tool_marker: bool = False,
     tool_trace: list[dict] | None = None,
 ) -> None:
@@ -1244,6 +1248,7 @@ def _save_chat_messages(
             "id": f"m_{uuid.uuid4().hex[:16]}",
             "role": "assistant",
             "content": assistant_text,
+            "reasoning_content": reasoning_content,
             "entry_type": "chat",
             "created_at": _now_iso(),
             "is_summary": False,
@@ -2333,6 +2338,12 @@ async def chat(req: ChatRequest):
     )
 
     result = agent.chat_with_meta(llm_message)
+    # 提取 reasoning_content 以便回传
+    last_reasoning = None
+    for m in reversed(agent.history):
+        if m.get("role") == "assistant" and m.get("reasoning_content") is not None:
+            last_reasoning = m.get("reasoning_content")
+            break
     tool_trace_raw = result.get("tool_trace", [])
     tool_trace = _sanitize_tool_trace_for_user(tool_trace_raw)
     tool_steps = int(result.get("tool_steps", 0))
@@ -2368,6 +2379,7 @@ async def chat(req: ChatRequest):
         sid,
         llm_message,
         save_reply,
+        reasoning_content=last_reasoning,
         tool_marker=bool(tool_steps > 0 and not pending_items),
         tool_trace=tool_trace,
     )
@@ -2564,7 +2576,7 @@ async def chat_stream(
                 sid,
                 llm_message,
                 save_reply,
-                # 流式已把标记内嵌到 assistant 文本，不再额外落一条 tool_marker，避免变成 A-B-标记
+                reasoning_content=None,
                 tool_marker=False,
                 tool_trace=done_payload.get("tool_trace", []),
             )

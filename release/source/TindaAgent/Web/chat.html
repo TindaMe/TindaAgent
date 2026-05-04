@@ -3308,7 +3308,12 @@
     entries.forEach((entry) => {
       const role = String(entry?.role || "").trim();
       const entryType = String(entry?.entry_type || "chat").trim() || "chat";
-      const content = String(entry?.content || "");
+      let content = String(entry?.content || "");
+      // 渲染 reasoning_content 为 > 引用块
+      const reasoning = String(entry?.reasoning_content || "").trim();
+      if (reasoning) {
+        content = reasoning.split("\n").map(l => "> " + l).join("\n") + "\n\n" + content;
+      }
       const turnId = normalizeTurnId(entry?.turn_id || "");
       if (!content.trim()) return;
 
