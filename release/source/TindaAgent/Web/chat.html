@@ -2292,7 +2292,7 @@
       const toolSteps = Math.max(0, Number(data?.tool_steps || 0));
       // confirm 不走 SSE，手动补 >_< 标记
       const marker = (toolSteps > 0) ? "\n\n> >_<\n> --调用工具中--\n" : "";
-      const finalReply = marker ? marker + replyText : replyText;
+      const finalReply = marker ? replyText + marker : replyText;
       if (finalReply.trim()) {
         upsertAssistantTurnBubble(finalReply, { turnId: data?.turn_id, append: true });
       }
