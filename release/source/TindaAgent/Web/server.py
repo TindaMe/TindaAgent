@@ -2659,10 +2659,6 @@ async def terminal_confirm(req: TerminalConfirmRequest):
                                                            "arguments": _json.dumps({"cmd": cmd}, ensure_ascii=False)}}]})
         agent.history.append({"role": "tool", "tool_call_id": call_id,
                               "content": _json.dumps(exec_result, ensure_ascii=False)})
-        # 统一 reasoning_content：store 重建的消息缺失该字段，补齐 None 避免 DeepSeek 400
-        for m in agent.history:
-            if m.get("role") == "assistant" and "reasoning_content" not in m:
-                m["reasoning_content"] = None
         result = agent._ensure_client().chat_with_tools(agent.history, user_perm=agent.perm, temperature=0.7)
     else:
         decision = {

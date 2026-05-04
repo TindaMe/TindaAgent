@@ -221,6 +221,8 @@ class LLMClient:
         audit_event("SYSTEM_EXECUTE", "ai", "LLMClient.chat", _THIS_FILE, "llm_chat_start",
                      extra={"model": self.model, "messages_count": len(messages), "temperature": temperature})
         try:
+            for m in messages:
+                m.pop("reasoning_content", None)
             resp = self._client.chat.completions.create(
                 model=self.model, messages=messages, temperature=temperature,
                 extra_body=self._extra_body)
@@ -291,6 +293,8 @@ class LLMClient:
             ),
         }
         retry_msgs = list(messages) + [correction]
+        for m in retry_msgs:
+            m.pop("reasoning_content", None)
         resp = self._client.chat.completions.create(
             model=self.model, messages=retry_msgs, temperature=temperature,
             tools=tools, tool_choice="auto",
@@ -319,6 +323,8 @@ class LLMClient:
         retried = False  # 每轮对话仅允许一次重试纠正
 
         while True:
+            for m in msgs:
+                m.pop("reasoning_content", None)
             force_finalize = steps >= max_tool_steps - 1 and len(trace) > 0
             resp = self._client.chat.completions.create(
                 model=self.model, messages=msgs, temperature=temperature,
@@ -397,6 +403,8 @@ class LLMClient:
                                             "user_perm": user_perm, "max_tool_steps": max_tool_steps})
 
         while True:
+            for m in msgs:
+                m.pop("reasoning_content", None)
             force_finalize = steps >= max_tool_steps - 1 and len(trace) > 0
             stream = self._client.chat.completions.create(
                 model=self.model, messages=msgs, temperature=temperature,
