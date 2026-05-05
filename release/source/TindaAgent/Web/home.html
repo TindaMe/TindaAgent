@@ -1043,12 +1043,12 @@
 
       // Show switch button for installed, non-current versions
       if (isInstalled && !isCurrent) {
-        const switchBtn = document.createElement(“button”);
-        switchBtn.className = “version-btn secondary”;
-        switchBtn.type = “button”;
-        switchBtn.dataset.action = “switch”;
+        const switchBtn = document.createElement("button");
+        switchBtn.className = "version-btn secondary";
+        switchBtn.type = "button";
+        switchBtn.dataset.action = "switch";
         switchBtn.dataset.version = verNorm;
-        switchBtn.textContent = “切换至此版本”;
+        switchBtn.textContent = "切换至此版本";
         switchBtn.disabled = versionModalBusy || !verNorm;
         actions.appendChild(switchBtn);
       }
