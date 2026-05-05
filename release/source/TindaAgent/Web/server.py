@@ -222,7 +222,7 @@ def _build_runtime_version_state() -> dict[str, object]:
         "source_label": source_label,
         "current_path": runtime_app_path,
         "switched_at": str(current.get("switched_at", "")),
-        "switch_enabled": False,
+        "switch_enabled": True,
     }
 
 
@@ -1726,10 +1726,13 @@ async def install_system_version(req: VersionInstallRequest):
 @app.post("/system/version/switch")
 async def switch_system_version(req: VersionSwitchRequest):
     _require_admin_user()
-    return JSONResponse(
-        {"ok": False, "error": "version switch is disabled by policy"},
-        status_code=410,
-    )
+    version = str(req.version or "").strip()
+    if not version:
+        return JSONResponse({"ok": False, "error": "version required"}, status_code=400)
+    result = _version_mgr.switch_version(version)
+    if not bool(result.get("ok", False)):
+        return JSONResponse(result, status_code=400)
+    return JSONResponse(result)
 
 
 @app.post("/system/version/snapshot")

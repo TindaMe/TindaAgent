@@ -1041,7 +1041,17 @@
         actions.appendChild(installBtn);
       }
 
-      // 按产品策略：前端不提供“切换版本”按钮，仅保留安装入口。
+      // Show switch button for installed, non-current versions
+      if (isInstalled && !isCurrent) {
+        const switchBtn = document.createElement(“button”);
+        switchBtn.className = “version-btn secondary”;
+        switchBtn.type = “button”;
+        switchBtn.dataset.action = “switch”;
+        switchBtn.dataset.version = verNorm;
+        switchBtn.textContent = “切换至此版本”;
+        switchBtn.disabled = versionModalBusy || !verNorm;
+        actions.appendChild(switchBtn);
+      }
     }
 
     if (!actions.childNodes.length) {
@@ -1140,17 +1150,14 @@
   async function performVersionAction(action, version) {
     const ver = normalizeVersion(version);
     if (!ver || versionModalBusy) return;
-    if (String(action || "") === "switch") {
-      setVersionModalMessage("版本切换已禁用。", "error");
-      return;
-    }
     if (!isAdminLoggedIn()) {
       setVersionModalMessage("当前账户没有管理员权限。", "error");
       return;
     }
     versionModalBusy = true;
     const actionLabel = action === "install" ? "安装" : "切换";
-    setVersionModalMessage(`${actionLabel} ${withV(ver)} 中...`);
+    const hint = action === "install" ? "（下载中，请稍候...）" : "";
+    setVersionModalMessage(`${actionLabel} ${withV(ver)} 中${hint}`);
     try {
       const endpoint = action === "install" ? "/system/version/install" : "/system/version/switch";
       const res = await apiFetch(endpoint, {
@@ -1162,7 +1169,7 @@
       if (!res.ok || data?.ok === false) {
         throw new Error(String(data?.error || `HTTP ${res.status}`));
       }
-      const restartHint = action === "switch" && data?.requires_restart ? "，请重启服务生效。" : "";
+      const restartHint = action === "switch" && data?.requires_restart ? " 请重启服务以应用新版本。" : "";
       setVersionModalMessage(`${actionLabel}成功: ${withV(ver)}${restartHint}`, "success");
     } catch (e) {
       setVersionModalMessage(`${actionLabel}失败：${String(e?.message || e)}`, "error");

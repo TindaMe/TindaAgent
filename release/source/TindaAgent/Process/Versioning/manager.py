@@ -152,6 +152,29 @@ class VerifyResult:
     error: str = ""
 
 
+# ── Schema Migration Registry ────────────────────────────────────
+# Each migration function receives (shared_root: Path, data_root: Path, log_root: Path)
+# and must return {"ok": True} or {"ok": False, "error": "..."}.
+# Register new migrations by adding entries to _MIGRATIONS.
+# Example:
+#   _MIGRATIONS[2] = migrate_v1_to_v2
+#
+_MIGRATIONS: dict[int, Any] = {}
+
+# v1 → v2: example migration — reorganize Data directory structure
+def _migrate_v1_to_v2(shared_root: Path, data_root: Path, log_root: Path) -> dict[str, Any]:
+    """Schema v1 → v2: create User backup directory, ensure canonical paths."""
+    try:
+        for d in ["User", "System", "Sessions"]:
+            (data_root / d).mkdir(parents=True, exist_ok=True)
+        (data_root / "User" / "_backups").mkdir(parents=True, exist_ok=True)
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+_MIGRATIONS[2] = _migrate_v1_to_v2
+
+
 class VersionManager:
     def __init__(self, runtime_root: Path | None = None) -> None:
         ensure_runtime_dirs()
@@ -177,14 +200,33 @@ class VersionManager:
     def _ensure_default_pubkeys(self) -> None:
         if self.pubkeys_file.exists():
             return
+        # Try to auto-generate from an existing private key
+        priv_path = self.trust_dir / "release_private.key"
+        pubkey_b64 = ""
+        key_enabled = False
+        key_id = "tinda-release-dev"
+        if priv_path.exists():
+            try:
+                from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+                from cryptography.hazmat.primitives.serialization import PublicFormat, Encoding
+                import base64 as _b64
+                priv_raw = _b64.b64decode(priv_path.read_text(encoding="utf-8").strip())
+                priv = Ed25519PrivateKey.from_private_bytes(priv_raw)
+                pub = priv.public_key()
+                pubkey_b64 = _b64.b64encode(pub.public_bytes(Encoding.Raw, PublicFormat.Raw)).decode()
+                key_enabled = True
+                key_id = "tinda-release-2026"
+            except Exception:
+                pubkey_b64 = ""
+                key_enabled = False
         payload = {
             "version": 1,
             "keys": [
                 {
-                    "key_id": "tinda-release-dev",
+                    "key_id": key_id,
                     "algorithm": "ed25519",
-                    "public_key_b64": "",  # 发布时替换
-                    "enabled": False,
+                    "public_key_b64": pubkey_b64,
+                    "enabled": key_enabled,
                 }
             ],
             "updated_at": _now_iso(),
@@ -253,6 +295,23 @@ class VersionManager:
             extra={"version": target_version, "app_path": target_app_path},
         )
         return row
+
+    def _validate_manifest_schema(self, manifest: dict[str, Any]) -> dict[str, Any]:
+        """Validate manifest against release_manifest.schema.json. Returns {"ok": True} or {"ok": False, "error": ...}."""
+        schema_path = Path(__file__).resolve().parent / "release_manifest.schema.json"
+        if not schema_path.exists():
+            return {"ok": False, "error": "schema file not found"}
+        try:
+            schema = json.loads(schema_path.read_text(encoding="utf-8"))
+            import jsonschema
+            jsonschema.validate(manifest, schema)
+            return {"ok": True}
+        except json.JSONDecodeError as e:
+            return {"ok": False, "error": f"schema file invalid JSON: {e}"}
+        except jsonschema.ValidationError as e:
+            return {"ok": False, "error": f"manifest schema violation: {e.message}"}
+        except Exception as e:
+            return {"ok": False, "error": f"schema validation error: {e}"}
 
     def _load_enabled_pubkeys(self) -> list[tuple[str, Ed25519PublicKey]]:
         data = _read_json(self.pubkeys_file, {})
@@ -374,6 +433,10 @@ class VersionManager:
             "max_compatible_schema": int(_read_json(self.compat_file, {"schema_version": 1}).get("schema_version", 1)),
         }
         manifest_bytes = _json_canonical_bytes(manifest_obj)
+
+        # Validate against schema (warn but don't block for local snapshots)
+        schema_check = self._validate_manifest_schema(manifest_obj)
+
         sig_bytes = b"local-snapshot-signature"
         signature_id = "local_" + _sha256_bytes(manifest_bytes + sig_bytes)[:16]
         manifest_sha = _sha256_bytes(manifest_bytes)
@@ -550,8 +613,58 @@ class VersionManager:
         if current_schema == target_schema:
             return {"ok": True, "from": current_schema, "to": target_schema, "steps": []}
 
-        # 当前先实现安全骨架：记录迁移并切 schema；后续可插入逐版本真实迁移步骤
-        steps = [{"from": current_schema, "to": target_schema, "action": "schema_state_update"}]
+        if target_schema < current_schema:
+            return {"ok": False, "error": f"cannot downgrade schema: {current_schema} -> {target_schema}"}
+
+        data_root = get_data_root()
+        log_root = get_log_root()
+
+        steps: list[dict[str, Any]] = []
+        for ver in range(current_schema + 1, target_schema + 1):
+            migrator = _MIGRATIONS.get(ver)
+            if migrator is None:
+                steps.append({
+                    "from": ver - 1, "to": ver,
+                    "action": "skip",
+                    "note": f"no migration registered for schema {ver}",
+                })
+                continue
+            step_info = {"from": ver - 1, "to": ver, "action": "migrate"}
+            try:
+                result = migrator(self.shared_root, data_root, log_root)
+                step_info["result"] = result
+                if not result.get("ok"):
+                    step_info["action"] = "failed"
+                    steps.append(step_info)
+                    return {
+                        "ok": False,
+                        "from": current_schema,
+                        "to": ver,
+                        "steps": steps,
+                        "error": f"migration {ver - 1} -> {ver} failed: {result.get('error', 'unknown')}",
+                    }
+                step_info["action"] = "migrated"
+            except Exception as e:
+                step_info["action"] = "exception"
+                step_info["error"] = str(e)
+                steps.append(step_info)
+                return {
+                    "ok": False,
+                    "from": current_schema,
+                    "to": ver,
+                    "steps": steps,
+                    "error": f"migration {ver - 1} -> {ver} raised: {e}",
+                }
+            steps.append(step_info)
+            audit_event(
+                op_type="SYSTEM_WRITE",
+                subsystem="versioning",
+                func="VersionManager._run_schema_migration",
+                file_path=_THIS_FILE,
+                content=f"schema_migration_step {ver - 1} -> {ver}",
+                extra=step_info,
+            )
+
         state["schema_version"] = int(target_schema)
         state["updated_at"] = _now_iso()
         _write_json_atomic(self.compat_file, state)
@@ -610,6 +723,11 @@ class VersionManager:
         if not isinstance(manifest_obj, dict):
             return {"ok": False, "error": "manifest invalid"}
 
+        # Validate manifest structure
+        schema_result = self._validate_manifest_schema(manifest_obj)
+        if not schema_result.get("ok"):
+            return {"ok": False, "error": f"manifest schema validation failed: {schema_result.get('error')}"}
+
         vr = self.verify_manifest(manifest_obj, sig_bytes)
         if not vr.ok:
             return {"ok": False, "error": f"manifest verify failed: {vr.error}"}
@@ -629,8 +747,52 @@ class VersionManager:
         archive_path = version_dir / "package.bin"
         archive_path.write_bytes(archive_bytes)
 
-        # 最小实现：保存安装包，后续可扩展自动解压。当前 app_path 指向版本目录 app。
-        app_dir.mkdir(parents=True, exist_ok=True)
+        # Detect archive format by magic bytes, then extract
+        import zipfile as _zf, tarfile as _tf, io as _io
+        archive_ext = ""
+        if _zf.is_zipfile(_io.BytesIO(archive_bytes)):
+            archive_ext = ".zip"
+        else:
+            try:
+                _tf.open(fileobj=_io.BytesIO(archive_bytes))
+                archive_ext = ".tar.gz"
+            except Exception:
+                pass
+
+        if not archive_ext:
+            return {"ok": False, "error": "cannot detect archive format (expected .zip or .tar.gz)"}
+
+        import tempfile as _tempfile
+        tmpdir = _tempfile.mkdtemp(prefix="tinda_extract_")
+        try:
+            shutil.unpack_archive(str(archive_path), tmpdir)
+        except Exception as e:
+            try:
+                shutil.rmtree(tmpdir, ignore_errors=True)
+            except Exception:
+                pass
+            return {"ok": False, "error": f"archive extraction failed: {e}"}
+
+        # GitHub wraps release archives in repo-ref-xxxx/; find and flatten
+        extracted_root = Path(tmpdir)
+        entries = list(extracted_root.iterdir())
+        if len(entries) == 1 and entries[0].is_dir():
+            extracted_root = entries[0]
+
+        if app_dir.exists():
+            shutil.rmtree(app_dir, ignore_errors=True)
+        shutil.copytree(str(extracted_root), str(app_dir), dirs_exist_ok=True)
+
+        try:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+        except Exception:
+            pass
+
+        # Verify at least one entry point exists
+        if not (app_dir / "TindaAgent" / "Web" / "server.py").exists() \
+           and not (app_dir / "Web" / "server.py").exists() \
+           and not (app_dir / "Process" / "AI" / "agent.py").exists():
+            return {"ok": False, "error": "archive missing entry point: TindaAgent/Web/server.py or Web/server.py"}
 
         _write_json_atomic(version_dir / _MANIFEST_FILE, manifest_obj)
         (version_dir / _SIG_FILE).write_bytes(sig_bytes)

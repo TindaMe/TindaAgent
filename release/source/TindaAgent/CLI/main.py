@@ -457,12 +457,36 @@ class CLI:
             print(f"  {B}TindaAgent{R} {G}v{_VERSION}{R}  model: {D}{self.client.model}{R}  perm: {Y}{USER_PERM}{R}")
             try:
                 from TindaAgent.Process.Versioning import get_version_manager
-                remote = get_version_manager().list_remote_releases()
-                latest = remote.get("latest_verified", "")
-                if latest and str(latest).lstrip("v") != str(_VERSION).lstrip("v"):
-                    print(f"  {Y}新版本可用: v{latest}{R}  {D}pip install --upgrade tindaagent{R}")
-                elif latest:
-                    print(f"  {D}已是最新版本{R}")
+                vm = get_version_manager()
+                current = vm.get_current()
+                sig = str(current.get("signature_id", "")).strip()
+                verified = bool(current.get("verified", False))
+                source = str(current.get("source", "local"))
+                if sig:
+                    print(f"  sig: {D}{sig[:24]}...{R}  verified: {G if verified else Y}{verified}{R}  source: {D}{source}{R}")
+                # Show local versions
+                local = vm.list_local_versions()
+                if local:
+                    print(f"  {B}本地版本:{R}")
+                    for ver in local[:5]:
+                        marker = " *" if ver.get("is_current") else "  "
+                        status = ""
+                        if ver.get("is_current"):
+                            status = f" {G}(当前){R}"
+                        elif ver.get("installed"):
+                            status = f" {D}(已安装){R}"
+                        print(f"    {marker} v{ver['version']}{status}")
+                    if len(local) > 5:
+                        print(f"    ... 还有 {len(local) - 5} 个版本")
+                # Check remote
+                remote = vm.list_remote_releases()
+                latest_v = remote.get("latest_verified", {})
+                if isinstance(latest_v, dict) and latest_v.get("version"):
+                    lver = str(latest_v.get("version", "")).lstrip("v")
+                    if lver != str(_VERSION).lstrip("v"):
+                        print(f"  {Y}新版本可用: v{lver}{R}  {D}使用 Web 版本管理安装{R}")
+                    else:
+                        print(f"  {D}已是最新版本{R}")
             except Exception:
                 pass
 
