@@ -41,6 +41,11 @@ from TindaAgent.Process.Architecture.paths import (
 )
 from TindaAgent.Process.Observability import audit_event
 from TindaAgent.Web.session_store import SessionStore, SessionStoreError, cleanup_legacy_chat_records
+from TindaAgent.Web.settings_backend import (
+    load_web_settings, save_web_settings,
+    get_restore_last_session, get_last_session_id, set_last_session_id,
+    load_terminal_settings, save_terminal_settings,
+)
 from TindaAgent.Web.tool_runtime import ToolRuntimeManager
 
 app = FastAPI()
@@ -85,8 +90,11 @@ if not _cleanup_flag_file.exists():
     _cleanup_flag_file.parent.mkdir(parents=True, exist_ok=True)
     _cleanup_flag_file.write_text("ok\n", encoding="utf-8")
 
-# 每次启动清理空会话
-_empties = _store.cleanup_empty_sessions()
+# 每次启动清理空会话（若开启恢复上次会话则保留最后会话）
+_protected_session_id = ""
+if get_restore_last_session():
+    _protected_session_id = get_last_session_id()
+_empties = _store.cleanup_empty_sessions(protect_session_id=_protected_session_id or None)
 if _empties:
     logger.info("cleaned up %d empty sessions", _empties)
 
@@ -1614,6 +1622,35 @@ async def chat_page():
 @app.get("/settings", response_class=HTMLResponse)
 async def settings_page():
     return _HTML_SETTINGS
+
+
+# ── Web Settings API ───────────────────────────────────────────────
+@app.get("/web-settings")
+async def get_web_settings():
+    return load_web_settings()
+
+
+@app.put("/web-settings")
+async def put_web_settings(data: dict[str, Any]):
+    _require_login()
+    save_web_settings(data)
+    return load_web_settings()
+
+
+# ── Terminal Settings API ──────────────────────────────────────────
+@app.get("/terminal/settings")
+async def get_terminal_settings():
+    return load_terminal_settings()
+
+
+@app.put("/terminal/settings")
+async def put_terminal_settings(data: dict[str, Any]):
+    _require_login()
+    return save_terminal_settings(
+        whitelist=data.get("whitelist"),
+        blacklist=data.get("blacklist"),
+        bypass_terminal_confirm=data.get("bypass_terminal_confirm"),
+    )
 
 
 @app.get("/model-diagnostics", response_class=HTMLResponse)

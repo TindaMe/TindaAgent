@@ -2762,7 +2762,37 @@
   }
 
   async function ensureActiveSession() {
+    // Check web-settings for restore_last_session policy
+    let restoreEnabled = false;
+    let serverLastSid = "";
+    try {
+      const wr = await fetch("/web-settings");
+      if (wr.ok) {
+        const ws = await wr.json();
+        if (ws?.restoreLastSession && ws?.last_session_id) {
+          restoreEnabled = true;
+          serverLastSid = String(ws.last_session_id).trim();
+        }
+      }
+    } catch {}
+
     let sid = String(localStorage.getItem(SESSION_KEY) || "").trim();
+
+    // If restore is enabled and server has a saved session, prefer it
+    if (restoreEnabled && serverLastSid) {
+      try {
+        const res = await apiFetch("/sessions?limit=500&offset=0");
+        if (res.ok) {
+          const data = await res.json();
+          const list = Array.isArray(data?.sessions) ? data.sessions : [];
+          const found = list.find((x) => String(x?.id || "") === serverLastSid);
+          if (found) {
+            sid = serverLastSid;
+          }
+        }
+      } catch {}
+    }
+
     if (sid) {
       try {
         const res = await apiFetch("/sessions?limit=500&offset=0");
@@ -2806,6 +2836,12 @@
     const sid = String(sessionId || "").trim();
     if (!sid) return;
     localStorage.setItem(SESSION_KEY, sid);
+    // Notify server of last session for restore-later feature
+    apiFetch("/web-settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ last_session_id: sid }),
+    }).catch(() => {});
     activeSessionTitle = String(title || "新对话");
     renderHeaderStatus();
     refreshContextUsageLength(sid).catch(() => {});

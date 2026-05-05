@@ -340,11 +340,13 @@ class SessionStore:
             )
             return True
 
-    def cleanup_empty_sessions(self) -> int:
-        """删除所有 message_count=0 的空会话，返回删除数。"""
+    def cleanup_empty_sessions(self, protect_session_id: str | None = None) -> int:
+        """删除所有 message_count=0 的空会话，返回删除数。
+        若 protect_session_id 非空，该会话即使为空也保留。"""
         payload = self._read_sessions()
         old = payload.get("sessions", [])
-        empty = [it for it in old if int(it.get("message_count", 0)) <= 0]
+        pid = (protect_session_id or "").strip()
+        empty = [it for it in old if int(it.get("message_count", 0)) <= 0 and (not pid or str(it.get("id", "")) != pid)]
         if not empty:
             return 0
         new_rows = [it for it in old if int(it.get("message_count", 0)) > 0]

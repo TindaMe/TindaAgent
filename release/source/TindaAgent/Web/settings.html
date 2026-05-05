@@ -378,6 +378,16 @@
           <span class="slider"></span>
         </label>
       </div>
+      <div class="toggle-row">
+        <div>
+          <label>启动时恢复上次会话</label>
+          <div class="hint">服务重启后自动恢复最近使用的会话</div>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="settingRestoreSession">
+          <span class="slider"></span>
+        </label>
+      </div>
     </div>
 
     <div class="card">
@@ -446,17 +456,43 @@
       return fetch(url, { ...options, headers });
     }
 
-    function loadSettings() {
+    let _settingsCache = null;
+
+    async function loadSettings() {
+      if (_settingsCache) return _settingsCache;
+      try {
+        const res = await fetch("/web-settings");
+        if (res.ok) {
+          _settingsCache = await res.json();
+          return _settingsCache;
+        }
+      } catch {}
       try {
         const raw = localStorage.getItem(SETTINGS_KEY);
-        return raw ? JSON.parse(raw) : {};
+        const fallback = raw ? JSON.parse(raw) : {};
+        _settingsCache = fallback;
+        return fallback;
       } catch { return {}; }
     }
 
-    function saveSettings(obj) {
-      const cur = loadSettings();
-      Object.assign(cur, obj);
-      localStorage.setItem(SETTINGS_KEY, JSON.stringify(cur));
+    async function saveSettings(obj) {
+      // Update local cache immediately for UI responsiveness
+      if (_settingsCache) Object.assign(_settingsCache, obj);
+      else _settingsCache = obj;
+      try {
+        await apiFetch("/web-settings", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(obj),
+        });
+      } catch {}
+      // Also write to localStorage as fallback
+      try {
+        const cur = localStorage.getItem(SETTINGS_KEY);
+        const parsed = cur ? JSON.parse(cur) : {};
+        Object.assign(parsed, obj);
+        localStorage.setItem(SETTINGS_KEY, JSON.stringify(parsed));
+      } catch {}
     }
 
     function showToast(text) {
@@ -468,7 +504,10 @@
     }
 
     // --- Init ---
-    const s = loadSettings();
+    let s = {};
+
+    (async function initSettings() {
+      s = await loadSettings();
 
     const streamEl = document.getElementById("settingStream");
     streamEl.checked = s.streamEnabled !== false;
@@ -484,6 +523,15 @@
       saveSettings({ termOpen: termEl.checked });
       showToast(termEl.checked ? "已开启默认终端" : "已关闭默认终端");
     });
+
+    const restoreSessionEl = document.getElementById("settingRestoreSession");
+    if (restoreSessionEl) {
+      restoreSessionEl.checked = s.restoreLastSession === true;
+      restoreSessionEl.addEventListener("change", () => {
+        saveSettings({ restoreLastSession: restoreSessionEl.checked });
+        showToast(restoreSessionEl.checked ? "已开启恢复上次会话" : "已关闭恢复上次会话");
+      });
+    }
 
     const tokenEl = document.getElementById("settingTokenLimit");
     tokenEl.value = String(s.tokenLimit || 16000);
@@ -565,6 +613,8 @@
 
       quickGrid.appendChild(row);
     });
+
+    })(); // end initSettings async IIFE
 
     // Terminal settings
     const termWhitelistEl = document.getElementById("termWhitelist");
