@@ -6,3 +6,19 @@ __pycache__/
 venv/
 .vscode/
 .idea/
+
+# Version management artifacts
+~/.tinda/
+*.tmp
+package.bin
+manifest.sig
+
+# Node
+node_modules/
+package-lock.json
+
+# Backup/temp
+*.bak
+*.swp
+.DS_Store
+migrations/backup_*/
