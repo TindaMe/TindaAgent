@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from TindaAgent.Tool import tool as tool_registry
+from TindaAgent.Permission.errors import PermissionDeniedError
 from TindaAgent.Process.Observability import audit_event
 
 _THIS_FILE = __file__
@@ -294,7 +295,7 @@ class ToolRuntimeManager:
         with contextlib.redirect_stdout(capture):
             try:
                 result = tool_registry.run_tool(tool_name, user_perm, *args)
-            except (ValueError, PermissionError) as e:
+            except (ValueError, PermissionError, PermissionDeniedError) as e:
                 self._emit_step(session_id, job_id, "out", str(e), cls="err")
                 self._emit_step(session_id, job_id, "sep", "─" * 36)
                 self._set_job_status(session_id, job_id, "failed", str(e))

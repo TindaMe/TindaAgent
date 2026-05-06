@@ -224,7 +224,6 @@ class GlobalAuditEngine:
             fp.write(json.dumps(json_event, ensure_ascii=False, default=str) + "\n")
         idx[str(eid)] = int(offset)
         # 分摊写入：每 32 条持久化一次索引
-        idx.setdefault("_write_count", idx.get("_write_count", 0))
         idx["_write_count"] = int(idx.get("_write_count", 0)) + 1
         try:
             self._files.total_idx.write_text(json.dumps(idx, ensure_ascii=False), encoding="utf-8")

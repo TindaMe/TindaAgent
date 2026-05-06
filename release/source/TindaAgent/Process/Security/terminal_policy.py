@@ -72,7 +72,8 @@ def get_blacklist() -> list[str]:
 
 
 def is_bypass_enabled(user_perm: int) -> bool:
-    if (user_perm & 511) != 511:
+    from TindaAgent.Process.Architecture import perm
+    if (user_perm & perm.USER_ADMIN) != perm.USER_ADMIN:
         return False
     s = load_settings()
     # 默认开启 bypass（未配置时直接允许执行）

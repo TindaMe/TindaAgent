@@ -38,7 +38,9 @@ def c(text: str, color: str) -> str:
     return f"{C.get(color, '')}{text}{C['reset']}"
 
 
-def _find_pending_in_result(r: dict) -> dict | None:
+def _find_pending_in_result(r: dict | None) -> dict | None:
+    if not isinstance(r, dict):
+        return None
     for cand in (r, r.get("result") if isinstance(r.get("result"), dict) else None):
         if isinstance(cand, dict) and cand.get("pending_confirmation"):
             return cand

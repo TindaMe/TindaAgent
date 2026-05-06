@@ -2024,6 +2024,8 @@
   let sessionsCache = [];
   let activeSessionTitle = "新对话";
   let statusContextUsageLength = 0;
+  let autoCompressInFlight = false;
+  let lastAutoCompressTime = 0;
   let gatewayOnline = true;
   let gatewayHeartbeatTimer = 0;
   let toolPollTimer = 0;
@@ -2151,6 +2153,33 @@
       statusContextUsageLength = normalizeStatusCount(data?.usage_length);
       renderHeaderStatus();
       setGatewayOnlineState(true);
+
+      // Auto-compression: check if token usage exceeds threshold
+      try {
+        const usageLen = Number(data?.usage_length || 0);
+        if (usageLen > 0 && !autoCompressInFlight) {
+          let threshold = 0;
+          const raw = sessionStorage.getItem("tinda_max_context_tokens");
+          if (raw) threshold = parseInt(raw, 10) || 0;
+          if (!threshold) {
+            const s = JSON.parse(localStorage.getItem("tinda_settings") || "{}");
+            threshold = typeof s.tokenLimit === "number" ? s.tokenLimit : 0;
+          }
+          if (!threshold) threshold = 16000;
+          if (usageLen > threshold) {
+            const now = Date.now();
+            if (now - lastAutoCompressTime > 300000) {
+              autoCompressInFlight = true;
+              lastAutoCompressTime = now;
+              try {
+                await compressCurrentContext();
+              } finally {
+                autoCompressInFlight = false;
+              }
+            }
+          }
+        }
+      } catch {}
     } catch {
       // 网关探测由独立心跳负责；这里保持上一次可用值，避免 UI 抖动。
     }

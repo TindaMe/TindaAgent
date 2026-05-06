@@ -2,6 +2,17 @@
 
 本文档用于补录 TindaAgent 的版本演进历史，后续按版本持续维护。
 
+## v1.7.16 - 2026-05-07
+
+1. **辅助模型可配置化** — 标题生成和上下文压缩模型不再硬编码，支持 Settings 页面下拉选择 + 环境变量（`TINDA_TITLE_MODEL` / `TINDA_COMPRESS_MODEL`），默认仍为 `deepseek-v4-flash`。优先级：Web Settings > 环境变量 > 默认值。
+2. **自动压缩上下文** — 修复自动压缩"三段断链"：补上缺失的 `PATCH /sessions/{id}/config` 端点、context-usage 返回 `max_context_tokens`、前端 `refreshContextUsageLength` 检测阈值超限后自动触发压缩（5 分钟冷却）。
+3. **修复 token 计数虚高** — `_estimate_context_usage_length` 新增 `entry_type` 过滤（仅计入 `chat` + `notice`），与 `_store_to_agent_messages` 过滤逻辑对齐，状态栏不再计入终端/工具标记等不入 LLM 的消息。
+4. **终端拒绝链路完善** — `agent.py` resume 流程区分 `user_denied` 与正常执行，分别注入不同 system 提示；`tool.py` run_terminal 拒绝返回 `ok: False` + `error_code: user_denied`。
+5. **CLI 稳健性增强** — 异常时回滚未完成对话轮次、resume 失败清理 `_held_messages`、版本检测兼容 GitHub API dict 格式、标题修复调用 `SessionManager.set_session_title`。
+6. **版本管理加固** — HTTP 下载增加状态码检查、安装失败自动清理残留、switch 失败回滚增加审计事件、schema 校验兼容缺少 `jsonschema` 库、兼容检查增加 `min_compat > max_compat` 非法边界防护、快照包增加符号链接跳过。
+7. **权限系统清理** — `terminal_policy.is_bypass_enabled` 改用 `perm.USER_ADMIN` 替换硬编码 511；`tool_runtime` 捕获 `PermissionDeniedError`；`tool.run_tool` 自动注入 `_caller_perm` 参数。
+8. **健壮性兜底** — `userdata` 种子用户创建包裹 try/except；`records_store` 修复 chatlike_idx 越界；`CLI/display._find_pending_in_result` 处理 None 输入；`audit.py` 清理冗余 setdefault。
+
 ## v1.7.15 - 2026-05-04
 
 1. **CLI 正式发布** — 基于 prompt_toolkit 的 `tinda` 命令：流式对话、Tab 补全、↑↓ 历史、会话管理（/sessions /session /new /delete /reset /last /model /version /quit）、模型选择（↑↓ + Enter）、标题异步生成、启动版本检测。

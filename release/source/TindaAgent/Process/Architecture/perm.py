@@ -23,7 +23,7 @@ USER_ADMIN = USER_BASE | SYSTEM_ALL
 LLM_BASE = PUBLIC_ALL
 
 class PermManager:
-    task_dict = dict[str, int]()
+    task_dict: dict[str, int] = {}
     @classmethod
     def add_task(cls, task: str, perm: int) -> None:
         """

@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import io
 import json
 import re
 import shutil
+import tarfile
 import tempfile
 import urllib.error
 import urllib.request
+import zipfile
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -65,6 +68,8 @@ def _sha256_bytes(data: bytes) -> str:
 
 
 def _sha256_file(path: Path) -> str:
+    if not path.exists():
+        return ""
     h = hashlib.sha256()
     with path.open("rb") as fp:
         for chunk in iter(lambda: fp.read(1024 * 1024), b""):
@@ -79,6 +84,8 @@ def _copytree_filtered(src: Path, dst: Path, skip_names: set[str] | None = None)
         skip_names = set()
     for item in src.iterdir():
         if item.name in skip_names:
+            continue
+        if item.is_symlink():
             continue
         target = dst / item.name
         if item.is_dir():
@@ -127,6 +134,10 @@ def _http_get_json(url: str, timeout: int = 8) -> Any:
         },
     )
     with urllib.request.urlopen(req, timeout=timeout) as resp:
+        if resp.status < 200 or resp.status >= 300:
+            raise urllib.error.HTTPError(
+                url, resp.status, f"HTTP {resp.status} for {url}", resp.headers, None
+            )
         charset = resp.headers.get_content_charset() or "utf-8"
         text = resp.read().decode(charset, errors="replace")
         return json.loads(text)
@@ -141,6 +152,10 @@ def _http_get_bytes(url: str, timeout: int = 12) -> bytes:
         },
     )
     with urllib.request.urlopen(req, timeout=timeout) as resp:
+        if resp.status < 200 or resp.status >= 300:
+            raise urllib.error.HTTPError(
+                url, resp.status, f"HTTP {resp.status} for {url}", resp.headers, None
+            )
         return resp.read()
 
 
@@ -216,9 +231,17 @@ class VersionManager:
                 pubkey_b64 = _b64.b64encode(pub.public_bytes(Encoding.Raw, PublicFormat.Raw)).decode()
                 key_enabled = True
                 key_id = "tinda-release-2026"
-            except Exception:
+            except Exception as e:
                 pubkey_b64 = ""
                 key_enabled = False
+                audit_event(
+                    op_type="SYSTEM_WARNING",
+                    subsystem="versioning",
+                    func="VersionManager._ensure_default_pubkeys",
+                    file_path=_THIS_FILE,
+                    content=f"failed to derive pubkey from private key: {e}",
+                    extra={"private_key_path": str(priv_path), "error": str(e)},
+                )
         payload = {
             "version": 1,
             "keys": [
@@ -310,6 +333,8 @@ class VersionManager:
             return {"ok": False, "error": f"schema file invalid JSON: {e}"}
         except jsonschema.ValidationError as e:
             return {"ok": False, "error": f"manifest schema violation: {e.message}"}
+        except ImportError:
+            return {"ok": False, "error": "jsonschema library not installed; install it to enable schema validation"}
         except Exception as e:
             return {"ok": False, "error": f"schema validation error: {e}"}
 
@@ -358,9 +383,11 @@ class VersionManager:
 
     def list_local_versions(self) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
+        if not self.versions_root.exists():
+            return rows
         current = self.get_current()
         cur_ver = _normalize_version_text(str(current.get("version", "")))
-        for path in sorted(self.versions_root.iterdir() if self.versions_root.exists() else [], key=lambda p: p.name):
+        for path in sorted(self.versions_root.iterdir(), key=lambda p: p.name):
             if not path.is_dir():
                 continue
             manifest_path = path / _MANIFEST_FILE
@@ -373,7 +400,7 @@ class VersionManager:
             verified = bool(meta.get("verified", False))
             signature_id = str(meta.get("signature_id", ""))
             verify_error = str(meta.get("verify_error", ""))
-            if not verify_error and source == "local":
+            if not verify_error and source in {"local", "local_snapshot"}:
                 verify_error = "local version has no verified release signature"
             rows.append(
                 {
@@ -400,14 +427,15 @@ class VersionManager:
         if version_dir.exists():
             return {"ok": False, "error": f"version already exists: {target}"}
 
-        app_dir = version_dir / "app"
-        version_dir.mkdir(parents=True, exist_ok=True)
-        app_dir.mkdir(parents=True, exist_ok=True)
-
         src_project = Path(__file__).resolve().parents[3]
         src_project_version = _read_version_from_pyproject(src_project)
         if src_project_version and src_project_version != target:
             return {"ok": False, "error": f"snapshot version mismatch: target={target}, source={src_project_version}"}
+
+        app_dir = version_dir / "app"
+        version_dir.mkdir(parents=True, exist_ok=True)
+        app_dir.mkdir(parents=True, exist_ok=True)
+
         try:
             _copytree_filtered(src_project, app_dir, skip_names={"__pycache__", ".git", ".pytest_cache", ".mypy_cache"})
             shared_data = self.shared_root / "data"
@@ -425,7 +453,7 @@ class VersionManager:
             "app": "TindaAgent",
             "version": target,
             "build_time": _now_iso(),
-            "release_channel": "local-snapshot",
+            "release_channel": "prerelease",
             "commit": "local-snapshot",
             "archive_sha256": "",
             "data_schema_version": int(_read_json(self.compat_file, {"schema_version": 1}).get("schema_version", 1)),
@@ -433,6 +461,7 @@ class VersionManager:
             "max_compatible_schema": int(_read_json(self.compat_file, {"schema_version": 1}).get("schema_version", 1)),
         }
         manifest_bytes = _json_canonical_bytes(manifest_obj)
+        manifest_obj["commit"] = "local-snapshot-" + _sha256_bytes(manifest_bytes)[:16]
 
         # Validate against schema (warn but don't block for local snapshots)
         schema_check = self._validate_manifest_schema(manifest_obj)
@@ -595,6 +624,18 @@ class VersionManager:
             except Exception:
                 pass
 
+        if min_compat > max_compat:
+            return {
+                "ok": False,
+                "target_version": target,
+                "current_schema": current_schema,
+                "target_schema": target_schema,
+                "min_compatible_schema": min_compat,
+                "max_compatible_schema": max_compat,
+                "needs_migration": current_schema != target_schema,
+                "error": f"invalid manifest: min_compatible_schema ({min_compat}) > max_compatible_schema ({max_compat})",
+            }
+
         ok = (min_compat <= current_schema <= max_compat)
         return {
             "ok": bool(ok),
@@ -745,30 +786,40 @@ class VersionManager:
         version_dir.mkdir(parents=True, exist_ok=True)
 
         archive_path = version_dir / "package.bin"
-        archive_path.write_bytes(archive_bytes)
+        try:
+            archive_path.write_bytes(archive_bytes)
+        except Exception as e:
+            try:
+                shutil.rmtree(version_dir)
+            except Exception:
+                pass
+            return {"ok": False, "error": f"failed to write archive: {e}"}
 
         # Detect archive format by magic bytes, then extract
-        import zipfile as _zf, tarfile as _tf, io as _io
         archive_ext = ""
-        if _zf.is_zipfile(_io.BytesIO(archive_bytes)):
+        if zipfile.is_zipfile(io.BytesIO(archive_bytes)):
             archive_ext = ".zip"
         else:
             try:
-                _tf.open(fileobj=_io.BytesIO(archive_bytes))
-                archive_ext = ".tar.gz"
+                with tarfile.open(fileobj=io.BytesIO(archive_bytes), mode="r:gz"):
+                    archive_ext = ".tar.gz"
             except Exception:
                 pass
 
         if not archive_ext:
+            try:
+                shutil.rmtree(version_dir)
+            except Exception:
+                pass
             return {"ok": False, "error": "cannot detect archive format (expected .zip or .tar.gz)"}
 
-        import tempfile as _tempfile
-        tmpdir = _tempfile.mkdtemp(prefix="tinda_extract_")
+        tmpdir = tempfile.mkdtemp(prefix="tinda_extract_")
         try:
-            shutil.unpack_archive(str(archive_path), tmpdir)
+            shutil.unpack_archive(str(archive_path), extract_dir=tmpdir)
         except Exception as e:
             try:
                 shutil.rmtree(tmpdir, ignore_errors=True)
+                shutil.rmtree(version_dir)
             except Exception:
                 pass
             return {"ok": False, "error": f"archive extraction failed: {e}"}
@@ -792,6 +843,10 @@ class VersionManager:
         if not (app_dir / "TindaAgent" / "Web" / "server.py").exists() \
            and not (app_dir / "Web" / "server.py").exists() \
            and not (app_dir / "Process" / "AI" / "agent.py").exists():
+            try:
+                shutil.rmtree(version_dir)
+            except Exception:
+                pass
             return {"ok": False, "error": "archive missing entry point: TindaAgent/Web/server.py or Web/server.py"}
 
         _write_json_atomic(version_dir / _MANIFEST_FILE, manifest_obj)
@@ -889,12 +944,26 @@ class VersionManager:
             # 回滚共享数据和 current
             try:
                 self._restore_backup(backup)
-            except Exception:
-                pass
+            except Exception as rollback_err:
+                audit_event(
+                    op_type="SYSTEM_WARNING",
+                    subsystem="versioning",
+                    func="VersionManager.switch_version",
+                    file_path=_THIS_FILE,
+                    content=f"rollback restore_backup failed: {rollback_err}",
+                    extra={"version": target, "error": str(rollback_err)},
+                )
             try:
                 _write_json_atomic(self.current_path, old_current)
-            except Exception:
-                pass
+            except Exception as rollback_err:
+                audit_event(
+                    op_type="SYSTEM_WARNING",
+                    subsystem="versioning",
+                    func="VersionManager.switch_version",
+                    file_path=_THIS_FILE,
+                    content=f"rollback write current.json failed: {rollback_err}",
+                    extra={"version": target, "error": str(rollback_err)},
+                )
             return {"ok": False, "error": f"switch failed and rolled back: {e}"}
 
         audit_event(

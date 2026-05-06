@@ -360,7 +360,8 @@ class ChatRecordStore:
                 }
                 if preserve_non_chat and item["entry_type"] in CHATLIKE_ENTRY_TYPES:
                     old_ts = old_chatlike[chatlike_idx]["ts"] if chatlike_idx < len(old_chatlike) else ""
-                    chatlike_idx += 1
+                    if chatlike_idx < len(old_chatlike):
+                        chatlike_idx += 1
                     if old_ts:
                         item["ts"] = str(old_ts)
                 normalized_chatlike.append(item)

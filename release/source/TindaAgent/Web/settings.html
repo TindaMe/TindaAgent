@@ -248,6 +248,24 @@
       border-color: var(--accent-2);
       box-shadow: 0 0 0 3px rgba(255,110,180,0.12);
     }
+    .input-row select {
+      height: 32px;
+      border-radius: 10px;
+      border: 1.5px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+      font-family: inherit;
+      font-size: 13px;
+      font-weight: 700;
+      padding: 0 8px;
+      outline: none;
+      cursor: pointer;
+      min-width: 180px;
+    }
+    .input-row select:focus {
+      border-color: var(--accent-2);
+      box-shadow: 0 0 0 3px rgba(255,110,180,0.12);
+    }
     .input-row .unit {
       font-size: 12px;
       color: var(--text-dim);
@@ -402,6 +420,21 @@
     </div>
 
     <div class="card">
+      <h2>模型配置</h2>
+      <p class="sub">为辅助任务指定模型，使用便宜模型可降低成本</p>
+      <div class="input-row">
+        <label for="settingTitleModel">标题生成</label>
+        <select id="settingTitleModel"></select>
+      </div>
+      <div class="hint" style="font-size:11px;color:var(--text-dim);">新会话自动生成标题时使用的模型</div>
+      <div class="input-row" style="margin-top:10px;">
+        <label for="settingCompressModel">上下文压缩</label>
+        <select id="settingCompressModel"></select>
+      </div>
+      <div class="hint" style="font-size:11px;color:var(--text-dim);">压缩历史对话生成摘要时使用的模型</div>
+    </div>
+
+    <div class="card">
       <h2>快捷按钮</h2>
       <p class="sub">点击左侧按钮直接使用，右侧开关控制是否显示在聊天 Header</p>
       <div id="quickGrid">
@@ -510,35 +543,35 @@
       s = await loadSettings();
 
     const streamEl = document.getElementById("settingStream");
-    streamEl.checked = s.streamEnabled !== false;
+    streamEl.checked = s.stream_enabled !== false;
     streamEl.addEventListener("change", () => {
-      saveSettings({ streamEnabled: streamEl.checked });
+      saveSettings({ stream_enabled: streamEl.checked });
       localStorage.setItem("tinda_stream_enabled", streamEl.checked ? "1" : "0");
       showToast(streamEl.checked ? "已开启流式输出" : "已关闭流式输出");
     });
 
     const termEl = document.getElementById("settingTermOpen");
-    termEl.checked = s.termOpen === true;
+    termEl.checked = s.terminal_open === true;
     termEl.addEventListener("change", () => {
-      saveSettings({ termOpen: termEl.checked });
+      saveSettings({ terminal_open: termEl.checked });
       showToast(termEl.checked ? "已开启默认终端" : "已关闭默认终端");
     });
 
     const restoreSessionEl = document.getElementById("settingRestoreSession");
     if (restoreSessionEl) {
-      restoreSessionEl.checked = s.restoreLastSession === true;
+      restoreSessionEl.checked = s.restore_last_session === true;
       restoreSessionEl.addEventListener("change", () => {
-        saveSettings({ restoreLastSession: restoreSessionEl.checked });
+        saveSettings({ restore_last_session: restoreSessionEl.checked });
         showToast(restoreSessionEl.checked ? "已开启恢复上次会话" : "已关闭恢复上次会话");
       });
     }
 
     const tokenEl = document.getElementById("settingTokenLimit");
-    tokenEl.value = String(s.tokenLimit || 16000);
+    tokenEl.value = String(s.token_limit || 16000);
     tokenEl.addEventListener("change", () => {
       const val = Math.max(100, Math.min(10000000, parseInt(tokenEl.value, 10) || 16000));
       tokenEl.value = String(val);
-      saveSettings({ tokenLimit: val });
+      saveSettings({ token_limit: val });
       // Also push to current session if active
       const sid = localStorage.getItem("tinda_active_session_id");
       if (sid) {
@@ -550,6 +583,53 @@
       }
       showToast(`压缩阈值已设为 ${val} tokens`);
     });
+
+    // Model config for auxiliary tasks
+    (async function initModelConfig() {
+      const titleEl = document.getElementById("settingTitleModel");
+      const compressEl = document.getElementById("settingCompressModel");
+      if (!titleEl || !compressEl) return;
+
+      let models = [];
+      try {
+        const res = await apiFetch("/model");
+        if (res.ok) {
+          const data = await res.json();
+          models = data.available_models || [];
+        }
+      } catch {}
+      if (!models.length) {
+        models = [
+          { id: "deepseek-v4-flash", label: "deepseek-v4-flash" },
+          { id: "deepseek-chat", label: "deepseek-chat" },
+          { id: "deepseek-v4-pro", label: "deepseek-v4-pro" },
+          { id: "deepseek-reasoner", label: "deepseek-reasoner" },
+        ];
+      }
+
+      function populateSelect(el, currentValue) {
+        el.innerHTML = "";
+        models.forEach(m => {
+          const opt = document.createElement("option");
+          opt.value = m.id;
+          opt.textContent = m.label;
+          if (m.id === currentValue) opt.selected = true;
+          el.appendChild(opt);
+        });
+      }
+
+      populateSelect(titleEl, s.title_model || "deepseek-v4-flash");
+      populateSelect(compressEl, s.compress_model || "deepseek-v4-flash");
+
+      titleEl.addEventListener("change", () => {
+        saveSettings({ title_model: titleEl.value });
+        showToast(`标题生成模型已设为 ${titleEl.value}`);
+      });
+      compressEl.addEventListener("change", () => {
+        saveSettings({ compress_model: compressEl.value });
+        showToast(`压缩模型已设为 ${compressEl.value}`);
+      });
+    })();
 
     // Quick buttons — each row: [action button]  [toggle]
     const QUICK_ITEMS = [
@@ -563,7 +643,7 @@
       { key: "reset",      label: "清空上下文", icon: '<svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.3-5.7"/><path d="M20 4v5h-5"/></svg>',   action: "function:noop" },
     ];
 
-    const savedQuick = Array.isArray(s.quickButtons) ? s.quickButtons : ["model","stream","terminal","compress"];
+    const savedQuick = Array.isArray(s.quick_buttons) ? s.quick_buttons : ["model","stream","terminal","compress"];
     const quickGrid = document.getElementById("quickGrid");
 
     QUICK_ITEMS.forEach(item => {
@@ -607,7 +687,7 @@
       cb.addEventListener("change", () => {
         const selected = [];
         quickGrid.querySelectorAll("input[type=checkbox]:checked").forEach(c => selected.push(c.value));
-        saveSettings({ quickButtons: selected });
+        saveSettings({ quick_buttons: selected });
         showToast("快捷按钮已更新");
       });
 

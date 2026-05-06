@@ -23,6 +23,8 @@ DEFAULT_WEB_SETTINGS: dict[str, Any] = {
     "quick_buttons": ["model", "stream", "terminal", "compress"],
     "restore_last_session": False,
     "last_session_id": "",
+    "title_model": "deepseek-v4-flash",
+    "compress_model": "deepseek-v4-flash",
 }
 
 
@@ -81,7 +83,8 @@ def load_terminal_settings() -> dict[str, Any]:
     except Exception:
         bl = []
     try:
-        bypass = terminal_policy.is_bypass_enabled(None)  # reads from disk regardless of user
+        s = terminal_policy.load_settings()
+        bypass = bool(s.get("bypass_terminal_confirm", False))
     except Exception:
         bypass = False
     return {

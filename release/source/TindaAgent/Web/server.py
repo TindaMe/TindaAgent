@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import threading
 import time
@@ -9,6 +10,7 @@ import uuid
 from pathlib import Path
 from datetime import datetime
 
+from fastapi import Body
 from fastapi import FastAPI
 from fastapi import HTTPException
 from fastapi import Query
@@ -75,8 +77,25 @@ def _infer_http_op_type(method: str, path: str) -> str:
     return "PUBLIC_WRITE"
 
 _client = LLMClient()
-_title_client = LLMClient(model="deepseek-v4-flash")
-_compress_client = LLMClient(model="deepseek-v4-flash")
+
+_aux_model_cache: dict[str, LLMClient] = {}
+
+
+def _get_aux_client(model_key: str, env_var: str, default_model: str) -> LLMClient:
+    """Lazily get or create an auxiliary LLM client.
+
+    Resolution order: web settings → env var → default.
+    Clients are cached by model name so settings changes take effect
+    without recreating on every call.
+    """
+    model = (
+        str(load_web_settings().get(model_key, "")).strip()
+        or os.getenv(env_var, "").strip()
+        or default_model
+    )
+    if model not in _aux_model_cache:
+        _aux_model_cache[model] = LLMClient(model=model)
+    return _aux_model_cache[model]
 _version_mgr = get_version_manager()
 
 _MIGRATION = bootstrap_storage()
@@ -100,6 +119,7 @@ if _empties:
 
 _sessions: dict[str, Agent] = {}
 _session_last_access: dict[str, float] = {}
+_session_config: dict[str, dict] = {}
 _MAX_SESSIONS = 300
 _LLM_EXECUTE_PERM = int(perm.PUBLIC_EXECUTE)
 _terminal_pending_lock = threading.Lock()
@@ -126,12 +146,18 @@ _MODEL_ALIAS: dict[str, str] = {
 
 _APP_VERSION = get_app_version()
 
-_HTML_HOME = (Path(__file__).parent / "home.html").read_text(encoding="utf-8")
-_HTML_CHAT = (Path(__file__).parent / "chat.html").read_text(encoding="utf-8")
-_HTML_SETTINGS = (Path(__file__).parent / "settings.html").read_text(encoding="utf-8")
-_HTML_USER_ADMIN = (Path(__file__).parent / "user_admin.html").read_text(encoding="utf-8")
-_HTML_LOG_VIEW = (Path(__file__).parent / "logs.html").read_text(encoding="utf-8")
-_HTML_MODEL_DIAGNOSTICS = (Path(__file__).parent / "model_diagnostics.html").read_text(encoding="utf-8")
+def _load_html(file_name: str) -> str:
+    try:
+        return (Path(__file__).parent / file_name).read_text(encoding="utf-8")
+    except Exception:
+        return f"<!-- {file_name} not found -->"
+
+_HTML_HOME = _load_html("home.html")
+_HTML_CHAT = _load_html("chat.html")
+_HTML_SETTINGS = _load_html("settings.html")
+_HTML_USER_ADMIN = _load_html("user_admin.html")
+_HTML_LOG_VIEW = _load_html("logs.html")
+_HTML_MODEL_DIAGNOSTICS = _load_html("model_diagnostics.html")
 _LOG_ROOT = get_log_root()
 _LOG_MAX_READ_BYTES = 2 * 1024 * 1024
 _AUTH_OPEN_PATHS = {
@@ -148,6 +174,7 @@ _AUTH_OPEN_PATHS = {
     "/auth/users",
     "/auth/status",
     "/auth/select-user",
+    "/web-settings",
 }
 
 
@@ -376,6 +403,9 @@ def _estimate_context_usage_length(rows: list[dict]) -> int:
     total = 0
     for row in rows or []:
         if not isinstance(row, dict):
+            continue
+        entry_type = str(row.get("entry_type", "chat")).strip() or "chat"
+        if entry_type not in {"chat", "notice"}:
             continue
         role = str(row.get("role", "")).strip()
         if role not in {"user", "assistant", "system"}:
@@ -906,6 +936,7 @@ def _evict_if_needed() -> None:
     oldest = min(_session_last_access.items(), key=lambda x: x[1])[0]
     _sessions.pop(oldest, None)
     _session_last_access.pop(oldest, None)
+    _session_config.pop(oldest, None)
 
 
 def _is_tool_command_text(content: str) -> bool:
@@ -1404,7 +1435,7 @@ def _generate_title_from_first_round(session_id: str) -> None:
             f"助手：{assistant_msg}"
         )
         try:
-            title = _title_client.chat(
+            title = _get_aux_client("title_model", "TINDA_TITLE_MODEL", "deepseek-v4-flash").chat(
                 [
                     {"role": "system", "content": "你是对话标题生成助手。"},
                     {"role": "user", "content": prompt},
@@ -1449,7 +1480,7 @@ def _compress_messages_with_llm(rows: list[dict]) -> str:
         "直接输出摘要内容，不要添加前缀或说明。\n\n"
         f"对话内容：\n{dialog}"
     )
-    text = _compress_client.chat(
+    text = _get_aux_client("compress_model", "TINDA_COMPRESS_MODEL", "deepseek-v4-flash").chat(
         [
             {"role": "system", "content": "你是严谨的对话摘要助手。"},
             {"role": "user", "content": prompt},
@@ -1631,7 +1662,7 @@ async def get_web_settings():
 
 
 @app.put("/web-settings")
-async def put_web_settings(data: dict[str, Any]):
+async def put_web_settings(data: dict[str, Any] = Body(...)):
     _require_login()
     save_web_settings(data)
     return load_web_settings()
@@ -1644,7 +1675,7 @@ async def get_terminal_settings():
 
 
 @app.put("/terminal/settings")
-async def put_terminal_settings(data: dict[str, Any]):
+async def put_terminal_settings(data: dict[str, Any] = Body(...)):
     _require_login()
     return save_terminal_settings(
         whitelist=data.get("whitelist"),
@@ -2199,6 +2230,29 @@ async def list_sessions(limit: int = 100, offset: int = 0):
     return JSONResponse(_store.list_sessions(limit=limit, offset=offset))
 
 
+@app.patch("/sessions/{session_id}/config")
+async def patch_session_config(session_id: str, data: dict[str, Any] = Body(...)):
+    _require_login()
+    sid = str(session_id or "").strip()
+    if not sid:
+        return JSONResponse({"ok": False, "error": "session_id required"}, status_code=400)
+    _store.ensure_session(sid)
+    cfg = _session_config.setdefault(sid, {})
+    if "max_context_tokens" in data:
+        v = data["max_context_tokens"]
+        cfg["max_context_tokens"] = max(100, int(v)) if v is not None else None
+    return JSONResponse({"ok": True, "session_id": sid, "config": dict(cfg)})
+
+
+@app.get("/sessions/{session_id}/config")
+async def get_session_config(session_id: str):
+    _require_login()
+    sid = str(session_id or "").strip()
+    if not sid:
+        return JSONResponse({"ok": False, "error": "session_id required"}, status_code=400)
+    return JSONResponse({"ok": True, "session_id": sid, "config": dict(_session_config.get(sid, {}))})
+
+
 @app.get("/sessions/{session_id}/context-usage")
 async def get_session_context_usage(session_id: str):
     _require_login()
@@ -2224,6 +2278,7 @@ async def get_session_context_usage(session_id: str):
             "session_id": sid,
             "title": title,
             "usage_length": int(usage_length),
+            "max_context_tokens": _session_config.get(sid, {}).get("max_context_tokens"),
         }
     )
 
@@ -2234,6 +2289,7 @@ async def delete_session(session_id: str):
     ok = _store.delete_session(session_id)
     _sessions.pop(session_id, None)
     _session_last_access.pop(session_id, None)
+    _session_config.pop(session_id, None)
     _clear_terminal_pending(session_id)
     if not ok:
         return JSONResponse({"ok": False, "error": "session not found"}, status_code=404)
@@ -2254,6 +2310,7 @@ async def delete_all_sessions():
             _store.delete_session(sid)
             _sessions.pop(sid, None)
             _session_last_access.pop(sid, None)
+            _session_config.pop(sid, None)
             _clear_terminal_pending(sid)
             deleted += 1
         except Exception:
@@ -2322,6 +2379,11 @@ async def chat(req: ChatRequest):
     _store.ensure_session(sid)
     turn_id = f"turn_{uuid.uuid4().hex[:12]}"
     pending_count = _pending_confirm_count(sid)
+    if pending_count > 0:
+        stale_agent = _sessions.get(sid)
+        if stale_agent is None or not bool(getattr(stale_agent, "has_pending_confirmation", lambda: False)()):
+            _clear_terminal_pending(sid)
+            pending_count = 0
     if pending_count > 0:
         payload = _build_pending_required_payload(sid)
         return JSONResponse(payload, status_code=409)
@@ -2458,10 +2520,20 @@ async def chat_stream(
         return HTMLResponse("".join(chunks), media_type="text/event-stream")
     sid = str(session_id or "").strip()
     if not sid:
-        return JSONResponse({"error": "session_id required"}, status_code=400)
+        chunks = [
+            _sse_event("error", {"message": "session_id required"}),
+            _sse_event("done", {"reply": "", "tool_trace": [], "tool_steps": 0, "turn_id": turn_id}),
+        ]
+        return HTMLResponse("".join(chunks), media_type="text/event-stream")
 
     _store.ensure_session(sid)
     pending_count = _pending_confirm_count(sid)
+    if pending_count > 0:
+        # 若 agent 已无挂起确认，说明 pending 列表是残留的，主动清理
+        stale_agent = _sessions.get(sid)
+        if stale_agent is None or not bool(getattr(stale_agent, "has_pending_confirmation", lambda: False)()):
+            _clear_terminal_pending(sid)
+            pending_count = 0
     if pending_count > 0:
         payload = _build_pending_required_payload(sid)
         chunks = [
@@ -2809,6 +2881,7 @@ async def reset_chat(req: ResetRequest):
     result = _store.mark_reset_anchor(sid)
     _sessions.pop(sid, None)
     _session_last_access.pop(sid, None)
+    _session_config.pop(sid, None)
     _clear_terminal_pending(sid)
     return JSONResponse({"ok": True, **result})
 

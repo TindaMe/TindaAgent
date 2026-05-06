@@ -79,7 +79,7 @@ def _truncate_title(title: str, width: int = 14) -> str:
 # ── 选择器 ──
 
 def select_from_list(ps: PromptSession, title: str, items: list[tuple[str, str, str]],
-                     *, s_tab_label: str = "", s_tab_value: str = "") -> str | None:
+                     *, s_tab_label: str = "", s_tab_value: str = "", extra_tip: str = "") -> str | None:
     """↑↓ 箭头选择 + Enter 确认 + Shift+Tab 快捷键。"""
     if not items:
         return None
@@ -215,6 +215,24 @@ class CLI:
         self.sessions.append_messages(self.session_id, items)
         self._maybe_generate_title(user_text, reply_text)
 
+    def _rollback_incomplete_turn(self, user_text: str) -> None:
+        """当对话处理异常时，移除历史中已添加但未完成的user消息，保持对话一致性。"""
+        if not self.agent.history:
+            return
+        # 找到最后一条user消息，如果内容匹配且后面没有assistant回复，则移除
+        for i in range(len(self.agent.history) - 1, -1, -1):
+            msg = self.agent.history[i]
+            if msg.get("role") == "user" and msg.get("content") == user_text:
+                # 检查这条user消息后是否有assistant回复
+                has_assistant_after = False
+                for j in range(i + 1, len(self.agent.history)):
+                    if self.agent.history[j].get("role") == "assistant":
+                        has_assistant_after = True
+                        break
+                if not has_assistant_after:
+                    self.agent.history = self.agent.history[:i]
+                break
+
     def _maybe_generate_title(self, user_text: str, reply_text: str) -> None:
         """首轮对话后异步生成标题（复用 web 端逻辑）。"""
         meta = self.sessions.get_session(self.session_id) or {}
@@ -243,7 +261,7 @@ class CLI:
                 ], temperature=0.3)
                 clean_title = str(title or "").strip().strip("\"'")
                 if clean_title:
-                    self.sessions.store.set_session_title(self.session_id, clean_title[:15])
+                    self.sessions.set_session_title(self.session_id, clean_title[:15])
             except Exception:
                 pass
         threading.Thread(target=_run, daemon=True).start()
@@ -258,7 +276,6 @@ class CLI:
             return result
 
         self.agent._held_messages = None
-        self.agent.history.append({"role": "user", "content": user_input})
         sanitize_messages(self.agent.history)
 
         final: dict | None = None
@@ -528,9 +545,10 @@ class CLI:
             try:
                 from TindaAgent.Process.Versioning import get_version_manager
                 remote = get_version_manager().list_remote_releases()
-                latest = remote.get("latest_verified", "")
-                if latest and str(latest).lstrip("v") != str(_VERSION).lstrip("v"):
-                    print(f" {Y}新版本 v{latest} 可用 — pip install --upgrade tindaagent{R}\n")
+                latest = remote.get("latest_verified", {}) or {}
+                latest_ver = str(latest.get("version", "")).strip() if isinstance(latest, dict) else str(latest).strip()
+                if latest_ver and latest_ver.lstrip("v") != str(_VERSION).lstrip("v"):
+                    print(f" {Y}新版本 v{latest_ver} 可用 — pip install --upgrade tindaagent{R}\n")
             except Exception:
                 pass
         import threading
@@ -567,6 +585,8 @@ class CLI:
                 result = self.do_chat(raw)
             except Exception as e:
                 print(f" {RD}✗{R} {e}")
+                # 清理可能已添加但未完成的历史记录，保持对话一致性
+                self._rollback_incomplete_turn(raw)
                 continue
 
             reply = str(result.get("reply", ""))
@@ -591,6 +611,8 @@ class CLI:
                     resume_result = self.do_resume(approval)
                 except Exception as e:
                     print(f" {RD}✗{R} {e}")
+                    # 恢复失败后清理挂起状态，避免历史不一致
+                    self.agent._held_messages = None
                     break
                 reply = str(resume_result.get("reply", ""))
                 tool_trace = resume_result.get("tool_trace", [])
@@ -606,9 +628,11 @@ class CLI:
                     print(f" {Y}…还有待确认命令{R}")
                     continue
 
-            if not self.args.no_stream and reply.strip():
-                print()
-            if self.args.no_stream:
+            # 流式模式下已在do_chat中逐字输出，此处仅补充换行和空回复提示
+            if not self.args.no_stream:
+                if not reply.strip() and tool_steps > 0:
+                    print(f" {D}(无文本回复, {tool_steps} 个工具){R}")
+            else:
                 if reply.strip():
                     print(f" {BL}│{R} {reply}")
                 else:

@@ -263,7 +263,16 @@ def run_tool(tool_name: str, user_perm: int, *args, **kwargs):
         },
     )
     try:
-        result = tool_info["func"](*args, **kwargs)
+        # Inject caller perm so tools like run_terminal can check bypass/perms
+        mutable_kwargs = dict(kwargs)
+        import inspect as _inspect
+        try:
+            _sig = _inspect.signature(tool_info["func"])
+            if "_caller_perm" in _sig.parameters:
+                mutable_kwargs.setdefault("_caller_perm", int(user_perm))
+        except Exception:
+            pass
+        result = tool_info["func"](*args, **mutable_kwargs)
         audit_event(
             op_type="TOOL_EXECUTE",
             subsystem="tool",
@@ -784,7 +793,9 @@ def run_terminal(
 
     if approval is False:
         return {
-            "ok": True,
+            "ok": False,
+            "error": "Execution denied by user",
+            "error_code": "user_denied",
             "pending_confirmation": False,
             "cmd": command,
             "note": note_text,

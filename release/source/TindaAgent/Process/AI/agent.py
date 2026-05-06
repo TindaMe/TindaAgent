@@ -314,7 +314,16 @@ class Agent:
                 "content": _json.dumps(new_result, ensure_ascii=False),
             }
 
-        msgs.append({"role": "system", "content": "The terminal command above has been executed per your request. You MUST now respond to the user in natural language: describe what was executed, show the key results, and ask if they need anything else. Do NOT call more tools unless the user explicitly asks for another action."})
+        # 检查是否有命令被拒绝执行
+        any_denied = any(
+            _json.loads(str(m.get("content", "{}"))).get("error_code") == "user_denied"
+            for m in msgs
+            if m.get("role") == "tool"
+        )
+        if any_denied:
+            msgs.append({"role": "system", "content": "The user denied the terminal command execution. You MUST inform the user that the command was not executed and ask if they need anything else. Do NOT call the same or similar tools again unless the user explicitly requests it."})
+        else:
+            msgs.append({"role": "system", "content": "The terminal command above has been executed per your request. You MUST now respond to the user in natural language: describe what was executed, show the key results, and ask if they need anything else. Do NOT call more tools unless the user explicitly asks for another action."})
         result = self._ensure_client().chat_with_tools(
             msgs,
             user_perm=self._held_perm,

@@ -41,3 +41,6 @@ class SessionManager:
 
     def append_messages(self, session_id: str, messages: list[dict[str, Any]]) -> dict[str, Any]:
         return self._store.append_messages(session_id, messages)
+
+    def set_session_title(self, session_id: str, title: str) -> dict[str, Any]:
+        return self._store.set_session_title(session_id, title)

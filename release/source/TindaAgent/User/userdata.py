@@ -558,6 +558,15 @@ def export_public_user(user: UserManager | None) -> dict[str, Any]:
 
 
 # 模块加载时恢复数据并确保默认测试用户存在
-_load_users_from_disk()
-_ensure_seed_user()
-ensure_zero_perm_user("guest0")
+try:
+    _load_users_from_disk()
+except Exception:
+    pass
+try:
+    _ensure_seed_user()
+except Exception:
+    pass
+try:
+    ensure_zero_perm_user("guest0")
+except Exception:
+    pass
