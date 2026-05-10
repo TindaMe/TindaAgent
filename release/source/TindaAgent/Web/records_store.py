@@ -12,8 +12,8 @@ SUPPORTED_FORMAT_VERSIONS = {"1", "2"}
 MAX_RECORD_FILE_BYTES = 2 * 1024 * 1024
 MAX_IMPORT_MESSAGES = 2000
 MAX_SINGLE_MESSAGE_CHARS = 32000
-ENTRY_TYPES = {"chat", "notice", "tool_marker", "terminal"}
-CHATLIKE_ENTRY_TYPES = {"chat", "tool_marker"}
+ENTRY_TYPES = {"chat", "chat_continuation", "notice", "tool_marker", "terminal"}
+CHATLIKE_ENTRY_TYPES = {"chat", "chat_continuation", "tool_marker"}
 TERMINAL_ENTRY_KINDS = {"cmd", "out", "sep"}
 
 _USER_META_BLOCK_RE = re.compile(

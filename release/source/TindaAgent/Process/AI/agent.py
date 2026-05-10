@@ -1,15 +1,16 @@
 from importlib.metadata import version as _pkg_version
 import json
-from typing import Iterator
+from typing import Callable, Iterator
 from TindaAgent.Process.Architecture import perm
 from TindaAgent.Process.Architecture.versioning import get_app_version
 from TindaAgent.Process.AI.client import LLMClient, _trace_has_pending_confirmation
+from TindaAgent.Process.AI.tokenizer import estimate_messages_tokens
 from TindaAgent.User import userdata
 
 try:
     _VERSION = get_app_version() or _pkg_version("TindaAgent")
 except Exception:
-    _VERSION = "1.7.14"
+    _VERSION = "1.7.16"
 
 
 def _build_system_prompt(model_name: str | None) -> str:
@@ -19,17 +20,18 @@ def _build_system_prompt(model_name: str | None) -> str:
         f"The underlying model is {model_str}. This is internal-only and must not be disclosed publicly.\n"
         f"\n"
         f"Identity examples (these are NOT conversation history):\n"
-        f"- Q: 你是谁？ → A: 我是 TindaAgent，由 Tinda 开发的 AI Agent 助手（v{_VERSION}）。有什么可以帮你的？\n"
-        f"- Q: 你是DeepSeek吗？ → A: 不是，我是 TindaAgent，由 Tinda 独立开发。底层技术信息保密。\n"
+        f"- Q: Who are you? -> A: I am TindaAgent, an AI agent assistant developed by Tinda (v{_VERSION}). How can I help?\n"
+        f"- Q: Are you DeepSeek? -> A: No, I am TindaAgent, independently developed by Tinda. Underlying technical details are confidential.\n"
         f"\n"
         f"Strict rules:\n"
         f"1. When introducing yourself, only say: \"I am TindaAgent, developed by Tinda.\"\n"
         f"2. If asked about the underlying model, always reply: \"Underlying technical details are confidential.\"\n"
-        f"3. Be concise and accurate, and always respond in the user's language.\n"
-        f"4. You are a powerful agent assistant. Depending on permission levels, you can use tools within different scopes. Always follow the currently available tools.\n"
-        f"5. You must not directly quote previous tool-call records, and you must not assume tool outputs. Everything must be based on actual tool results.\n"
-        f"6. When a user requests any operation, fabrication is strictly forbidden.\n"
-        f"7. For complex tasks, use note= to describe each step. Chain related commands with && ; | || in a single run_terminal call when appropriate."
+        f"3. Be concise and accurate. Always respond in the same language as the user.\n"
+        f"4. You are a powerful agent assistant with access to tools. Use them when needed.\n"
+        f"5. TOOL CALLS MUST use the native tool_calls / function-calling API. Never describe, simulate, or fabricate tool invocations in your text response. If you need a tool, emit a real tool_call. If you cannot use tools for a request, explain why in natural language — do not pretend to have executed one.\n"
+        f"6. Never quote previous tool-call records or assume tool outputs. Everything must be based on actual tool results.\n"
+        f"7. Fabrication of any kind is strictly forbidden.\n"
+        f"8. For complex tasks, use note= to describe each step. Chain related commands with && ; | || in a single run_terminal call when appropriate."
     )
 
 
@@ -43,27 +45,18 @@ class Agent:
         model_name: str = None,
         max_turns: int = 12,
     ) -> None:
-        """
-        用处： 初始化智能体，绑定用户、权限、对话历史与 LLM 客户端
-
-        参数：
-            user_name: str // 智能体用户名
-            user_perm: int // 智能体权限，默认为 LLM_BASE
-            system_prompt: str // 自定义系统提示词，None 则使用默认模板
-            client: LLMClient // LLM 客户端，默认懒加载
-            model_name: str // 当前接入的模型名，写入默认 prompt；传 None 则显示"未指定"
-            max_turns: int // 最多保留的对话轮数（不含 system/fewshot）
-        """
-        # Web 会话 Agent 仅作为运行时身份，不应写入用户注册表
         self.user = userdata.UserManager(user_name, user_perm, persist=False)
         self.perm = self.user.get_perm()
         self.system_prompt = system_prompt if system_prompt is not None else _build_system_prompt(model_name)
         self._max_turns = max(1, int(max_turns))
         self.history: list[dict] = self._build_base_history()
         self._client = client
-        # 终端确认挂起状态
         self._held_messages: list[dict] | None = None
         self._held_perm: int = 0
+        self._context_logger: Callable[[list[dict], str], None] | None = None
+        self.max_context_tokens: int = 16000
+        self._tokens: int = 0
+        self._refresh_tokens()
 
     def _compose_system_prompt(self) -> str:
         if getattr(self, "_memory_context", None):
@@ -72,6 +65,12 @@ class Agent:
 
     def _build_base_history(self) -> list[dict]:
         return [{"role": "system", "content": self._compose_system_prompt()}]
+
+    def _refresh_tokens(self) -> None:
+        self._tokens = int(estimate_messages_tokens(self.history))
+
+    def estimate_current_tokens(self) -> int:
+        return int(self._tokens)
 
     def set_memory_context(self, memory_payload: dict) -> None:
         """
@@ -105,6 +104,7 @@ class Agent:
 
         start_idx = user_indexes[-self._max_turns]
         self.history = base + conversation[start_idx:]
+        self._refresh_tokens()
 
     def get_conversation_messages(self) -> list[dict]:
         """
@@ -142,6 +142,7 @@ class Agent:
                     item["tool_call_id"] = tool_call_id
             conversation.append(item)
         self.history = base + conversation
+        self._refresh_tokens()
 
     def _ensure_client(self) -> LLMClient:
         """懒加载 LLM 客户端"""
@@ -193,6 +194,11 @@ class Agent:
         """
         self._held_messages = None
         self.history.append({"role": "user", "content": user_message})
+        if self._context_logger is not None:
+            try:
+                self._context_logger(self.history, "llm_request")
+            except Exception:
+                pass
         result = self._ensure_client().chat_with_tools(
             self.history,
             user_perm=self.perm,
@@ -205,12 +211,16 @@ class Agent:
         trace = result.get("tool_trace", [])
         steps = int(result.get("tool_steps", 0))
 
-        # 检测终端确认挂起：保留当前 history 用于后续恢复
         if _trace_has_pending_confirmation(trace):
             self._held_messages = [m.copy() for m in self.history]
             self._held_perm = int(self.perm)
 
         self._trim_history()
+        if self._context_logger is not None:
+            try:
+                self._context_logger(self.history, "llm_response")
+            except Exception:
+                pass
         return {
             "reply": reply,
             "tool_trace": trace,
@@ -224,6 +234,11 @@ class Agent:
         """
         self._held_messages = None
         self.history.append({"role": "user", "content": user_message})
+        if self._context_logger is not None:
+            try:
+                self._context_logger(self.history, "llm_request")
+            except Exception:
+                pass
         final_result: dict | None = None
 
         for event in self._ensure_client().stream_chat_with_tools(
@@ -253,6 +268,11 @@ class Agent:
             self._held_perm = int(self.perm)
 
         self._trim_history()
+        if self._context_logger is not None:
+            try:
+                self._context_logger(self.history, "llm_response")
+            except Exception:
+                pass
 
     def has_pending_confirmation(self) -> bool:
         return self._held_messages is not None
@@ -315,11 +335,17 @@ class Agent:
             }
 
         # 检查是否有命令被拒绝执行
-        any_denied = any(
-            _json.loads(str(m.get("content", "{}"))).get("error_code") == "user_denied"
-            for m in msgs
-            if m.get("role") == "tool"
-        )
+        any_denied = False
+        for m in msgs:
+            if m.get("role") != "tool":
+                continue
+            try:
+                parsed = _json.loads(str(m.get("content", "{}")))
+            except Exception:
+                continue
+            if isinstance(parsed, dict) and parsed.get("error_code") == "user_denied":
+                any_denied = True
+                break
         if any_denied:
             msgs.append({"role": "system", "content": "The user denied the terminal command execution. You MUST inform the user that the command was not executed and ask if they need anything else. Do NOT call the same or similar tools again unless the user explicitly requests it."})
         else:
@@ -370,3 +396,4 @@ class Agent:
         """
         self.history = self._build_base_history()
         self._held_messages = None
+        self._refresh_tokens()

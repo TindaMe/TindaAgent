@@ -1919,6 +1919,7 @@
   <div id="recordsList" class="records-list"></div>
 </aside>
 
+<script src="/chat_renderer.js"></script>
 <script>
   const messagesEl   = document.getElementById("messages");
   const messagesWrap = document.getElementById("messages-wrap");
@@ -2163,7 +2164,7 @@
           if (raw) threshold = parseInt(raw, 10) || 0;
           if (!threshold) {
             const s = JSON.parse(localStorage.getItem("tinda_settings") || "{}");
-            threshold = typeof s.tokenLimit === "number" ? s.tokenLimit : 0;
+            threshold = typeof s.token_limit === "number" ? s.token_limit : 0;
           }
           if (!threshold) threshold = 16000;
           if (usageLen > threshold) {
@@ -2357,7 +2358,7 @@
     return pending;
   }
 
-  function reportErrorToTerminal(message, { source = "", sessionId = getSessionId(), persist = true } = {}) {
+  function reportErrorToTerminal(message, { source = "", sessionId = getSessionId(), persist = false } = {}) {
     const text = String(message ?? "").trim() || "未知错误";
     const prefix = source ? `[error/${source}]` : "[error]";
     showTerm();
@@ -2798,7 +2799,7 @@
       const wr = await fetch("/web-settings");
       if (wr.ok) {
         const ws = await wr.json();
-        if (ws?.restoreLastSession && ws?.last_session_id) {
+        if (ws?.restore_last_session && ws?.last_session_id) {
           restoreEnabled = true;
           serverLastSid = String(ws.last_session_id).trim();
         }
@@ -2897,30 +2898,14 @@
   function normalizeEntryForPersist(raw) {
     if (!raw || typeof raw !== "object") return null;
     const role = String(raw.role || "").trim();
-    if (role !== "user" && role !== "assistant") return null;
-
-    const entryType = String(raw.entry_type || "chat").trim() || "chat";
-    const allowedTypes = ["chat", "notice", "tool_marker", "terminal", "attachment", "terminal_confirm", "terminal_exec"];
-    const safeType = allowedTypes.includes(entryType) ? entryType : "chat";
-
-    const terminalKindRaw = String(raw.terminal_kind || "").trim();
-    const safeTerminalKind =
-      safeType === "terminal" && ["cmd", "out", "sep"].includes(terminalKindRaw)
-        ? terminalKindRaw
-        : "";
-    const terminalClassRaw = String(raw.terminal_class ?? raw.class ?? "").trim();
-    const safeTerminalClass = safeType === "terminal" ? normalizeTerminalClass(terminalClassRaw) : "";
-
+    if (role !== "user" && role !== "assistant" && role !== "system") return null;
     const content = String(raw.content ?? "");
     if (!content.trim()) return null;
-    return {
-      role,
-      entry_type: safeType,
-      terminal_kind: safeTerminalKind,
-      terminal_class: safeTerminalClass,
-      content,
-      ts: String(raw.ts || toIsoWithOffset(new Date())),
-    };
+    const entry = { role, content, ts: String(raw.ts || toIsoWithOffset(new Date())) };
+    if (raw.entry_type) entry.entry_type = String(raw.entry_type);
+    if (raw.terminal_kind) entry.terminal_kind = String(raw.terminal_kind);
+    if (raw.terminal_class) entry.terminal_class = String(raw.terminal_class);
+    return entry;
   }
 
   function enqueueSessionEntries(entries, { sessionId = getSessionId() } = {}) {
@@ -3325,147 +3310,17 @@
     return true;
   }
 
-  function renderImportedEntries(entries) {
-    resetStageActive = false;
-    clearPinnedSpacer();
-    messagesEl.innerHTML = "";
-    resetAssistantTurnBubbleMap();
-    resetTerminalForReplay();
-    setTerminalConfirmLock(false, 0);
-    if (!Array.isArray(entries) || entries.length === 0) {
-      showEmptyState();
-      syncTerminalConfirmLockFromDom();
-      return;
+  // renderSession is now defined in chat_renderer.js
+  // Called by chat_renderer.js to display tool output in terminal
+  function renderToolOutputToTerminal(toolName, callId, output, ok) {
+    if (!output) return;
+    var cls = ok ? "" : "err";
+    addTermLine("cmd", "[" + toolName + " #" + callId + "]", cls);
+    var lines = String(output).split("\n");
+    for (var i = 0; i < lines.length; i++) {
+      addTermLine("out", lines[i], cls);
     }
-    let hasChatBubble = false;
-    let hasTerminal = false;
-
-    const parseLegacyContextEntry = (text) => {
-      const raw = String(text || "").trim();
-      if (!raw) return null;
-
-      const termMatch = /^\[终端\/(cmd|out|sep)\]\s*([\s\S]*)$/u.exec(raw);
-      if (termMatch) {
-        const kind = termMatch[1];
-        const payload = String(termMatch[2] || "");
-        if (kind === "cmd") {
-          return { kind: "terminal", terminal_kind: "cmd", content: payload };
-        }
-        if (kind === "sep") {
-          return { kind: "terminal", terminal_kind: "sep", content: payload || "─".repeat(36) };
-        }
-        return { kind: "terminal", terminal_kind: "out", content: payload };
-      }
-
-      const noticeMatch = /^\[系统提示\]\s*([\s\S]*)$/u.exec(raw);
-      if (noticeMatch) {
-        return { kind: "notice", content: String(noticeMatch[1] || "").trim() };
-      }
-
-      const toolMatch = /^\[工具调用\]\s*([\s\S]*)$/u.exec(raw);
-      if (toolMatch) {
-        return { kind: "tool_marker", content: String(toolMatch[1] || "").trim() || "> >_<\n> --调用工具中--" };
-      }
-
-      return null;
-    };
-
-    entries.forEach((entry) => {
-      const role = String(entry?.role || "").trim();
-      const entryType = String(entry?.entry_type || "chat").trim() || "chat";
-      let content = String(entry?.content || "");
-      // 渲染 reasoning_content 为 > 引用块
-      const reasoning = String(entry?.reasoning_content || "").trim();
-      if (reasoning) {
-        content = reasoning.split("\n").map(l => "> " + l).join("\n") + "\n\n" + content;
-      }
-      const turnId = normalizeTurnId(entry?.turn_id || "");
-      if (!content.trim()) return;
-
-      if (entryType === "terminal") {
-        hasTerminal = renderImportedTerminalEntry(entry) || hasTerminal;
-        return;
-      }
-
-      if (entryType === "notice") {
-        hasChatBubble = renderImportedNotice(content) || hasChatBubble;
-        return;
-      }
-
-      if (entryType === "tool_marker") {
-        clearEmptyState();
-        const bubble = upsertAssistantTurnBubble(content, { turnId, append: true, isCommand: true });
-        hasChatBubble = Boolean(bubble) || hasChatBubble;
-        return;
-      }
-
-      if (entryType === "terminal_exec") {
-        hasTerminal = renderTermExecInTerminal(entry) || hasTerminal;
-        return;
-      }
-
-      if (entryType === "terminal_confirm") {
-        let parsed = {};
-        try { parsed = JSON.parse(String(entry?.content || "{}")); } catch { parsed = {}; }
-        const cmd = String(parsed?.cmd || "").trim();
-        const status = String(parsed?.status || "pending").toLowerCase();
-        if (cmd && status === "pending") {
-          syncPendingConfirmationsFromServer(getSessionId(), { silent: true });
-        }
-        return;
-      }
-
-      if (entryType === "attachment") {
-        clearEmptyState();
-        addFileChipBubble(content);
-        hasChatBubble = true;
-        return;
-      }
-
-      if (role === "user") {
-        clearEmptyState();
-        const displayContent = stripFilePrefix(content);
-        if (displayContent) {
-          addBubble(displayContent, "user");
-          hasChatBubble = true;
-        }
-        return;
-      }
-      if (role === "assistant") {
-        if (entryType === "chat_continuation") {
-          clearEmptyState();
-          const bubble = upsertAssistantTurnBubble(content, { turnId, append: true });
-          hasChatBubble = Boolean(bubble) || hasChatBubble;
-        } else {
-          if (entryType === "chat") {
-            const legacy = parseLegacyContextEntry(content);
-            if (legacy) {
-              if (legacy.kind === "terminal") {
-                hasTerminal = renderImportedTerminalEntry(legacy) || hasTerminal;
-                return;
-              }
-              if (legacy.kind === "notice") {
-                hasChatBubble = renderImportedNotice(legacy.content) || hasChatBubble;
-                return;
-              }
-              if (legacy.kind === "tool_marker") {
-                clearEmptyState();
-                const bubble = upsertAssistantTurnBubble(legacy.content, { turnId, append: true, isCommand: true });
-                hasChatBubble = Boolean(bubble) || hasChatBubble;
-                return;
-              }
-            }
-          }
-          clearEmptyState();
-          const bubble = upsertAssistantTurnBubble(content, { turnId, append: false });
-          hasChatBubble = Boolean(bubble) || hasChatBubble;
-        }
-      }
-    });
-    if (!hasChatBubble) showEmptyState();
-    if (hasTerminal) showTerm();
-    syncTerminalConfirmLockFromDom();
-    scrollToBottom();
+    addTermLine("sep", "─".repeat(36), cls);
   }
 
   async function importRecord(recordId) {
@@ -3483,7 +3338,7 @@
       if (!res.ok || data.ok === false) {
         throw new Error(data?.error || `http ${res.status}`);
       }
-      renderImportedEntries(Array.isArray(data.entries) ? data.entries : []);
+      renderSession(Array.isArray(data.entries) ? data.entries : []);
       addSystemNotice(`已切换记录：${recordId}`);
       closeRecordsPanel();
     } catch (e) {
@@ -3499,7 +3354,7 @@
       if (!res.ok) return;
       const data = await res.json();
       const entries = Array.isArray(data.entries) ? data.entries : [];
-      renderImportedEntries(entries);
+      renderSession(entries);
       await syncPendingConfirmationsFromServer(sid, { silent: true });
       await refreshContextUsageLength(sid);
     } catch (e) {
@@ -3561,6 +3416,10 @@
   }
 
   function addBubble(text, role, { isCommand = false, turnId = "" } = {}) {
+    // Coerce objects/arrays to readable text
+    if (typeof text !== "string") {
+      try { text = JSON.stringify(text, null, 2); } catch (e) { text = String(text || ""); }
+    }
     const row = document.createElement("div");
     row.className = "msg " + role;
 
@@ -3653,6 +3512,20 @@
       .replace(/\n{3,}/g, "\n\n")
       .trim();
     return cleaned;
+  }
+
+  function buildStreamFullMd(reasoning, content) {
+    const r = String(reasoning || "").trim();
+    const c = String(content || "").trim();
+    if (!r && !c) return "";
+    const parts = [];
+    if (r) {
+      parts.push(r.split("\n").map(l => "> " + l).join("\n"));
+    }
+    if (c) {
+      parts.push(c);
+    }
+    return parts.join("\n\n");
   }
 
   function normalizeTurnId(raw) {
@@ -4522,7 +4395,7 @@
       const raw = localStorage.getItem("tinda_settings");
       if (!raw) return ["model","stream","terminal","compress"];
       const s = JSON.parse(raw);
-      return Array.isArray(s.quickButtons) ? s.quickButtons : ["model","stream","terminal","compress"];
+      return Array.isArray(s.quick_buttons) ? s.quick_buttons : ["model","stream","terminal","compress"];
     } catch { return ["model","stream","terminal","compress"]; }
   }
 
@@ -4911,6 +4784,7 @@
         const decoder = new TextDecoder("utf-8");
         let buffer = "";
         let streamText = "";
+        let streamReasoning = "";
         let donePayload = null;
 
         while (true) {
@@ -4939,16 +4813,26 @@
             if (eventName === "delta") {
               streamText += String(payload.content || "");
               if (renderDelta && streamBot) {
-                streamBot.bubble.dataset.rawMd = streamText;
-                streamBot.bubble.innerHTML = renderMarkdown(streamText);
+                const fullMd = buildStreamFullMd(streamReasoning, streamText);
+                streamBot.bubble.dataset.rawMd = fullMd;
+                streamBot.bubble.innerHTML = renderMarkdown(fullMd);
+                scrollToBottom();
+              }
+            } else if (eventName === "reasoning_delta") {
+              streamReasoning += String(payload.content || "");
+              if (renderDelta && streamBot) {
+                const fullMd = buildStreamFullMd(streamReasoning, streamText);
+                streamBot.bubble.dataset.rawMd = fullMd;
+                streamBot.bubble.innerHTML = renderMarkdown(fullMd);
                 scrollToBottom();
               }
             } else if (eventName === "reset") {
               const marker = `\n\n> >_<\n> --调用工具中--\n`;
               streamText += marker;
               if (renderDelta && streamBot) {
-                streamBot.bubble.dataset.rawMd = streamText;
-                streamBot.bubble.innerHTML = renderMarkdown(streamText);
+                const fullMd = buildStreamFullMd(streamReasoning, streamText);
+                streamBot.bubble.dataset.rawMd = fullMd;
+                streamBot.bubble.innerHTML = renderMarkdown(fullMd);
                 scrollToBottom();
               }
             } else if (eventName === "tool_step") {
@@ -4971,14 +4855,18 @@
 
         const doneTurnId = normalizeTurnId(donePayload?.turn_id || "");
         if (donePayload) {
+          if (!streamReasoning && donePayload.reasoning_content) {
+            streamReasoning = String(donePayload.reasoning_content || "");
+          }
           // delta 已完整构建 streamText，done 仅补 turn_id，不再追加文本
           if (typeof donePayload.reply === "string") {
             if (!streamText) {
               streamText = sanitizeAssistantDisplayText(String(donePayload.reply || ""));
             }
             if (renderDelta && streamBot) {
-              streamBot.bubble.dataset.rawMd = streamText;
-              streamBot.bubble.innerHTML = renderMarkdown(streamText);
+              const fullMd = buildStreamFullMd(streamReasoning, streamText);
+              streamBot.bubble.dataset.rawMd = fullMd;
+              streamBot.bubble.innerHTML = renderMarkdown(fullMd);
               if (doneTurnId) {
                 streamBot.bubble.dataset.turnId = doneTurnId;
                 rememberAssistantTurnBubble(doneTurnId, streamBot.bubble);
@@ -4987,8 +4875,9 @@
           } else if (!streamText && donePayload.reply) {
             streamText = sanitizeAssistantDisplayText(String(donePayload.reply));
             if (renderDelta && streamBot) {
-              streamBot.bubble.dataset.rawMd = streamText;
-              streamBot.bubble.innerHTML = renderMarkdown(streamText);
+              const fullMd = buildStreamFullMd(streamReasoning, streamText);
+              streamBot.bubble.dataset.rawMd = fullMd;
+              streamBot.bubble.innerHTML = renderMarkdown(fullMd);
               if (doneTurnId) {
                 streamBot.bubble.dataset.turnId = doneTurnId;
                 rememberAssistantTurnBubble(doneTurnId, streamBot.bubble);
@@ -4997,7 +4886,7 @@
           }
           clearTypingPlaceholder();
           if (!renderDelta) {
-            const fallbackText = streamText || String(donePayload.reply || "（无回复）");
+            const fallbackText = buildStreamFullMd(streamReasoning, streamText) || String(donePayload.reply || "（无回复）");
             upsertAssistantTurnBubble(fallbackText || "（无回复）", { turnId: doneTurnId });
           }
           if (donePayload.tool_async) {
@@ -5017,7 +4906,7 @@
         } else if (typingRow) {
           clearTypingPlaceholder();
           if (!renderDelta) {
-            upsertAssistantTurnBubble(streamText || "（无回复）", { turnId: doneTurnId });
+            upsertAssistantTurnBubble(buildStreamFullMd(streamReasoning, streamText) || "（无回复）", { turnId: doneTurnId });
           }
         }
         return;
@@ -5055,7 +4944,10 @@
         }
         showToast("已输出至终端");
       } else {
-        upsertAssistantTurnBubble(String(data.reply ?? "（无回复）"), { turnId: data?.turn_id, isCommand: text.startsWith("/") });
+        const reasoningText = String(data.reasoning_content || "").trim();
+        const replyText = String(data.reply ?? "（无回复）");
+        const displayText = buildStreamFullMd(reasoningText, replyText);
+        upsertAssistantTurnBubble(displayText || "（无回复）", { turnId: data?.turn_id, isCommand: text.startsWith("/") });
         // 工具轨迹由后端同轮次写入会话，前端这里仅做实时展示（不落盘），避免刷新后位置漂移。
         const traced = renderToolTraceToTerminal(data.tool_trace, { sessionId: sid, persist: false });
         if (data.tool_steps > 0 && !traced) {
@@ -5230,14 +5122,14 @@
   // 读取设置页配置
   try {
     const s = JSON.parse(localStorage.getItem("tinda_settings") || "{}");
-    if (s.termOpen === true) openTerm();
-    if (typeof s.tokenLimit === "number" && s.tokenLimit >= 100) {
+    if (s.terminal_open === true) openTerm();
+    if (typeof s.token_limit === "number" && s.token_limit >= 100) {
       const sid = getSessionId();
       if (sid) {
         apiFetch(`/sessions/${encodeURIComponent(sid)}/config`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ max_context_tokens: s.tokenLimit }),
+          body: JSON.stringify({ max_context_tokens: s.token_limit }),
         }).catch(() => {});
       }
     }

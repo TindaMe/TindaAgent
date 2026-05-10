@@ -36,7 +36,7 @@ class SessionManager:
     def ensure_session(self, session_id: str) -> dict[str, Any]:
         return self._store.ensure_session(session_id)
 
-    def get_messages(self, session_id: str) -> list[dict[str, Any]]:
+    def get_messages(self, session_id: str) -> dict[str, Any]:
         return self._store.load_messages(session_id)
 
     def append_messages(self, session_id: str, messages: list[dict[str, Any]]) -> dict[str, Any]:

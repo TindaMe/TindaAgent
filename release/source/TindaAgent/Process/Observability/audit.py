@@ -79,7 +79,7 @@ def redact_sensitive_text(text: Any) -> str:
 class _AuditFiles:
     root: Path
     total_jsonl: Path
-    total_idx: Path  # {event_id: byte_offset}
+    total_idx: Path  # event count in current total.jsonl
     total_text: Path
     error_text: Path
     legacy_error_text: Path
@@ -196,7 +196,7 @@ class GlobalAuditEngine:
                 shutil.copyfileobj(fin, fout)
             src.unlink()
             # 重置索引
-            self._files.total_idx.write_text("{}", encoding="utf-8")
+            self._files.total_idx.write_text("0", encoding="utf-8")
         except Exception:
             pass  # 归档失败不阻断业务
 
@@ -209,24 +209,18 @@ class GlobalAuditEngine:
     ) -> None:
         self._rotate_if_needed()
         subsystem_file = self._files.root / self._subsystem_file_name(subsystem)
-        # 写入 JSONL + 更新索引（先记偏移再写，偏移=写之前文件大小）
+        # 写入 JSONL + 更新事件计数
         eid = int(json_event["id"])
-        idx: dict[int, int] = {}
+        count = 0
         try:
-            idx_text = self._files.total_idx.read_text(encoding="utf-8")
-            idx = json.loads(idx_text) if idx_text.strip() else {}
-            if not isinstance(idx, dict):
-                idx = {}
+            count = int(self._files.total_idx.read_text(encoding="utf-8").strip() or "0")
         except Exception:
-            idx = {}
-        offset = self._files.total_jsonl.stat().st_size if self._files.total_jsonl.exists() else 0
+            count = 0
         with self._files.total_jsonl.open("a", encoding="utf-8") as fp:
             fp.write(json.dumps(json_event, ensure_ascii=False, default=str) + "\n")
-        idx[str(eid)] = int(offset)
-        # 分摊写入：每 32 条持久化一次索引
-        idx["_write_count"] = int(idx.get("_write_count", 0)) + 1
+        count += 1
         try:
-            self._files.total_idx.write_text(json.dumps(idx, ensure_ascii=False), encoding="utf-8")
+            self._files.total_idx.write_text(str(count), encoding="utf-8")
         except Exception:
             pass
         # 文本镜像

@@ -65,4 +65,4 @@ echo "   按 Ctrl+C 停止"
 echo ""
 
 # Keep wrapper transparent; run_web.py handles port retry/selection and prints final URL.
-exec "$PY_BIN" run_web.py --host "$HOST" --port "$PORT" --port-retries "$PORT_RETRIES" --first-port-wait-ms 1800
+exec "$PY_BIN" run_web.py --host "$HOST" --port "$PORT" --port-retries "$PORT_RETRIES" --first-port-wait-ms 1800 --reload

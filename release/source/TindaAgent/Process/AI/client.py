@@ -117,21 +117,21 @@ def _detect_dsml_tool_calls(content: str, *, prefix: str) -> list[dict]:
 
 def _build_tool_limit_fallback(tool_trace: list[dict]) -> str:
     if not tool_trace:
-        return "Tool call limit reached, stopping further calls."
-    lines = ["Tool call limit reached. Summary of results:"]
+        return "Maximum tool call iterations reached. Provide your best answer based on the results obtained so far."
+    lines = ["Maximum tool call iterations reached. Summarize the results and provide a final answer."]
     for idx, step in enumerate(tool_trace[-4:], start=1):
         name = step.get("agent_tool", "unknown_tool")
         result = step.get("result")
         text = ""
         if isinstance(result, dict):
             if result.get("ok") is False:
-                text = str(result.get("error", "执行失败"))
+                text = str(result.get("error", ""))
             elif result.get("result") is not None:
                 text = str(result.get("result"))
             elif result.get("stdout"):
                 text = str(result.get("stdout"))
             else:
-                text = "调用完成"
+                text = "completed"
         elif result is not None:
             text = str(result)
         else:
@@ -139,18 +139,8 @@ def _build_tool_limit_fallback(tool_trace: list[dict]) -> str:
         text = text.replace("\n", " ").strip()
         if len(text) > 140:
             text = text[:140] + "..."
-        lines.append(f"{idx}. {name}: {text or '调用完成'}")
-    lines.append("Try narrowing your request for more precise results.")
+        lines.append(f"{idx}. {name}: {text or 'completed'}")
     return "\n".join(lines)
-
-
-def _detect_fake_tool_claim(text: str) -> bool:
-    """检测模型是否在文本中伪造了工具调用描述。轻量启发式，无海量正则。"""
-    if not text:
-        return False
-    lower = text.lower()
-    claims = ("tool_calls", "current tools", "available tools")
-    return any(p in lower for p in claims)
 
 
 def _result_has_pending_confirmation(payload: Any) -> bool:
@@ -278,36 +268,6 @@ class LLMClient:
                          extra={"tool_name": name, "ok": True, "call_id": call_id})
         return steps, has_pending_confirmation
 
-    def _retry_with_tool_reminder(self, messages: list[dict], tools: list[dict],
-                                  user_perm: int, temperature: float,
-                                  round: int) -> dict:
-        """模型第一次返回假调用时，追加纠正提示后重试。"""
-        correction: dict = {
-            "role": "system",
-            "content": (
-                "You described tool execution results in text without actually calling tools via the tool_calls API. "
-                "Re-process the user's request: if tools are needed, use the tool_calls interface to make real calls. "
-                "If no tools are needed, give a helpful answer directly. Never pretend to have executed tools."
-            ),
-        }
-        retry_msgs = list(messages) + [correction]
-        resp = self._client.chat.completions.create(
-            model=self.model, messages=retry_msgs, temperature=temperature,
-            tools=tools, tool_choice="auto",
-            extra_body=self._extra_body)
-        msg = resp.choices[0].message
-        rc = _concat_reasoning(getattr(msg, "reasoning_content", None))
-        calls = [_normalize_tool_call(
-            call_id=getattr(c, "id", None), call_type=getattr(c, "type", None),
-            function_name=getattr(c.function, "name", ""),
-            function_arguments=getattr(c.function, "arguments", None),
-            fallback_id=f"retry_{round}_{i}")
-            for i, c in enumerate(msg.tool_calls or [])]
-        if not calls:
-            calls = _detect_dsml_tool_calls(msg.content or "", prefix=f"dsml_retry_{round}")
-        return {"role": "assistant", "content": msg.content or "", "tool_calls": calls,
-                "reasoning_content": rc}
-
     def _process_tool_loop(self, messages: list[dict], user_perm: int, temperature: float,
                            max_tool_steps: int, stream: bool, base_len: int,
                            func: str) -> tuple[str, list[dict], int, list[dict]]:
@@ -316,7 +276,6 @@ class LLMClient:
         tools = tool_registry.build_agent_tool_schemas(user_perm)
         steps = 0
         trace = []
-        retried = False  # 每轮对话仅允许一次重试纠正
 
         while True:
             force_finalize = steps >= max_tool_steps - 1 and len(trace) > 0
@@ -337,16 +296,6 @@ class LLMClient:
             if not calls:
                 calls = _detect_dsml_tool_calls(content, prefix=f"dsml_{steps}")
 
-            # 没有实际 tool_call → 检查是否在伪造调用 → 重试一次
-            if not calls and _detect_fake_tool_claim(content) and not retried:
-                audit_event("SYSTEM_EXECUTE", "ai", func, _THIS_FILE, "fake_tool_claim_detected_retrying",
-                             extra={"model": self.model, "steps": steps})
-                retry = self._retry_with_tool_reminder(msgs, tools, user_perm, temperature, steps)
-                calls = retry["tool_calls"]
-                content = retry["content"]
-                rc = _concat_reasoning(retry.get("reasoning_content", ""))
-                retried = True
-
             if not calls:
                 msg_out = _attach_reasoning({"role": "assistant", "content": content}, rc)
                 msgs.append(msg_out)
@@ -358,12 +307,9 @@ class LLMClient:
             step_trace, has_pending_confirmation = self._run_tools(calls, user_perm, msgs, trace, func)
 
             steps += 1
-            # 所有工具均失败 → 不重试，直接返回错误让 LLM 解释
+            # 所有工具均失败 → 继续循环，让 LLM 根据 tool role 的错误信息自行决定下一步
             if step_trace and all(_tool_failed(s) for s in step_trace):
-                errors = [_tool_error(s) for s in step_trace]
-                err_text = "; ".join(e for e in errors if e) or "tool execution failed"
-                msgs.append({"role": "system", "content": f"All tool calls failed: {err_text}. Fix the parameters and retry. If you cannot fix them, explain the failure to the user in natural language. You MUST respond."})
-                return err_text, msgs[base_len:], steps, trace
+                continue
             if has_pending_confirmation:
                 pending_reply = content if str(content or "").strip() else ""
                 return pending_reply, msgs[base_len:], steps, trace
@@ -391,7 +337,6 @@ class LLMClient:
         base_len = len(msgs)
         steps = 0
         trace = []
-        retried = False
         audit_event("SYSTEM_EXECUTE", "ai", "LLMClient.stream_chat_with_tools", _THIS_FILE,
                      "stream_start", extra={"model": self.model, "messages_count": len(messages),
                                             "user_perm": user_perm, "max_tool_steps": max_tool_steps})
@@ -421,6 +366,7 @@ class LLMClient:
                 rp = _concat_reasoning(getattr(delta, "reasoning_content", None))
                 if rp:
                     reasoning_parts.append(rp)
+                    yield {"type": "reasoning_delta", "content": rp}
 
                 for tc in (getattr(delta, "tool_calls", None) or []):
                     idx = getattr(tc, "index", 0)
@@ -452,23 +398,6 @@ class LLMClient:
                 if not calls:
                     calls = _detect_dsml_tool_calls(content, prefix=f"dsml_{steps}")
 
-            # 流式场景：如果没有 tool_call，检查假调用并重试
-            if not calls and _detect_fake_tool_claim(content) and not retried:
-                # 流式模式下已发出去的 delta 不能撤回，追加纠正
-                correction = (
-                    "\n\n> The model described tool calls in text without actually executing them. Retrying...\n\n"
-                )
-                yield {"type": "delta", "content": correction}
-
-                retry = self._retry_with_tool_reminder(msgs, tools, user_perm, temperature, steps)
-                calls = retry["tool_calls"]
-                content = retry["content"]
-                rc = _concat_reasoning(retry.get("reasoning_content", ""))
-                retried = True
-                # 重试结果中如果有文本 delta，也发出去
-                if content:
-                    yield {"type": "delta", "content": content}
-
             if not calls:
                 msg_out = _attach_reasoning({"role": "assistant", "content": content}, rc)
                 msgs.append(msg_out)
@@ -494,11 +423,7 @@ class LLMClient:
 
             steps += 1
             if step_trace and all(_tool_failed(s) for s in step_trace):
-                errors = [_tool_error(s) for s in step_trace]
-                err_text = "; ".join(e for e in errors if e) or "tool execution failed"
-                msgs.append({"role": "system", "content": f"All tool calls failed: {err_text}. Fix the parameters and retry. If you cannot fix them, explain the failure to the user in natural language. You MUST respond."})
-                yield {"type": "done", **(_build_done(err_text, msgs, base_len, steps, trace))}
-                return
+                continue
             if has_pending_confirmation:
                 pending_reply = content if str(content or "").strip() else ""
                 yield {"type": "done", **(_build_done(pending_reply, msgs, base_len, steps, trace))}

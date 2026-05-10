@@ -240,8 +240,9 @@ class CLI:
             return
         # 只在 exactly 第一条 user+assistant 消息时触发
         rows = self.sessions.get_messages(self.session_id)
-        user_msgs = [m for m in rows if m.get("role") == "user" and m.get("entry_type") == "chat"]
-        asst_msgs = [m for m in rows if m.get("role") == "assistant" and m.get("entry_type") == "chat"]
+        msgs = list(rows.values())
+        user_msgs = [m for m in msgs if isinstance(m, dict) and m.get("role") == "user"]
+        asst_msgs = [m for m in msgs if isinstance(m, dict) and m.get("role") == "assistant"]
         if len(user_msgs) != 1 or len(asst_msgs) != 1:
             return
 
@@ -450,7 +451,7 @@ class CLI:
                 rows = self.sessions.get_messages(sid)
                 if rows:
                     print(f"\n {D}── 上次会话 {sid} ({len(rows)} 条消息) ──{R}\n")
-                    for item in rows:
+                    for item in rows.values():
                         role = item.get("role", "?")
                         content = str(item.get("content", ""))
                         entry_type = str(item.get("entry_type", "chat"))
