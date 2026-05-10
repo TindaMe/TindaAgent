@@ -78,9 +78,13 @@ def build_assistant_message(substeps: list[dict],
             "content": content if content else {"text": ""}}
 
 
-def build_system_message(text: str, audit_id: int | None = None) -> dict:
+def build_system_message(text: str, audit_id: int | None = None,
+                         *, note_type: str | None = None) -> dict:
+    content: dict = {"text": str(text)}
+    if note_type:
+        content["note_type"] = note_type
     return {"role": "system", "id": make_message_id(audit_id),
-            "content": {"text": str(text)}}
+            "content": content}
 
 
 # ── Store → LLM ──────────────────────────────────────────────────────────
@@ -119,34 +123,38 @@ def store_dict_to_agent_messages(store_dict: dict,
         anchor_idx = -1
         for i, (seq, entry) in enumerate(entries):
             if entry.get("id", "") == latest_summary_id:
-                summary_msg = _entry_to_llm_row(entry)
+                summary_msg = _entry_to_llm_rows(entry)
             if entry.get("id", "") == summary_anchor_id:
                 anchor_idx = i
         if summary_msg and anchor_idx >= 0:
-            out.append(summary_msg)
-            stats["included"] += 1
+            out.extend(summary_msg)
+            stats["included"] += len(summary_msg)
             for seq, entry in entries[anchor_idx:]:
                 if entry.get("id", "") != latest_summary_id:
-                    row = _entry_to_llm_row(entry)
-                    if row:
-                        out.append(row)
-                        stats["included"] += 1
+                    rows = _entry_to_llm_rows(entry)
+                    if rows:
+                        out.extend(rows)
+                        stats["included"] += len(rows)
             return out, stats
 
     for seq, entry in entries:
-        row = _entry_to_llm_row(entry)
-        if row:
-            out.append(row)
-            stats["included"] += 1
+        rows = _entry_to_llm_rows(entry)
+        if rows:
+            out.extend(rows)
+            stats["included"] += len(rows)
         else:
             stats["skipped"] += 1
     return out, stats
 
 
-def _entry_to_llm_row(entry: dict) -> dict | None:
-    """Convert a single store entry to an LLM message row."""
+def _entry_to_llm_rows(entry: dict) -> list[dict]:
+    """Convert a single store entry to one or more LLM message rows.
+
+    For assistant messages with tool_marker sub-steps, splits into
+    interleaved assistant + tool messages following key order.
+    """
     if not isinstance(entry, dict):
-        return None
+        return []
     role = str(entry.get("role", "")).strip()
     content = entry.get("content", {})
 
@@ -164,26 +172,59 @@ def _entry_to_llm_row(entry: dict) -> dict | None:
         elif isinstance(content, str):
             text = content
         if not text.strip():
-            return None
-        return {"role": "user", "content": text}
+            return []
+        return [{"role": "user", "content": text}]
 
     elif role == "assistant":
         if not isinstance(content, dict):
             txt = str(content or "")
-            return {"role": "assistant", "content": txt} if txt.strip() else None
-        # Aggregate all text sub-steps
-        parts = []
+            return [{"role": "assistant", "content": txt}] if txt.strip() else []
+
+        rows: list[dict] = []
+        pending_text: list[str] = []
+        pending_calls: list[dict] = []
+
+        def _flush_asst():
+            if pending_text or pending_calls:
+                asst = {"role": "assistant",
+                        "content": "\n\n".join(p for p in pending_text if p.strip())}
+                if pending_calls:
+                    asst["tool_calls"] = pending_calls.copy()
+                rows.append(asst)
+                pending_text.clear()
+                pending_calls.clear()
+
         for k in sorted((int(k2) for k2 in content if k2.isdigit()), key=int):
             v = content[str(k)]
-            if isinstance(v, dict):
-                if "text" in v:
-                    parts.append(str(v["text"]))
-                elif "thinking" in v:
-                    parts.append(str(v["thinking"]))
-        text = "\n\n".join(p for p in parts if p.strip())
-        if not text.strip():
-            return None
-        return {"role": "assistant", "content": text}
+            if not isinstance(v, dict):
+                continue
+            if "tool_marker" in v:
+                tm = v["tool_marker"]
+                if not isinstance(tm, dict):
+                    continue
+                cid = str(tm.get("id", tm.get("call_id", "")) or "").strip()
+                name = str(tm.get("name", tm.get("tool_name", "unknown")))
+                stdout = str(tm.get("stdout", ""))
+                # Flush pending text + calls before tool messages
+                _flush_asst()
+                # Build minimal tool_calls for assistant message
+                pending_calls.append({
+                    "id": cid or f"call_{k}",
+                    "type": "function",
+                    "function": {"name": name, "arguments": "{}"},
+                })
+                # Emit tool result message
+                rows.append({
+                    "role": "tool",
+                    "tool_call_id": cid or f"call_{k}",
+                    "content": stdout or "{}",
+                })
+            elif "thinking" in v:
+                pending_text.append(str(v["thinking"]))
+            elif "text" in v:
+                pending_text.append(str(v["text"]))
+        _flush_asst()
+        return rows
 
     elif role == "system":
         text = ""
@@ -192,10 +233,10 @@ def _entry_to_llm_row(entry: dict) -> dict | None:
         elif isinstance(content, str):
             text = content
         if not text.strip():
-            return None
-        return {"role": "assistant", "content": f"[系统摘要] {text}"}
+            return []
+        return [{"role": "assistant", "content": f"[Context Summary] {text}"}]
 
-    return None
+    return []
 
 
 # ── Store → Frontend ─────────────────────────────────────────────────────
