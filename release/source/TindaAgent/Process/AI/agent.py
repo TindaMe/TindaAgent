@@ -10,7 +10,7 @@ from TindaAgent.User import userdata
 try:
     _VERSION = get_app_version() or _pkg_version("TindaAgent")
 except Exception:
-    _VERSION = "1.7.16"
+    _VERSION = "1.7.17"
 
 
 def _build_system_prompt(model_name: str | None) -> str:
