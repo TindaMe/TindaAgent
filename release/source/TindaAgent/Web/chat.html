@@ -4814,6 +4814,7 @@
 
             if (eventName === "delta") {
               if (streamReasoning) {
+                if (streamText && !streamText.endsWith("\n\n")) streamText += "\n";
                 streamText += "> " + streamReasoning.split("\n").join("\n> ") + "\n\n";
                 streamReasoning = "";
               }
@@ -4834,6 +4835,7 @@
               }
             } else if (eventName === "reset") {
               if (streamReasoning) {
+                if (streamText && !streamText.endsWith("\n\n")) streamText += "\n";
                 streamText += "> " + streamReasoning.split("\n").join("\n> ") + "\n\n";
                 streamReasoning = "";
               }
@@ -4877,6 +4879,7 @@
         if (donePayload) {
             // Flush any remaining accumulated reasoning
             if (streamReasoning) {
+              if (streamText && !streamText.endsWith("\n\n")) streamText += "\n";
               streamText += "> " + streamReasoning.split("\n").join("\n> ") + "\n\n";
               streamReasoning = "";
             }
