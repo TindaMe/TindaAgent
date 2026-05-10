@@ -3222,9 +3222,13 @@ async def session_events(req: SessionEventsRequest):
             })
         else:
             # Chat entries go to session file
-            if role not in {"user", "assistant", "system"}:
+            if entry_type == "notice":
+                msg = sa.build_system_message(content_text)
+            elif role not in {"user", "assistant", "system"}:
                 role = "assistant"
-            if role == "system":
+                msg = {"role": "assistant", "id": sa.make_message_id(),
+                       "content": {"1": {"text": content_text}}}
+            elif role == "system":
                 msg = sa.build_system_message(content_text)
             elif role == "assistant":
                 msg = {"role": "assistant", "id": sa.make_message_id(),
