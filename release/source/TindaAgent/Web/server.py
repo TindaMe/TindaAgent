@@ -105,9 +105,15 @@ def _build_substeps_from_history(agent: Agent, tool_trace: list[dict] | None) ->
     trace_idx = 0
 
     substeps: list[dict] = []
-    # Only process messages after the base history (skip system prompts)
-    base_len = len(getattr(agent, "_build_base_history", lambda: [])())
-    for m in history[base_len:]:
+    # Only process messages from the current turn:
+    # find the position right after the last user message in history.
+    user_idx = -1
+    for i in range(len(history) - 1, -1, -1):
+        if isinstance(history[i], dict) and history[i].get("role") == "user":
+            user_idx = i
+            break
+    turn_start = user_idx + 1 if user_idx >= 0 else len(getattr(agent, "_build_base_history", lambda: [])())
+    for m in history[turn_start:]:
         if not isinstance(m, dict):
             continue
         role = m.get("role", "")
