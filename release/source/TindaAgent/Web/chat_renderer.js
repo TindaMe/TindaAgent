@@ -52,37 +52,48 @@
     var content = entry.content;
     var parts = [];
     if (Array.isArray(content)) {
+      var toolBatch = [];
       content.forEach(function (step) {
         if (!step) return;
         var kind = step.kind || "";
-        if (kind === "thinking") {
-          parts.push("> " + String(step.data || "").split("\n").join("\n> "));
-        } else if (kind === "tool_marker") {
-          var d = step.data || {};
-          if (typeof d !== "object") d = {};
-          var name = d.name || d.tool_name || "unknown";
-          var cid = d.id || d.call_id || "";
-          parts.push([
-            "> >_<",
-            "> --调用工具中--",
-            "> **已调用工具**: " + name + (cid ? " #" + cid : "")
-          ].join("\n"));
-          // stdout → terminal panel
-          if (typeof renderToolOutputToTerminal === "function") {
-            var output = d.stdout || d.stderr || "";
-            if (output) renderToolOutputToTerminal(name, cid, output, d.ok);
-          }
-        } else if (kind === "text") {
-          parts.push(String(step.data || ""));
+        if (kind === "tool_marker") {
+          toolBatch.push(step);
         } else {
-          parts.push(String(step.data || step || ""));
+          _flushToolBatch(toolBatch, parts);
+          if (kind === "thinking") {
+            parts.push("> " + String(step.data || "").split("\n").join("\n> "));
+          } else if (kind === "text") {
+            parts.push(String(step.data || ""));
+          } else {
+            parts.push(String(step.data || step || ""));
+          }
         }
       });
+      _flushToolBatch(toolBatch, parts);
     } else {
       parts.push(_extractText(content));
     }
     var text = parts.filter(function(p) { return p.trim(); }).join("\n\n");
     if (text.trim() && typeof addBubble === "function") addBubble(text, "bot");
+  }
+
+  function _flushToolBatch(batch, parts) {
+    if (batch.length === 0) return;
+    var lines = ["> >_<", "> --调用工具中--"];
+    batch.forEach(function (step) {
+      var d = step.data || {};
+      if (typeof d !== "object") d = {};
+      var name = d.name || d.tool_name || "unknown";
+      var cid = d.id || d.call_id || "";
+      lines.push("> **已调用工具**: " + name + (cid ? " #" + cid : ""));
+      // stdout → terminal panel
+      if (typeof renderToolOutputToTerminal === "function") {
+        var output = d.stdout || d.stderr || "";
+        if (output) renderToolOutputToTerminal(name, cid, output, d.ok);
+      }
+    });
+    parts.push(lines.join("\n"));
+    batch.length = 0;
   }
 
   function renderSystemNotice(entry) {
