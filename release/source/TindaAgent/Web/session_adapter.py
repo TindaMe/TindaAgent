@@ -205,6 +205,7 @@ def _entry_to_llm_rows(entry: dict) -> list[dict]:
                 cid = str(tm.get("id", tm.get("call_id", "")) or "").strip()
                 name = str(tm.get("name", tm.get("tool_name", "unknown")))
                 stdout = str(tm.get("stdout", ""))
+                stdin = str(tm.get("stdin", ""))
                 # Flush pending text + calls before tool messages
                 _flush_asst()
                 # Build minimal tool_calls for assistant message
@@ -213,11 +214,16 @@ def _entry_to_llm_rows(entry: dict) -> list[dict]:
                     "type": "function",
                     "function": {"name": name, "arguments": "{}"},
                 })
-                # Emit tool result message
+                # Emit tool result message with stdin + stdout
+                content_parts = []
+                if stdin.strip():
+                    content_parts.append(stdin.strip())
+                if stdout.strip():
+                    content_parts.append(stdout.strip())
                 rows.append({
                     "role": "tool",
                     "tool_call_id": cid or f"call_{k}",
-                    "content": stdout or "{}",
+                    "content": "\n".join(content_parts) or "{}",
                 })
             elif "thinking" in v:
                 pending_text.append(str(v["thinking"]))
