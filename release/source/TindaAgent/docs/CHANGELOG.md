@@ -21,6 +21,9 @@
 6. **修复 Web `[error/chat] 'str' object has no attribute 'get'`** — `_build_substeps_from_history` 第 152 行 `inner.get("stdout")` 崩溃：工具返回的 `result` 字段可以是字符串，但代码未做类型检查就调用 `.get()`。新会话首次触发工具时必现（老会话有缓存不走此分支）。修复：`inner` 非 dict 时置为 `{}`。
 7. **存储入口防御** — `_load_messages_raw` 源头过滤非 dict 值；`session_adapter` 全部 entry 处理函数增加 `isinstance` 守卫；`session_store` 全部 entry 迭代路径增加类型检查。
 8. **错误诊断增强** — 流式和非流式端点的异常处理增加 `traceback.print_exc()`，便于快速定位隐藏崩溃点。
+9. **Thinking 内容持久化** — thinking/reasoning 不再丢失：`build_assistant_message` 正确存储 `{"kind": "thinking", ...}` 为 substep，前端渲染时识别并折叠显示。之前 thinking 只在流式过程中可见，刷新后消失。
+10. **工具标记字段统一** — `tool_marker` 内部字段重命名：`tool_name` → `name`、`call_id` → `id`，在 `server.py`、`session_adapter.py`、`session_store.py` 三处统一，消除存储格式不一致导致的前端渲染断裂。
+11. **终端独立存储** — 终端输出从聊天消息体中分离，存入独立的 `{sid}.terminal.json` 文件，不再污染对话上下文。`append_terminal` / `load_terminal` 独立读写，`_normalize_entry` 过滤 `entry_type=terminal` 条目。
 
 ## v1.7.16 - 2026-05-07
 
