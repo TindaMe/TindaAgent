@@ -4813,32 +4813,42 @@
             if (eventName === "delta") {
               streamText += String(payload.content || "");
               if (renderDelta && streamBot) {
-                const fullMd = buildStreamFullMd(streamReasoning, streamText);
-                streamBot.bubble.dataset.rawMd = fullMd;
-                streamBot.bubble.innerHTML = renderMarkdown(fullMd);
+                streamBot.bubble.dataset.rawMd = streamText;
+                streamBot.bubble.innerHTML = renderMarkdown(streamText);
                 scrollToBottom();
               }
             } else if (eventName === "reasoning_delta") {
-              streamReasoning += String(payload.content || "");
+              const rc = String(payload.content || "");
+              streamReasoning += rc;
+              if (rc) { streamText += "> " + rc.split("\n").join("\n> ") + "\n"; }
               if (renderDelta && streamBot) {
-                const fullMd = buildStreamFullMd(streamReasoning, streamText);
-                streamBot.bubble.dataset.rawMd = fullMd;
-                streamBot.bubble.innerHTML = renderMarkdown(fullMd);
+                streamBot.bubble.dataset.rawMd = streamText;
+                streamBot.bubble.innerHTML = renderMarkdown(streamText);
                 scrollToBottom();
               }
             } else if (eventName === "reset") {
               const marker = `\n\n> >_<\n> --调用工具中--\n`;
               streamText += marker;
               if (renderDelta && streamBot) {
-                const fullMd = buildStreamFullMd(streamReasoning, streamText);
-                streamBot.bubble.dataset.rawMd = fullMd;
-                streamBot.bubble.innerHTML = renderMarkdown(fullMd);
+                streamBot.bubble.dataset.rawMd = streamText;
+                streamBot.bubble.innerHTML = renderMarkdown(streamText);
                 scrollToBottom();
               }
             } else if (eventName === "tool_step") {
               const trace = Array.isArray(payload?.trace) ? payload.trace : [];
               if (trace.length > 0) {
                 renderToolTraceToTerminal(trace, { sessionId: sid, persist: false });
+                trace.forEach(function(step) {
+                  if (!step || typeof step !== "object") return;
+                  var name = step.agent_tool || "unknown";
+                  var cid = (step.call_id || "").replace("tc_", "");
+                  streamText += "\n\n> **已调用工具**: " + name + (cid ? " #" + cid : "") + "\n";
+                });
+                if (renderDelta && streamBot) {
+                  streamBot.bubble.dataset.rawMd = streamText;
+                  streamBot.bubble.innerHTML = renderMarkdown(streamText);
+                  scrollToBottom();
+                }
               }
             } else if (eventName === "done") {
               donePayload = payload;
@@ -4854,39 +4864,49 @@
         }
 
         const doneTurnId = normalizeTurnId(donePayload?.turn_id || "");
-        if (donePayload) {
-          if (!streamReasoning && donePayload.reasoning_content) {
-            streamReasoning = String(donePayload.reasoning_content || "");
-          }
-          // delta 已完整构建 streamText，done 仅补 turn_id，不再追加文本
-          if (typeof donePayload.reply === "string") {
-            if (!streamText) {
-              streamText = sanitizeAssistantDisplayText(String(donePayload.reply || ""));
+          if (donePayload) {
+            if (!streamReasoning && donePayload.reasoning_content) {
+              const rc = String(donePayload.reasoning_content || "");
+              streamReasoning = rc;
+              if (rc) { streamText = "> " + rc.split("\n").join("\n> ") + "\n\n" + streamText; }
             }
-            if (renderDelta && streamBot) {
-              const fullMd = buildStreamFullMd(streamReasoning, streamText);
-              streamBot.bubble.dataset.rawMd = fullMd;
-              streamBot.bubble.innerHTML = renderMarkdown(fullMd);
-              if (doneTurnId) {
-                streamBot.bubble.dataset.turnId = doneTurnId;
-                rememberAssistantTurnBubble(doneTurnId, streamBot.bubble);
+            // Inject tool details from donePayload into streamText (avoid duplicate)
+            const toolTrace = Array.isArray(donePayload.tool_trace) ? donePayload.tool_trace : [];
+            if (toolTrace.length > 0 && streamText.indexOf("**已调用工具**") < 0) {
+              toolTrace.forEach(function(step) {
+                if (!step || typeof step !== "object") return;
+                var name = step.agent_tool || "unknown";
+                var cid = (step.call_id || "").replace("tc_", "");
+                streamText += "\n\n> **已调用工具**: " + name + (cid ? " #" + cid : "") + "\n";
+              });
+            }
+            // delta 已完整构建 streamText，done 仅补 turn_id，不再追加文本
+            if (typeof donePayload.reply === "string") {
+              if (!streamText) {
+                streamText = sanitizeAssistantDisplayText(String(donePayload.reply || ""));
+              }
+              if (renderDelta && streamBot) {
+                streamBot.bubble.dataset.rawMd = streamText;
+                streamBot.bubble.innerHTML = renderMarkdown(streamText);
+                if (doneTurnId) {
+                  streamBot.bubble.dataset.turnId = doneTurnId;
+                  rememberAssistantTurnBubble(doneTurnId, streamBot.bubble);
+                }
+              }
+            } else if (!streamText && donePayload.reply) {
+              streamText = sanitizeAssistantDisplayText(String(donePayload.reply));
+              if (renderDelta && streamBot) {
+                streamBot.bubble.dataset.rawMd = streamText;
+                streamBot.bubble.innerHTML = renderMarkdown(streamText);
+                if (doneTurnId) {
+                  streamBot.bubble.dataset.turnId = doneTurnId;
+                  rememberAssistantTurnBubble(doneTurnId, streamBot.bubble);
+                }
               }
             }
-          } else if (!streamText && donePayload.reply) {
-            streamText = sanitizeAssistantDisplayText(String(donePayload.reply));
-            if (renderDelta && streamBot) {
-              const fullMd = buildStreamFullMd(streamReasoning, streamText);
-              streamBot.bubble.dataset.rawMd = fullMd;
-              streamBot.bubble.innerHTML = renderMarkdown(fullMd);
-              if (doneTurnId) {
-                streamBot.bubble.dataset.turnId = doneTurnId;
-                rememberAssistantTurnBubble(doneTurnId, streamBot.bubble);
-              }
-            }
-          }
           clearTypingPlaceholder();
           if (!renderDelta) {
-            const fallbackText = buildStreamFullMd(streamReasoning, streamText) || String(donePayload.reply || "（无回复）");
+            const fallbackText = streamText || String(donePayload.reply || "（无回复）");
             upsertAssistantTurnBubble(fallbackText || "（无回复）", { turnId: doneTurnId });
           }
           if (donePayload.tool_async) {
@@ -4906,7 +4926,7 @@
         } else if (typingRow) {
           clearTypingPlaceholder();
           if (!renderDelta) {
-            upsertAssistantTurnBubble(buildStreamFullMd(streamReasoning, streamText) || "（无回复）", { turnId: doneTurnId });
+            upsertAssistantTurnBubble(streamText || "（无回复）", { turnId: doneTurnId });
           }
         }
         return;
@@ -4946,7 +4966,10 @@
       } else {
         const reasoningText = String(data.reasoning_content || "").trim();
         const replyText = String(data.reply ?? "（无回复）");
-        const displayText = buildStreamFullMd(reasoningText, replyText);
+        var displayText = replyText;
+        if (reasoningText) {
+          displayText = "> " + reasoningText.split("\n").join("\n> ") + "\n\n" + replyText;
+        }
         upsertAssistantTurnBubble(displayText || "（无回复）", { turnId: data?.turn_id, isCommand: text.startsWith("/") });
         // 工具轨迹由后端同轮次写入会话，前端这里仅做实时展示（不落盘），避免刷新后位置漂移。
         const traced = renderToolTraceToTerminal(data.tool_trace, { sessionId: sid, persist: false });
