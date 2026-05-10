@@ -60,17 +60,17 @@
         } else if (kind === "tool_marker") {
           var d = step.data || {};
           if (typeof d !== "object") d = {};
-          // Tool marker header in chat bubble
+          var name = d.name || d.tool_name || "unknown";
+          var cid = d.id || d.call_id || "";
           parts.push([
             "> >_<",
             "> --调用工具中--",
-            "> id: " + (d.id || d.call_id || "?"),
-            "> name: " + (d.name || d.tool_name || "unknown")
+            "> **已调用工具**: " + name + (cid ? " #" + cid : "")
           ].join("\n"));
           // stdout → terminal panel
           if (typeof renderToolOutputToTerminal === "function") {
             var output = d.stdout || d.stderr || "";
-            if (output) renderToolOutputToTerminal(d.name || d.tool_name, d.id || d.call_id, output, d.ok);
+            if (output) renderToolOutputToTerminal(name, cid, output, d.ok);
           }
         } else if (kind === "text") {
           parts.push(String(step.data || ""));
