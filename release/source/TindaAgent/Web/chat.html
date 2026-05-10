@@ -3514,18 +3514,20 @@
     return cleaned;
   }
 
-  function buildStreamFullMd(reasoning, content) {
+  function _streamDisplay(reasoning, content) {
     const r = String(reasoning || "").trim();
     const c = String(content || "").trim();
     if (!r && !c) return "";
-    const parts = [];
     if (r) {
-      parts.push(r.split("\n").map(l => "> " + l).join("\n"));
+      const rBlock = "> " + r.split("\n").join("\n> ") + "\n";
+      return c ? c + "\n\n" + rBlock : rBlock;
     }
-    if (c) {
-      parts.push(c);
-    }
-    return parts.join("\n\n");
+    return c;
+  }
+
+  function buildStreamFullMd(reasoning, content) {
+    // Legacy: still used by non-streaming display path
+    return _streamDisplay(reasoning, content);
   }
 
   function normalizeTurnId(raw) {
@@ -4811,24 +4813,32 @@
             }
 
             if (eventName === "delta") {
+              if (streamReasoning) {
+                streamText += "> " + streamReasoning.split("\n").join("\n> ") + "\n\n";
+                streamReasoning = "";
+              }
               streamText += String(payload.content || "");
               if (renderDelta && streamBot) {
-                streamBot.bubble.dataset.rawMd = streamText;
-                streamBot.bubble.innerHTML = renderMarkdown(streamText);
+                const cur = _streamDisplay(streamReasoning, streamText);
+                streamBot.bubble.dataset.rawMd = cur;
+                streamBot.bubble.innerHTML = renderMarkdown(cur);
                 scrollToBottom();
               }
             } else if (eventName === "reasoning_delta") {
-              const rc = String(payload.content || "");
-              streamReasoning += rc;
-              if (rc) { streamText += "> " + rc.split("\n").join("\n> ") + "\n"; }
+              streamReasoning += String(payload.content || "");
               if (renderDelta && streamBot) {
-                streamBot.bubble.dataset.rawMd = streamText;
-                streamBot.bubble.innerHTML = renderMarkdown(streamText);
+                const cur = _streamDisplay(streamReasoning, streamText);
+                streamBot.bubble.dataset.rawMd = cur;
+                streamBot.bubble.innerHTML = renderMarkdown(cur);
                 scrollToBottom();
               }
             } else if (eventName === "reset") {
-              const marker = `\n\n> >_<\n> --调用工具中--\n`;
-              streamText += marker;
+              if (streamReasoning) {
+                streamText += "> " + streamReasoning.split("\n").join("\n> ") + "\n\n";
+                streamReasoning = "";
+              }
+              const marker = `> >_<\n> --调用工具中--\n`;
+              streamText += "\n\n" + marker;
               if (renderDelta && streamBot) {
                 streamBot.bubble.dataset.rawMd = streamText;
                 streamBot.bubble.innerHTML = renderMarkdown(streamText);
@@ -4842,7 +4852,7 @@
                   if (!step || typeof step !== "object") return;
                   var name = step.agent_tool || "unknown";
                   var cid = (step.call_id || "").replace("tc_", "");
-                  streamText += "\n\n> **已调用工具**: " + name + (cid ? " #" + cid : "") + "\n";
+                  streamText += "> **已调用工具**: " + name + (cid ? " #" + cid : "") + "\n";
                 });
                 if (renderDelta && streamBot) {
                   streamBot.bubble.dataset.rawMd = streamText;
@@ -4864,11 +4874,16 @@
         }
 
         const doneTurnId = normalizeTurnId(donePayload?.turn_id || "");
-          if (donePayload) {
-            if (!streamReasoning && donePayload.reasoning_content) {
-              const rc = String(donePayload.reasoning_content || "");
-              streamReasoning = rc;
-              if (rc) { streamText = "> " + rc.split("\n").join("\n> ") + "\n\n" + streamText; }
+        if (donePayload) {
+            // Flush any remaining accumulated reasoning
+            if (streamReasoning) {
+              streamText += "> " + streamReasoning.split("\n").join("\n> ") + "\n\n";
+              streamReasoning = "";
+            }
+            // Backfill reasoning from done payload (only if no streaming reasoning happened)
+            if (!streamText.trim() && donePayload.reasoning_content) {
+              const rc = String(donePayload.reasoning_content || "").trim();
+              if (rc) { streamText = "> " + rc.split("\n").join("\n> ") + "\n\n"; }
             }
             // Inject tool details from donePayload into streamText (avoid duplicate)
             const toolTrace = Array.isArray(donePayload.tool_trace) ? donePayload.tool_trace : [];
