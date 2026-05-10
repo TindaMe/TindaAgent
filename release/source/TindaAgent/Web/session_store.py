@@ -56,14 +56,9 @@ def _normalize_entry(raw: dict) -> dict | None:
 
     # Already new format?
     if isinstance(content, dict) and not content.get("user") and not content.get("text"):
-        # Might be sub-steps format — check for numeric keys
         has_num_keys = any(k.isdigit() for k in content)
         if has_num_keys:
-            consolidated = "".join(
-                str(ss.get("text", "")) for ss in content.values()
-                if isinstance(ss, dict)
-            )
-            return {"role": role, "id": str(msg_id), "content": consolidated}
+            return {"role": role, "id": str(msg_id), "content": content}
 
     # Old format: entry_type-based
     et = str(raw.get("entry_type", "chat")).strip() or "chat"
@@ -627,9 +622,25 @@ def _migrate_jsonl_to_dict(legacy_path: Path) -> dict[str, Any]:
             result[str(seq)] = _sa.build_system_message(content)
         elif role == "assistant" and et == "chat":
             seq += 1
-            result[str(seq)] = _sa.build_assistant_message(
-                [{"kind": "text", "content": content}])
+            substeps: list[dict] = []
+            rc = row.get("reasoning_content")
+            if isinstance(rc, str) and rc.strip():
+                substeps.append({"kind": "thinking", "content": rc.strip()})
+            substeps.append({"kind": "text", "content": str(content or "")})
+            result[str(seq)] = _sa.build_assistant_message(substeps)
         elif et == "tool_marker":
-            # Attach to previous assistant as a tool_marker sub-step
-            pass
+            if seq > 0 and str(result[str(seq)].get("role", "")) == "assistant":
+                prev_content = result[str(seq)].get("content", {})
+                if isinstance(prev_content, dict):
+                    max_sub = max((int(k) for k in prev_content if k.isdigit()), default=0)
+                    prev_content[str(max_sub + 1)] = {
+                        "tool_marker": {
+                            "tool_name": "unknown",
+                            "ok": True,
+                            "stdin": "",
+                            "stdout": "",
+                            "call_id": "",
+                        }
+                    }
+                    result[str(seq)]["content"] = prev_content
     return result
