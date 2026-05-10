@@ -2,6 +2,22 @@
 
 本文档用于补录 TindaAgent 的版本演进历史，后续按版本持续维护。
 
+## v1.8.0 - 2026-05-10
+
+**会话存储全部重写，修复所有已知会话 BUG。**
+
+1. **会话存储格式重写** — JSONL 列表格式 → JSON dict 格式（`{"1": {msg}, "2": {msg}}`），每个会话一个 `.json` 文件。
+2. **新增 session_adapter 模块** — 统一的格式转换层：store dict ↔ LLM 消息、store dict ↔ 前端条目。
+3. **新增 chat_renderer.js** — 渲染逻辑从 chat.html 提取为独立模块。
+4. **session_store 全面重构** — 原子追加、新旧格式归一化、Markdown/文本导出、substeps 内容提取、上下文压缩、孤消息清理、旧 JSONL 自动迁移。
+5. **终端独立存储** — 终端输出分离到 `{sid}.terminal.json`，不再污染对话上下文。
+6. **Thinking 持久化** — thinking/reasoning 正确存储为 substep，前端折叠显示，刷新不丢失。
+7. **工具标记字段统一** — `tool_name` → `name`、`call_id` → `id`，消除格式不一致导致的前端渲染断裂。
+8. **修复 CLI `'str' object has no attribute 'get'`** — `_maybe_generate_title` 和 `/last` 改为 `rows.values()` 迭代。
+9. **修复 Web `[error/chat] 'str' object has no attribute 'get'`** — `_build_substeps_from_history` 工具返回字符串时 `inner.get()` 崩溃。
+10. **存储入口防御** — `_load_messages_raw` 源头过滤 + 全链路 `isinstance` 守卫。
+11. **错误诊断增强** — 异常处理增加 `traceback.print_exc()`。
+
 ## v1.7.17 - 2026-05-10
 
 1. **会话存储格式重写** — JSONL 列表格式 → JSON dict 格式（`{"1": {msg}, "2": {msg}}`），每个会话一个 `.json` 文件。支持按 key 排序、O(1) 查找、原子写入（.tmp → replace）。
