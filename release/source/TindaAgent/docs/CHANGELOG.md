@@ -2,6 +2,26 @@
 
 本文档用于补录 TindaAgent 的版本演进历史，后续按版本持续维护。
 
+## v1.7.17 - 2026-05-10
+
+1. **会话存储格式重写** — JSONL 列表格式 → JSON dict 格式（`{"1": {msg}, "2": {msg}}`），每个会话一个 `.json` 文件。支持按 key 排序、O(1) 查找、原子写入（.tmp → replace）。
+2. **新增 session_adapter 模块** — 统一的格式转换层：store dict ↔ LLM 消息、store dict ↔ 前端条目、消息构建器（build_user_message / build_assistant_message / build_system_message）、压缩辅助（filter_raw_chat_entries）。
+3. **新增 chat_renderer.js** — 聊天渲染逻辑从 chat.html 提取为独立 JS 模块。
+4. **session_store 全面重构**：
+   - `append_messages` / `append_to_last_assistant` 原子追加（session 级锁）
+   - `_normalize_entry` 新旧格式透明归一化（entry_type 旧格式 + substeps 新格式）
+   - `_render_exports_for_session` 基于 dict 的 Markdown/文本导出
+   - `maybe_first_round_messages` 支持 substeps 内容提取
+   - `compress_context` 基于 dict 的上下文压缩
+   - `get_context_messages` 委托 session_adapter 转换
+   - 孤消息清理（`cleanup_orphan_messages`）
+   - 终端独立存储（`append_terminal` / `load_terminal`）
+   - 旧 JSONL 自动迁移（`_migrate_jsonl_to_dict`）
+5. **修复 CLI `'str' object has no attribute 'get'`** — `_maybe_generate_title` 和 `/last` 命令中 `for m in rows` 遍历 dict 拿到的是 key（字符串）而非 value（字典），改为 `list(rows.values())` 迭代。`SessionManager.get_messages` 返回类型标注修正为 `dict[str, Any]`。
+6. **修复 Web `[error/chat] 'str' object has no attribute 'get'`** — `_build_substeps_from_history` 第 152 行 `inner.get("stdout")` 崩溃：工具返回的 `result` 字段可以是字符串，但代码未做类型检查就调用 `.get()`。新会话首次触发工具时必现（老会话有缓存不走此分支）。修复：`inner` 非 dict 时置为 `{}`。
+7. **存储入口防御** — `_load_messages_raw` 源头过滤非 dict 值；`session_adapter` 全部 entry 处理函数增加 `isinstance` 守卫；`session_store` 全部 entry 迭代路径增加类型检查。
+8. **错误诊断增强** — 流式和非流式端点的异常处理增加 `traceback.print_exc()`，便于快速定位隐藏崩溃点。
+
 ## v1.7.16 - 2026-05-07
 
 1. **辅助模型可配置化** — 标题生成和上下文压缩模型不再硬编码，支持 Settings 页面下拉选择 + 环境变量（`TINDA_TITLE_MODEL` / `TINDA_COMPRESS_MODEL`），默认仍为 `deepseek-v4-flash`。优先级：Web Settings > 环境变量 > 默认值。
