@@ -635,11 +635,11 @@ def _migrate_jsonl_to_dict(legacy_path: Path) -> dict[str, Any]:
                     max_sub = max((int(k) for k in prev_content if k.isdigit()), default=0)
                     prev_content[str(max_sub + 1)] = {
                         "tool_marker": {
-                            "tool_name": "unknown",
+                            "name": "unknown",
                             "ok": True,
                             "stdin": "",
                             "stdout": "",
-                            "call_id": "",
+                            "id": "",
                         }
                     }
                     result[str(seq)]["content"] = prev_content

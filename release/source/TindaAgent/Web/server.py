@@ -167,11 +167,11 @@ def _build_substeps_from_history(agent: Agent, tool_trace: list[dict] | None) ->
                 stdin = str(fn.get("cmd", "") or fn.get("text", "") or fn.get("key", "") or "")
                 substeps.append({
                     "kind": "tool_marker",
-                    "tool_name": name,
+                    "name": name,
                     "ok": bool(ok),
                     "stdin": stdin[:500],
                     "stdout": stdout[:500],
-                    "call_id": cid.lstrip("tc_"),
+                    "id": cid.lstrip("tc_"),
                 })
     return substeps
 
@@ -1433,11 +1433,11 @@ def _save_chat_messages(
                             or result.get("output") or inner.get("output") or "")
             substeps.append({
                 "kind": "tool_marker",
-                "tool_name": name,
+                "name": name,
                 "ok": bool(ok),
                 "stdin": stdin[:500],
                 "stdout": stdout[:500],
-                "call_id": cid.lstrip("tc_"),
+                "id": cid.lstrip("tc_"),
             })
     if assistant_text.strip():
         substeps.append({"kind": "text", "content": assistant_text.strip()})
@@ -1490,9 +1490,9 @@ def _append_assistant_continuation_messages(
                 stdout = str(result.get("stdout") or inner.get("stdout")
                             or result.get("output") or inner.get("output") or "")
             substeps.append({"tool_marker": {
-                "tool_name": name, "ok": bool(ok),
+                "name": name, "ok": bool(ok),
                 "stdin": stdin[:500], "stdout": stdout[:500],
-                "call_id": cid.lstrip("tc_"),
+                "id": cid.lstrip("tc_"),
             }})
     if reply:
         substeps.append({"text": reply})

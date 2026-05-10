@@ -63,14 +63,14 @@
           // Tool marker header in chat bubble
           parts.push([
             "> >_<",
-            "> --工具调用中--",
-            "> id: " + (d.call_id || "?"),
-            "> name: " + (d.tool_name || "unknown")
+            "> --调用工具中--",
+            "> id: " + (d.id || d.call_id || "?"),
+            "> name: " + (d.name || d.tool_name || "unknown")
           ].join("\n"));
           // stdout → terminal panel
           if (typeof renderToolOutputToTerminal === "function") {
             var output = d.stdout || d.stderr || "";
-            if (output) renderToolOutputToTerminal(d.tool_name, d.call_id, output, d.ok);
+            if (output) renderToolOutputToTerminal(d.name || d.tool_name, d.id || d.call_id, output, d.ok);
           }
         } else if (kind === "text") {
           parts.push(String(step.data || ""));

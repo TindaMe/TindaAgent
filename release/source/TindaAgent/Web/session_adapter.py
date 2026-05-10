@@ -51,7 +51,7 @@ def build_user_message(text: str, *, raw: bool = False,
 def build_assistant_message(substeps: list[dict],
                             audit_id: int | None = None) -> dict:
     """substeps: [{"kind": "thinking", "content": "..."},
-                  {"kind": "tool_marker", "tool_name": "...", "ok": True, ...},
+                  {"kind": "tool_marker", "name": "...", "ok": True, ...},
                   {"kind": "text", "content": "..."}]"""
     content: dict[str, dict] = {}
     n = 0
@@ -64,11 +64,11 @@ def build_assistant_message(substeps: list[dict],
             n += 1
             content[str(n)] = {
                 "tool_marker": {
-                    "tool_name": str(s.get("tool_name", "unknown")),
+                    "name": str(s.get("name", s.get("tool_name", "unknown"))),
                     "ok": bool(s.get("ok", False)),
                     "stdin": str(s.get("stdin", ""))[:500],
                     "stdout": str(s.get("stdout", ""))[:500],
-                    "call_id": str(s.get("call_id", "")),
+                    "id": str(s.get("id", s.get("call_id", ""))),
                 }
             }
         elif kind == "text":
