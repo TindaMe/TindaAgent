@@ -986,7 +986,7 @@
     .file-bar {
       display: none;
       flex-direction: column;
-      width: fit-content;
+      align-self: flex-start;
       min-width: 0;
       margin-bottom: 6px;
       background: var(--surface);
@@ -1016,12 +1016,10 @@
     }
     .file-bar .file-name {
       flex: 1;
-      min-width: 80px;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
       font-size: 12px;
-      cursor: pointer;
     }
     .file-bar .file-remove {
       flex-shrink: 0;
@@ -1063,12 +1061,10 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 8px;
-      padding: 3px 0;
-      border-radius: 4px;
+      padding: 3px 6px;
+      border-radius: 6px;
       font-size: 12px;
       color: var(--text);
-      min-width: 200px;
     }
     .file-list-item:hover { background: rgba(128,128,128,0.08); }
     .file-list-item .file-item-name {
@@ -1835,11 +1831,11 @@
     </div>
     <div class="input-dock">
       <div class="file-bar" id="fileBar" style="display:none;">
-        <div class="file-bar-head">
+        <div class="file-bar-head" onclick="toggleFileList()">
           <span class="file-icon">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>
           </span>
-          <span class="file-name" id="fileName" onclick="toggleFileList()"></span>
+          <span class="file-name" id="fileName"></span>
           <button class="file-toggle" id="fileToggle" onclick="toggleFileList()" title="展开文件列表">▼</button>
           <button class="file-remove" onclick="removeFile()" title="全部移除">×</button>
         </div>
@@ -4028,12 +4024,6 @@
     if (fileToggleEl) fileToggleEl.classList.toggle("open", !visible);
   }
 
-  function removeFileItem(index, e) {
-    if (e) e.stopPropagation();
-    importedFiles.splice(index, 1);
-    _refreshFileUI();
-  }
-
   function _refreshFileUI() {
     if (importedFiles.length === 0) {
       if (fileBarEl) fileBarEl.style.display = "none";
@@ -4051,7 +4041,7 @@
         var name = getDisplayFileName(f.name);
         return '<div class="file-list-item">' +
           '<span class="file-item-name" title="' + escapeHtml(f.name) + '">' + escapeHtml(name) + '</span>' +
-          '<button class="file-item-remove" onclick="removeFileItem(' + i + ', event)" title="移除">×</button>' +
+          '<button class="file-item-remove" onclick="removeFileItem(' + i + ')" title="移除">×</button>' +
         '</div>';
       }).join("");
     }
