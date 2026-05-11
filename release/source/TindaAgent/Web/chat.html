@@ -1590,11 +1590,11 @@
     .pending-confirm-dialog {
       width: min(680px, 96vw);
       border-radius: 16px;
-      border: 1.5px solid rgba(245, 158, 11, 0.42);
-      background: linear-gradient(180deg, #fffdf6 0%, #fff7e5 100%);
+      border: 1.5px solid var(--accent-2);
+      background: var(--surface);
       box-shadow: 0 20px 56px rgba(14, 18, 26, 0.25);
       padding: 16px;
-      color: #78350f;
+      color: var(--text);
     }
     .pending-confirm-title {
       font-size: 15px;
@@ -1603,7 +1603,7 @@
     }
     .pending-confirm-meta {
       font-size: 12px;
-      color: #92400e;
+      color: var(--text-dim);
       margin-bottom: 10px;
     }
     .pending-confirm-cmd {
@@ -1638,39 +1638,39 @@
       transition: all 0.15s ease;
     }
     .pending-confirm-actions .allow {
-      background: #16a34a;
+      background: var(--accent);
       color: #fff;
-      border-color: #15803d;
+      border-color: var(--accent-deep);
     }
-    .pending-confirm-actions .allow:hover:not(:disabled) { filter: brightness(0.94); }
+    .pending-confirm-actions .allow:hover:not(:disabled) { filter: brightness(0.92); }
     .pending-confirm-actions .deny {
-      background: #fff;
-      color: #dc2626;
-      border-color: #fca5a5;
+      background: transparent;
+      color: var(--text-dim);
+      border-color: var(--border);
     }
-    .pending-confirm-actions .deny:hover:not(:disabled) { background: #fef2f2; }
+    .pending-confirm-actions .deny:hover:not(:disabled) { color: var(--text); border-color: var(--text-dim); }
     .pending-confirm-actions button:disabled {
       opacity: 0.6;
       cursor: not-allowed;
     }
 
     .term-confirm {
-      background: linear-gradient(180deg, #fffbeb 0%, #fef3c7 100%);
-      border: 1.5px solid rgba(245,158,11,0.4);
+      background: var(--surface);
+      border: 1.5px solid var(--accent-2);
       border-radius: 16px;
       padding: 12px 14px;
       margin: 6px 0;
-      box-shadow: 0 2px 12px rgba(245,158,11,0.10);
+      box-shadow: 0 2px 12px rgba(0,0,0,0.08);
     }
     .term-confirm.collapsed .term-confirm-body { display: none; }
     .term-confirm-head {
       display: flex; align-items: center; gap: 8px;
-      font-size: 12px; font-weight: 700; color: #92400e;
+      font-size: 12px; font-weight: 700; color: var(--text);
     }
     .term-confirm-head .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
-    .term-confirm-head .dot.pending { background: #f59e0b; }
-    .term-confirm-head .dot.allowed { background: #22c55e; }
-    .term-confirm-head .dot.denied { background: #ef4444; }
+    .term-confirm-head .dot.pending { background: var(--accent); }
+    .term-confirm-head .dot.allowed { background: var(--accent); }
+    .term-confirm-head .dot.denied { background: var(--text-dim); }
     .term-confirm-body { margin-top: 8px; }
     .term-confirm-cmd {
       background: #1e1b2e; color: #e2e8f0;
@@ -1688,18 +1688,18 @@
       transition: all 0.15s;
     }
     .term-confirm-btn.allow {
-      background: #22c55e; color: #fff; border-color: #16a34a;
+      background: var(--accent); color: #fff; border-color: var(--accent-deep);
     }
     .term-confirm-btn.allow:hover { filter: brightness(0.92); }
     .term-confirm-btn.deny {
-      background: #fff; color: #dc2626; border-color: #fca5a5;
+      background: transparent; color: var(--text-dim); border-color: var(--border);
     }
-    .term-confirm-btn.deny:hover { background: #fef2f2; }
+    .term-confirm-btn.deny:hover { color: var(--text); border-color: var(--text-dim); }
     .term-confirm-result {
       font-size: 12px; font-weight: 600; margin-top: 6px;
     }
-    .term-confirm-result.allowed { color: #166534; }
-    .term-confirm-result.denied { color: #dc2626; }
+    .term-confirm-result.allowed { color: var(--accent-deep); }
+    .term-confirm-result.denied { color: var(--text-dim); }
     .term-confirm-result .toggle-expand {
       font-size: 11px; color: var(--text-dim); cursor: pointer;
       margin-left: 6px; text-decoration: underline;
