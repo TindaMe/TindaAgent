@@ -188,9 +188,8 @@ def _entry_to_llm_rows(entry: dict) -> list[dict]:
         def _flush_asst():
             if pending_text or pending_calls or pending_reasoning:
                 asst = {"role": "assistant",
-                        "content": "\n\n".join(p for p in pending_text if p.strip())}
-                if pending_reasoning:
-                    asst["reasoning_content"] = "\n\n".join(p for p in pending_reasoning if p.strip())
+                        "content": "\n\n".join(p for p in pending_text if p.strip()),
+                        "reasoning_content": "\n\n".join(p for p in pending_reasoning if p.strip())}
                 if pending_calls:
                     asst["tool_calls"] = pending_calls.copy()
                 rows.append(asst)

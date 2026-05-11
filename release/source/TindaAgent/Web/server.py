@@ -3061,6 +3061,7 @@ async def terminal_confirm(req: TerminalConfirmRequest):
         agent.replace_conversation(agent_rows)
         call_id = f"call_recover_{sid}"
         agent.history.append({"role": "assistant", "content": None,
+                              "reasoning_content": "",
                               "tool_calls": [{"id": call_id, "type": "function",
                                               "function": {"name": "run_terminal",
                                                            "arguments": _json.dumps({"cmd": cmd}, ensure_ascii=False)}}]})
@@ -3119,7 +3120,7 @@ async def terminal_confirm(req: TerminalConfirmRequest):
         sid,
         reply,
         turn_id=confirm_turn_id,
-        tool_marker=False,
+        tool_marker=bool(tool_steps > 0),
         tool_trace=tool_trace,
     )
     _generate_title_from_first_round(sid)
