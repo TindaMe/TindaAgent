@@ -45,15 +45,22 @@
   function renderUserBubble(entry) {
     var text = _extractText(entry.content);
     if (!text.trim()) return;
-    // Detect file prefix and render as file chip
-    var fileMatch = text.match(/^\[文件: ([^\n]+)\]\r?\n```[^\n]*\r?\n([\s\S]*?)\r?\n```\r?\n?/);
-    if (fileMatch) {
-      var fileName = fileMatch[1];
-      var afterFile = text.slice(fileMatch[0].length).trim();
-      if (typeof addFileChipBubble === "function") addFileChipBubble(fileName);
-      if (afterFile && typeof addBubble === "function") addBubble(afterFile, "user");
-    } else {
-      if (typeof addBubble === "function") addBubble(text, "user");
+    var fileName = "";
+    var displayText = text;
+    if (typeof stripFilePrefix === "function") {
+      var stripped = stripFilePrefix(text);
+      if (stripped !== text) {
+        // File prefix detected — extract filename
+        var m = text.match(/^\[文件: ([^\n\]]+)\]/);
+        if (m) fileName = m[1];
+        displayText = stripped;
+      }
+    }
+    if (fileName && typeof addFileChipBubble === "function") {
+      addFileChipBubble(fileName);
+    }
+    if (displayText.trim() && typeof addBubble === "function") {
+      addBubble(displayText.trim(), "user");
     }
   }
 
