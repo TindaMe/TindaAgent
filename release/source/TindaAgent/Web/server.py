@@ -736,6 +736,20 @@ def _build_user_message_with_meta(
     return f"{message}{block}" if message else block.strip()
 
 
+_FILE_PREFIX_RE = re.compile(
+    r"^\[文件: ([^\n\]]+)\]\n```[^\n]*\n([\s\S]*?)\n```\n?",
+)
+
+
+def _strip_user_meta_and_file(content: str) -> tuple[str, str | None, str | None]:
+    """Returns (clean_text, file_name, file_content) after stripping user meta and file prefix."""
+    text = _strip_user_meta_block(content)
+    m = _FILE_PREFIX_RE.match(text)
+    if m:
+        return text[m.end():].strip(), m.group(1), m.group(2)
+    return text, None, None
+
+
 def _strip_user_meta_block(content: str) -> str:
     text = str(content or "")
     marker_start = text.find("\n\n---\n[USER_META]")
@@ -2725,7 +2739,8 @@ async def chat(req: ChatRequest):
     substeps = _build_substeps_from_history(agent, tool_trace)
     if pending_items:
         substeps = [s for s in substeps if s.get("kind") != "text"]
-    items = [sa.build_user_message(_strip_user_meta_block(llm_message))]
+    clean_text, file_name, file_content = _strip_user_meta_and_file(llm_message)
+    items = [sa.build_user_message(clean_text, file_name=file_name, file_content=file_content)]
     if substeps:
         items.append(sa.build_assistant_message(substeps))
     elif save_reply.strip():
@@ -2961,7 +2976,8 @@ async def chat_stream(
                 # Don't save final text when there are pending confirmations;
                 # the text will be added after confirmation.
                 substeps = [s for s in substeps if s.get("kind") != "text"]
-            items = [sa.build_user_message(_strip_user_meta_block(llm_message))]
+            clean_text, file_name, file_content = _strip_user_meta_and_file(llm_message)
+            items = [sa.build_user_message(clean_text, file_name=file_name, file_content=file_content)]
             if substeps:
                 items.append(sa.build_assistant_message(substeps))
             else:

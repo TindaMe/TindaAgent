@@ -43,24 +43,24 @@
   }
 
   function renderUserBubble(entry) {
-    var text = _extractText(entry.content);
-    if (!text.trim()) return;
-    var fileName = "";
-    var displayText = text;
-    if (typeof stripFilePrefix === "function") {
-      var stripped = stripFilePrefix(text);
-      if (stripped !== text) {
-        // File prefix detected — extract filename
-        var m = text.match(/^\[文件: ([^\n\]]+)\]/);
-        if (m) fileName = m[1];
-        displayText = stripped;
-      }
-    }
-    if (fileName && typeof addFileChipBubble === "function") {
-      addFileChipBubble(fileName);
-    }
-    if (displayText.trim() && typeof addBubble === "function") {
-      addBubble(displayText.trim(), "user");
+    var content = entry.content;
+    if (Array.isArray(content)) {
+      content.forEach(function (step) {
+        if (!step) return;
+        var kind = step.kind || "";
+        if (kind === "file") {
+          var d = step.data || {};
+          if (typeof d !== "object") d = {};
+          var fn = d.file_name || d.name || "";
+          if (fn && typeof addFileChipBubble === "function") addFileChipBubble(fn);
+        } else {
+          var t = String((step.data && step.data.text) || step.data || step || "");
+          if (t.trim() && typeof addBubble === "function") addBubble(t.trim(), "user");
+        }
+      });
+    } else {
+      var text = _extractText(content);
+      if (text.trim() && typeof addBubble === "function") addBubble(text.trim(), "user");
     }
   }
 

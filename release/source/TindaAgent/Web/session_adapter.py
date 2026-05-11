@@ -43,9 +43,18 @@ def parse_message_id(msg_id: str) -> dict | None:
 
 
 def build_user_message(text: str, *, raw: bool = False,
+                       file_name: str | None = None,
+                       file_content: str | None = None,
                        audit_id: int | None = None) -> dict:
-    content = {"1": {"user": text}} if raw else {"1": {"text": text}}
-    return {"role": "user", "id": make_message_id(audit_id), "content": content}
+    content: dict[str, dict] = {}
+    n = 0
+    if file_name:
+        n += 1
+        content[str(n)] = {"file": {"file_name": file_name, "file_content": file_content or ""}}
+    if text.strip():
+        n += 1
+        content[str(n)] = {"user": text} if raw else {"text": text}
+    return {"role": "user", "id": make_message_id(audit_id), "content": content if content else {"text": ""}}
 
 
 def build_assistant_message(substeps: list[dict],
@@ -159,21 +168,28 @@ def _entry_to_llm_rows(entry: dict) -> list[dict]:
     content = entry.get("content", {})
 
     if role == "user":
-        text = ""
+        file_prefix = ""
+        text_parts = []
         if isinstance(content, dict):
             for sk in sorted((int(k2) for k2 in content if k2.isdigit()), key=int):
                 v = content[str(sk)]
                 if isinstance(v, dict):
-                    text = str(v.get("user") or v.get("text") or "")
-                    if text:
-                        break
-            if not text:
+                    if "file" in v:
+                        f = v["file"]
+                        if isinstance(f, dict) and f.get("file_name"):
+                            file_prefix = f"[文件: {f['file_name']}]\n```\n{f.get('file_content', '')}\n```\n"
+                    elif "text" in v or "user" in v:
+                        text_parts.append(str(v.get("text", v.get("user", ""))))
+            if not text_parts:
                 text = str(content.get("user") or content.get("text") or "")
+                if text.strip():
+                    text_parts = [text]
         elif isinstance(content, str):
-            text = content
+            text_parts = [content] if content.strip() else []
+        text = file_prefix + " ".join(text_parts)
         if not text.strip():
             return []
-        return [{"role": "user", "content": text}]
+        return [{"role": "user", "content": text.strip()}]
 
     elif role == "assistant":
         if not isinstance(content, dict):
@@ -268,20 +284,21 @@ def _entry_to_frontend(entry: dict) -> dict:
     msg_id = str(entry.get("id", ""))
 
     if role == "user":
-        text = ""
         if isinstance(content, dict):
-            # Try substeps format first {"1": {"text": "..."}}
+            sub_steps = []
             for sk in sorted((int(k2) for k2 in content if k2.isdigit()), key=int):
                 v = content[str(sk)]
                 if isinstance(v, dict):
-                    text = str(v.get("user") or v.get("text") or "")
-                    if text:
-                        break
-            if not text:
-                text = str(content.get("user") or content.get("text") or "")
+                    for kind, val in v.items():
+                        sub_steps.append({"kind": kind, "data": val})
+            if sub_steps:
+                return {"role": "user", "id": msg_id, "content": sub_steps}
+            # Fallback: flat format
+            text = str(content.get("user") or content.get("text") or "")
+            return {"role": "user", "id": msg_id, "content": text}
         elif isinstance(content, str):
-            text = content
-        return {"role": "user", "id": msg_id, "content": text}
+            return {"role": "user", "id": msg_id, "content": content}
+        return {"role": "user", "id": msg_id, "content": ""}
 
     elif role == "assistant":
         if isinstance(content, str):
