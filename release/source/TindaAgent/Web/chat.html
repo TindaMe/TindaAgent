@@ -1818,7 +1818,7 @@
             <polyline points="9 14 12 11 15 14"></polyline>
           </svg>
         </button>
-        <input type="file" id="fileInput" style="display:none" />
+        <input type="file" id="fileInput" style="display:none" multiple />
         <button id="sendBtn" onclick="sendMessage()" title="发送" aria-label="发送">
           <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
             <path d="M3 12 20 4l-5 16-3-6-9-2z"></path>
@@ -1908,7 +1908,7 @@
   const fileBarEl = document.getElementById("fileBar");
   const fileNameEl = document.getElementById("fileName");
   const fileInputEl = document.getElementById("fileInput");
-  let importedFile = null;
+  let importedFiles = [];
   const SESSION_KEY = "tinda_active_session_id";
   const TERM_WIDTH_KEY = "tinda_term_width";
   const STREAM_ENABLED_KEY = "tinda_stream_enabled";
@@ -3949,7 +3949,7 @@
   }
 
   function removeFile() {
-    importedFile = null;
+    importedFiles = [];
     if (fileBarEl) fileBarEl.style.display = "none";
     if (fileBtnEl) fileBtnEl.classList.remove("has-file");
     if (fileInputEl) fileInputEl.value = "";
@@ -3977,24 +3977,28 @@
   }
 
   function handleFileSelect(e) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (!isTextFile(file.name)) {
-      showToast("不支持的文件类型", "warn");
-      if (fileInputEl) fileInputEl.value = "";
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = function(ev) {
-      importedFile = { name: file.name, content: ev.target.result };
-      fileNameEl.textContent = file.name;
-      fileBarEl.style.display = "flex";
-      fileBtnEl.classList.add("has-file");
-    };
-    reader.onerror = function() {
-      showToast("读取文件失败", "error");
-    };
-    reader.readAsText(file);
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+    const validFiles = files.filter(function(f) {
+      if (!isTextFile(f.name)) { showToast("不支持的文件类型: " + f.name, "warn"); return false; }
+      return true;
+    });
+    if (validFiles.length === 0) { fileInputEl.value = ""; return; }
+    var loaded = 0;
+    validFiles.forEach(function(file) {
+      const reader = new FileReader();
+      reader.onload = function(ev) {
+        importedFiles.push({ name: file.name, content: ev.target.result });
+        loaded++;
+        if (loaded === validFiles.length) {
+          fileNameEl.textContent = importedFiles.length + " 个文件";
+          fileBarEl.style.display = "flex";
+          fileBtnEl.classList.add("has-file");
+        }
+      };
+      reader.onerror = function() { showToast("读取失败: " + file.name, "error"); };
+      reader.readAsText(file);
+    });
   }
 
   fileInputEl?.addEventListener("change", handleFileSelect);
@@ -4568,12 +4572,12 @@
       return;
     }
     const text = inputEl.value.trim();
-    const hasFile = importedFile !== null;
+    const hasFile = importedFiles.length > 0;
     if (!text && !hasFile) return;
     let fullMessage = text;
-    const fileBackup = hasFile ? { name: importedFile.name, content: importedFile.content } : null;
-    const file_name = hasFile ? importedFile.name : null;
-    const file_content = hasFile ? importedFile.content : null;
+    const fileBackup = hasFile ? importedFiles.slice() : null;
+    const file_names = hasFile ? importedFiles.map(function(f) { return f.name; }) : [];
+    const file_contents = hasFile ? importedFiles.map(function(f) { return f.content; }) : [];
     const sid = await ensureActiveSession();
 
     await ensureUserMetaLoaded();
@@ -4584,7 +4588,8 @@
     setMessageSendInFlight(true);
 
     if (hasFile && fileBackup) {
-      addFileChipBubble(fileBackup.name);
+      fileBackup.forEach(function(f) { addFileChipBubble(f.name); });
+      importedFiles = [];
       removeFile();
     }
     if (text) {
@@ -4616,8 +4621,10 @@
           message: fullMessage,
           session_id: sid,
         });
-        if (file_name) { params.set("file_name", file_name); }
-        if (file_content) { params.set("file_content", file_content); }
+        if (file_names.length > 0) {
+          file_names.forEach(function(n, i) { params.append("file_names", n); });
+          file_contents.forEach(function(c, i) { params.append("file_contents", c); });
+        }
         Object.entries(metaPayload).forEach(([k, v]) => params.set(k, String(v)));
         const url = `/chat/stream?${params.toString()}`;
         const res = await apiFetch(url, {
@@ -4800,8 +4807,8 @@
         body: JSON.stringify({
           message: fullMessage,
           session_id: sid,
-          file_name: file_name || null,
-          file_content: file_content || null,
+          file_names: file_names,
+          file_contents: file_contents,
           ...metaPayload,
         }),
       });

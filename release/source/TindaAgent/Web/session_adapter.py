@@ -43,14 +43,15 @@ def parse_message_id(msg_id: str) -> dict | None:
 
 
 def build_user_message(text: str, *, raw: bool = False,
-                       file_name: str | None = None,
-                       file_content: str | None = None,
+                       file_names: list[str] | None = None,
+                       file_contents: list[str] | None = None,
                        audit_id: int | None = None) -> dict:
     content: dict[str, dict] = {}
     n = 0
-    if file_name:
-        n += 1
-        content[str(n)] = {"file": {"file_name": file_name, "file_content": file_content or ""}}
+    if file_names:
+        for fn, fc in zip(file_names, file_contents or []):
+            n += 1
+            content[str(n)] = {"file": {"file_name": fn, "file_content": fc or ""}}
     if text.strip():
         n += 1
         content[str(n)] = {"user": text} if raw else {"text": text}
@@ -168,7 +169,7 @@ def _entry_to_llm_rows(entry: dict) -> list[dict]:
     content = entry.get("content", {})
 
     if role == "user":
-        file_prefix = ""
+        file_blocks = []
         text_parts = []
         if isinstance(content, dict):
             for sk in sorted((int(k2) for k2 in content if k2.isdigit()), key=int):
@@ -177,16 +178,16 @@ def _entry_to_llm_rows(entry: dict) -> list[dict]:
                     if "file" in v:
                         f = v["file"]
                         if isinstance(f, dict) and f.get("file_name"):
-                            file_prefix = f"[文件: {f['file_name']}]\n```\n{f.get('file_content', '')}\n```\n"
+                            file_blocks.append(f"[文件: {f['file_name']}]\n```\n{f.get('file_content', '')}\n```")
                     elif "text" in v or "user" in v:
                         text_parts.append(str(v.get("text", v.get("user", ""))))
-            if not text_parts:
+            if not text_parts and not file_blocks:
                 text = str(content.get("user") or content.get("text") or "")
                 if text.strip():
                     text_parts = [text]
         elif isinstance(content, str):
             text_parts = [content] if content.strip() else []
-        text = file_prefix + " ".join(text_parts)
+        text = "\n".join(file_blocks + text_parts)
         if not text.strip():
             return []
         return [{"role": "user", "content": text.strip()}]
