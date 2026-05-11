@@ -1654,57 +1654,6 @@
       cursor: not-allowed;
     }
 
-    .term-confirm {
-      background: var(--surface);
-      border: 1.5px solid var(--accent-2);
-      border-radius: 16px;
-      padding: 12px 14px;
-      margin: 6px 0;
-      box-shadow: 0 2px 12px rgba(0,0,0,0.08);
-    }
-    .term-confirm.collapsed .term-confirm-body { display: none; }
-    .term-confirm-head {
-      display: flex; align-items: center; gap: 8px;
-      font-size: 12px; font-weight: 700; color: var(--text);
-    }
-    .term-confirm-head .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
-    .term-confirm-head .dot.pending { background: var(--accent); }
-    .term-confirm-head .dot.allowed { background: var(--accent); }
-    .term-confirm-head .dot.denied { background: var(--text-dim); }
-    .term-confirm-body { margin-top: 8px; }
-    .term-confirm-cmd {
-      background: #1e1b2e; color: #e2e8f0;
-      font-family: "JetBrains Mono", monospace;
-      font-size: 12px; padding: 8px 10px; border-radius: 8px;
-      white-space: pre-wrap; word-break: break-all; max-height: 120px; overflow-y: auto;
-    }
-    .term-confirm-actions {
-      display: flex; gap: 8px; margin-top: 8px;
-    }
-    .term-confirm-btn {
-      padding: 5px 14px; border-radius: 999px;
-      font-size: 12px; font-weight: 700; font-family: inherit;
-      cursor: pointer; border: 1.5px solid transparent;
-      transition: all 0.15s;
-    }
-    .term-confirm-btn.allow {
-      background: var(--accent); color: #fff; border-color: var(--accent-deep);
-    }
-    .term-confirm-btn.allow:hover { filter: brightness(0.92); }
-    .term-confirm-btn.deny {
-      background: transparent; color: var(--text-dim); border-color: var(--border);
-    }
-    .term-confirm-btn.deny:hover { color: var(--text); border-color: var(--text-dim); }
-    .term-confirm-result {
-      font-size: 12px; font-weight: 600; margin-top: 6px;
-    }
-    .term-confirm-result.allowed { color: var(--accent-deep); }
-    .term-confirm-result.denied { color: var(--text-dim); }
-    .term-confirm-result .toggle-expand {
-      font-size: 11px; color: var(--text-dim); cursor: pointer;
-      margin-left: 6px; text-decoration: underline;
-    }
-
     .term-exec-bubble {
       background: linear-gradient(180deg, #fff7fb 0%, #ffeef6 100%);
       border: 1.5px solid rgba(251,113,133,0.35);
@@ -2346,14 +2295,7 @@
   }
 
   function syncTerminalConfirmLockFromDom() {
-    if (!termBodyEl) {
-      setTerminalConfirmLock(!!pendingConfirmCurrent, pendingConfirmCurrent ? 1 : 0);
-      return pendingConfirmCurrent ? 1 : 0;
-    }
-    const pendingInDom = Array.from(termBodyEl.querySelectorAll(".term-confirm"))
-      .filter((node) => String(node?.dataset?.status || "").trim() === "pending")
-      .length;
-    const pending = Math.max(pendingConfirmCurrent ? 1 : 0, pendingInDom);
+    const pending = pendingConfirmCurrent ? 1 : 0;
     setTerminalConfirmLock(pending > 0, pending);
     return pending;
   }
@@ -3627,99 +3569,6 @@
     bubble.appendChild(foot);
 
     return bubble;
-  }
-
-  function renderTermConfirmEntry(entry) {
-    const content = entry.content || "{}";
-    let data;
-    try { data = JSON.parse(content); } catch { data = {}; }
-    const cmd = data.cmd || "";
-    const rawStatus = String(data.status || "pending").toLowerCase();
-    const status = rawStatus === "allow"
-      ? "allowed"
-      : rawStatus === "deny"
-        ? "denied"
-        : (["pending", "allowed", "denied"].includes(rawStatus) ? rawStatus : "pending");
-
-    const wrapper = document.createElement("div");
-    wrapper.className = "term-confirm" + (status !== "pending" ? " collapsed" : "");
-    wrapper.dataset.confirmId = entry.id || "";
-    wrapper.dataset.status = status;
-    wrapper.dataset.turnId = normalizeTurnId(entry?.turn_id || "");
-
-    const head = document.createElement("div");
-    head.className = "term-confirm-head";
-    const dotClass = status === "allowed" ? "allowed" : status === "denied" ? "denied" : "pending";
-    head.innerHTML = `<span class="dot ${dotClass}"></span><span>终端命令${status === "pending" ? "请求确认" : status === "allowed" ? "已允许" : "已拒绝"}</span>`;
-    wrapper.appendChild(head);
-
-    const body = document.createElement("div");
-    body.className = "term-confirm-body";
-    body.innerHTML = `<div class="term-confirm-cmd">${escapeHtml(cmd)}</div>`;
-
-    if (status === "pending") {
-      const actions = document.createElement("div");
-      actions.className = "term-confirm-actions";
-      const allowBtn = document.createElement("button");
-      allowBtn.className = "term-confirm-btn allow"; allowBtn.textContent = "允许执行";
-      allowBtn.onclick = () => confirmTerminalAction(entry.id, "allow", wrapper, cmd);
-      const denyBtn = document.createElement("button");
-      denyBtn.className = "term-confirm-btn deny"; denyBtn.textContent = "拒绝";
-      denyBtn.onclick = () => confirmTerminalAction(entry.id, "deny", wrapper, cmd);
-      actions.appendChild(allowBtn); actions.appendChild(denyBtn);
-      body.appendChild(actions);
-    } else {
-      const result = document.createElement("div");
-      result.className = "term-confirm-result " + status;
-      result.innerHTML = status === "allowed" ? "已允许执行"
-        : "已拒绝执行" + `<span class="toggle-expand" onclick="this.closest('.term-confirm').classList.toggle('collapsed')">展开</span>`;
-      body.appendChild(result);
-    }
-    wrapper.appendChild(body);
-    return wrapper;
-  }
-
-  function renderTermExecInTerminal(entry, { persist = false, sessionId = getSessionId(), noScroll = false } = {}) {
-    if (!entry || typeof entry !== "object") return false;
-    showTerm();
-    const execEl = renderTermExecBubble(entry);
-    appendTerminalWidget(execEl, { noScroll });
-    if (persist) enqueueSessionEntries([entry], { sessionId });
-    return true;
-  }
-
-  function renderTermConfirmInTerminal(entry, { persist = false, sessionId = getSessionId(), noScroll = false } = {}) {
-    if (!entry || typeof entry !== "object") return false;
-    showTerm();
-    const confirmEl = renderTermConfirmEntry(entry);
-    const confirmId = String(entry.id || "").trim();
-    if (confirmId) {
-      const existing = Array.from(termBodyEl.querySelectorAll(".term-confirm"))
-        .find((node) => String(node?.dataset?.confirmId || "").trim() === confirmId);
-      if (existing && existing.parentElement) {
-        existing.parentElement.replaceChild(confirmEl, existing);
-        if (!noScroll) termBodyEl.scrollTop = termBodyEl.scrollHeight;
-        syncTerminalConfirmLockFromDom();
-        return true;
-      }
-    }
-    appendTerminalWidget(confirmEl, { noScroll });
-    if (persist) enqueueSessionEntries([entry], { sessionId });
-    syncTerminalConfirmLockFromDom();
-    return true;
-  }
-
-  async function confirmTerminalAction(confirmId, action, wrapperEl, cmd) {
-    const callId = String(confirmId || "").trim();
-    const cmdText = String(cmd || "").trim();
-    if (callId || cmdText) {
-      syncPendingConfirmationsFromServer(getSessionId(), { silent: true });
-    }
-    if (wrapperEl) {
-      wrapperEl.classList.add("collapsed");
-      wrapperEl.dataset.status = action === "allow" ? "allowed" : "denied";
-    }
-    await submitPendingConfirmation(action === "allow");
   }
 
   function appendMarkdownToBotBubble(bubbleEl, extraText) {
