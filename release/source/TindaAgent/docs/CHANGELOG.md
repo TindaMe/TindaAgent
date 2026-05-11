@@ -2,47 +2,54 @@
 
 本文档用于补录 TindaAgent 的版本演进历史，后续按版本持续维护。
 
+> **分类**: `Added` 新增 | `Changed` 变更 | `Fixed` 修复 | `Removed` 移除 | `BREAKING` 破坏性变更 | `Defense` 防御性加固 | `Known Issues` 已知待修
+
 ## v1.8.0 - 2026-05-10
 
 **会话存储全部重写，修复所有已知会话 BUG。**
 
-1. **会话存储格式重写** — JSONL 列表格式 → JSON dict 格式（`{"1": {msg}, "2": {msg}}`），每个会话一个 `.json` 文件。
-2. **新增 session_adapter 模块** — 统一的格式转换层：store dict ↔ LLM 消息、store dict ↔ 前端条目。
-3. **新增 chat_renderer.js** — 渲染逻辑从 chat.html 提取为独立模块。
-4. **session_store 全面重构** — 原子追加、新旧格式归一化、Markdown/文本导出、substeps 内容提取、上下文压缩、孤消息清理、旧 JSONL 自动迁移。
-5. **终端独立存储** — 终端输出分离到 `{sid}.terminal.json`，不再污染对话上下文。
-6. **Thinking 持久化** — thinking/reasoning 正确存储为 substep，前端折叠显示，刷新不丢失。
-7. **工具标记字段统一** — `tool_name` → `name`、`call_id` → `id`，消除格式不一致导致的前端渲染断裂。
-8. **修复 CLI `'str' object has no attribute 'get'`** — `_maybe_generate_title` 和 `/last` 改为 `rows.values()` 迭代。
-9. **修复 Web `[error/chat] 'str' object has no attribute 'get'`** — `_build_substeps_from_history` 工具返回字符串时 `inner.get()` 崩溃。
-10. **存储入口防御** — `_load_messages_raw` 源头过滤 + 全链路 `isinstance` 守卫。
-11. **错误诊断增强** — 异常处理增加 `traceback.print_exc()`。
-12. **修复 system 通知角色错误** — stream toggle 等系统通知存储为 `role=system` 而非 `role=assistant`，避免被当成对话内容注入 LLM。
-13. **工具结果注入 LLM 上下文** — 存储的 `tool_marker` stdout 提取为 `role=tool` 消息，让 LLM 看到工具执行结果。
-14. **stdin 注入上下文** — 工具调用的命令文本也纳入 tool 消息内容，LLM 能感知自己执行了什么。
+### Added
+
+- **session_adapter 模块** — 统一的格式转换层：store dict ↔ LLM 消息、store dict ↔ 前端条目、消息构建器、压缩辅助
+- **chat_renderer.js** — 聊天渲染逻辑从 chat.html 提取为独立 JS 模块
+- **终端独立存储** — 终端输出分离到 `{sid}.terminal.json`，`append_terminal` / `load_terminal` 独立读写
+- **Thinking 持久化** — thinking/reasoning 作为 substep 存储，前端折叠显示，刷新不丢失
+- **工具结果注入 LLM** — 存储的 `tool_marker` stdout 提取为 `role=tool` 消息，LLM 可看到工具执行结果；stdin（命令文本）也纳入上下文
+- **traceback 日志** — 流式和非流式端点异常处理增加 `traceback.print_exc()`
+
+### Changed
+
+- **BREAKING: 会话存储格式重写** — JSONL 列表 → JSON dict（`{"1": {msg}, "2": {msg}}`），每会话一个 `.json`，旧 JSONL 文件首次读取时自动迁移（`_migrate_jsonl_to_dict`）
+- **BREAKING: 工具标记字段重命名** — `tool_name` → `name`、`call_id` → `id`，server / session_adapter / session_store 三处统一
+- **session_store 全面重构** — `append_messages` / `append_to_last_assistant` 原子追加（session 级锁）、`_normalize_entry` 新旧格式透明归一化、`_render_exports_for_session` dict 导出、`compress_context` dict 操作、`get_context_messages` 委托 adapter
+
+### Fixed
+
+- **CLI `'str' object has no attribute 'get'`** — `_maybe_generate_title` 和 `/last` 中 `for m in dict` 遍历 key 而非 value，改为 `rows.values()`
+- **Web `[error/chat] 'str' object has no attribute 'get'`** — `_build_substeps_from_history` 工具 `result` 字段为字符串时 `inner.get()` 崩溃，增加类型守卫
+- **system 通知角色** — stream toggle 等通知存为 `role=system` 而非 `role=assistant`，不再污染对话上下文
+- **推理内容渲染** — 流式 reasoning 与 content 交错时顺序修正，reset/delta 边界正确 flush，reload 时连续 tool_marker 分组为单块
+
+### Removed
+
+- **旧 `_load_messages`（JSONL）** — 替换为 `_load_messages_raw`（JSON dict）+ 自动迁移
+- **旧 `_normalize_message`** — 替换为 `_normalize_entry`，统一新旧格式处理
+- **chat.html 内联渲染逻辑** — 提取到 `chat_renderer.js`
+- **终端输出混入聊天消息** — 分离到独立 `.terminal.json`，`_normalize_entry` 过滤 `entry_type=terminal`
+
+### Defense
+
+- **`_load_messages_raw` 源头过滤** — 返回的 dict 中非 dict 值自动剔除
+- **全链路 `isinstance(entry, dict)` 守卫** — `session_adapter` 4 处入口 + `session_store` 3 处迭代路径
+
+### Known Issues
+
+- 旧 JSONL 迁移中 `tool_marker` 条目附加到前一条 assistant 的逻辑不完整（`_migrate_jsonl_to_dict` 内 `pass`），迁移后旧工具标记可能丢失
+- `_render_exports_for_session` 对 corrupted entry 静默跳过，不报告数据损坏
 
 ## v1.7.17 - 2026-05-10
 
-1. **会话存储格式重写** — JSONL 列表格式 → JSON dict 格式（`{"1": {msg}, "2": {msg}}`），每个会话一个 `.json` 文件。支持按 key 排序、O(1) 查找、原子写入（.tmp → replace）。
-2. **新增 session_adapter 模块** — 统一的格式转换层：store dict ↔ LLM 消息、store dict ↔ 前端条目、消息构建器（build_user_message / build_assistant_message / build_system_message）、压缩辅助（filter_raw_chat_entries）。
-3. **新增 chat_renderer.js** — 聊天渲染逻辑从 chat.html 提取为独立 JS 模块。
-4. **session_store 全面重构**：
-   - `append_messages` / `append_to_last_assistant` 原子追加（session 级锁）
-   - `_normalize_entry` 新旧格式透明归一化（entry_type 旧格式 + substeps 新格式）
-   - `_render_exports_for_session` 基于 dict 的 Markdown/文本导出
-   - `maybe_first_round_messages` 支持 substeps 内容提取
-   - `compress_context` 基于 dict 的上下文压缩
-   - `get_context_messages` 委托 session_adapter 转换
-   - 孤消息清理（`cleanup_orphan_messages`）
-   - 终端独立存储（`append_terminal` / `load_terminal`）
-   - 旧 JSONL 自动迁移（`_migrate_jsonl_to_dict`）
-5. **修复 CLI `'str' object has no attribute 'get'`** — `_maybe_generate_title` 和 `/last` 命令中 `for m in rows` 遍历 dict 拿到的是 key（字符串）而非 value（字典），改为 `list(rows.values())` 迭代。`SessionManager.get_messages` 返回类型标注修正为 `dict[str, Any]`。
-6. **修复 Web `[error/chat] 'str' object has no attribute 'get'`** — `_build_substeps_from_history` 第 152 行 `inner.get("stdout")` 崩溃：工具返回的 `result` 字段可以是字符串，但代码未做类型检查就调用 `.get()`。新会话首次触发工具时必现（老会话有缓存不走此分支）。修复：`inner` 非 dict 时置为 `{}`。
-7. **存储入口防御** — `_load_messages_raw` 源头过滤非 dict 值；`session_adapter` 全部 entry 处理函数增加 `isinstance` 守卫；`session_store` 全部 entry 迭代路径增加类型检查。
-8. **错误诊断增强** — 流式和非流式端点的异常处理增加 `traceback.print_exc()`，便于快速定位隐藏崩溃点。
-9. **Thinking 内容持久化** — thinking/reasoning 不再丢失：`build_assistant_message` 正确存储 `{"kind": "thinking", ...}` 为 substep，前端渲染时识别并折叠显示。之前 thinking 只在流式过程中可见，刷新后消失。
-10. **工具标记字段统一** — `tool_marker` 内部字段重命名：`tool_name` → `name`、`call_id` → `id`，在 `server.py`、`session_adapter.py`、`session_store.py` 三处统一，消除存储格式不一致导致的前端渲染断裂。
-11. **终端独立存储** — 终端输出从聊天消息体中分离，存入独立的 `{sid}.terminal.json` 文件，不再污染对话上下文。`append_terminal` / `load_terminal` 独立读写，`_normalize_entry` 过滤 `entry_type=terminal` 条目。
+> 此版本为 v1.8.0 的中间迭代，所有变更已合并至 v1.8.0，此处仅保留版本号标记。
 
 ## v1.7.16 - 2026-05-07
 
@@ -205,9 +212,13 @@
 
 ## v0.1.0 - Early Stage
 
-1. 建立项目基础结构（Web / Process / Tool / User / Output 等模块）。
-2. 打通最小可用链路：用户输入 -> LLM 处理 -> 工具调用 -> 页面输出。
-3. 提供基础工具集与最早期版本提示能力。
+1. 建立项目基础结构（Web / Process / Tool / User / Permission / Output / Master 模块）。
+2. 打通最小可用链路：FastAPI Web 路由 → Agent 系统提示 + 上下文管理 → LLMClient DeepSeek API 调用 → 工具注册/分发 → 页面输出。
+3. 基础工具集：echo、get_current_time、summarize_text、extract_keywords、run_terminal（早期版本）。
+4. 用户系统骨架：多用户登录、权限位掩码、token 认证。
+5. 会话存储初版：JSONL 行格式，基础 append/load。
+6. 前端：纯 HTML/CSS/JS，粉色主题，聊天界面 + 首页。
+7. 版本提示 badge（静态硬编码）。
 
 ## 历程备注
 
