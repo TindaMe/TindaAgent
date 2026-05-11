@@ -4587,11 +4587,6 @@
 
     if (hasFile && fileBackup) {
       addFileChipBubble(fileBackup.name);
-      enqueueSessionEntries([{
-        role: "user",
-        entry_type: "attachment",
-        content: fileBackup.name,
-      }], { sessionId: sid });
       removeFile();
     }
     if (text) {

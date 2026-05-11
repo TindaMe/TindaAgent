@@ -45,7 +45,16 @@
   function renderUserBubble(entry) {
     var text = _extractText(entry.content);
     if (!text.trim()) return;
-    if (typeof addBubble === "function") addBubble(text, "user");
+    // Detect file prefix and render as file chip
+    var fileMatch = text.match(/^\[文件: ([^\n]+)\]\n```[^\n]*\n([\s\S]*?)\n```\n?/);
+    if (fileMatch) {
+      var fileName = fileMatch[1];
+      var afterFile = text.slice(fileMatch[0].length).trim();
+      if (typeof addFileChipBubble === "function") addFileChipBubble(fileName);
+      if (afterFile && typeof addBubble === "function") addBubble(afterFile, "user");
+    } else {
+      if (typeof addBubble === "function") addBubble(text, "user");
+    }
   }
 
   function renderAssistantBubble(entry) {
