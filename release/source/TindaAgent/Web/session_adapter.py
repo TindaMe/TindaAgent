@@ -181,16 +181,20 @@ def _entry_to_llm_rows(entry: dict) -> list[dict]:
             return [{"role": "assistant", "content": txt}] if txt.strip() else []
 
         rows: list[dict] = []
+        pending_reasoning: list[str] = []
         pending_text: list[str] = []
         pending_calls: list[dict] = []
 
         def _flush_asst():
-            if pending_text or pending_calls:
+            if pending_text or pending_calls or pending_reasoning:
                 asst = {"role": "assistant",
                         "content": "\n\n".join(p for p in pending_text if p.strip())}
+                if pending_reasoning:
+                    asst["reasoning_content"] = "\n\n".join(p for p in pending_reasoning if p.strip())
                 if pending_calls:
                     asst["tool_calls"] = pending_calls.copy()
                 rows.append(asst)
+                pending_reasoning.clear()
                 pending_text.clear()
                 pending_calls.clear()
 
@@ -226,7 +230,7 @@ def _entry_to_llm_rows(entry: dict) -> list[dict]:
                     "content": "\n".join(content_parts) or "{}",
                 })
             elif "thinking" in v:
-                pending_text.append(str(v["thinking"]))
+                pending_reasoning.append(str(v["thinking"]))
             elif "text" in v:
                 pending_text.append(str(v["text"]))
         _flush_asst()
