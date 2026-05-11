@@ -1031,6 +1031,19 @@
       justify-content: center;
       transition: transform 0.2s;
     }
+    .file-bar .file-clear {
+      flex-shrink: 0;
+      background: none;
+      border: none;
+      color: var(--text-dim);
+      cursor: pointer;
+      font-size: 16px;
+      font-family: inherit;
+      line-height: 1;
+      padding: 0 4px;
+      transition: color 0.15s;
+    }
+    .file-bar .file-clear:hover { color: #c62828; }
     .file-bar .file-toggle svg {
       width: 14px; height: 14px;
       stroke: var(--text-dim);
@@ -1048,6 +1061,8 @@
       left: 0; right: 0;
       max-height: 200px;
       overflow-y: auto;
+      scrollbar-width: none;
+      -ms-overflow-style: none;
       background: var(--surface);
       border: 1.5px solid var(--border);
       border-radius: 14px;
@@ -1863,6 +1878,7 @@
             </svg>
           </span>
           <span class="file-name" id="fileName"></span>
+          <button class="file-clear" onclick="event.stopPropagation();removeFile()" title="清空文件">×</button>
           <span class="file-toggle">
             <svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="6 9 12 15 18 9"></polyline></svg>
           </span>
