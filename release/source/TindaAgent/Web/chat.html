@@ -4572,10 +4572,8 @@
     if (!text && !hasFile) return;
     let fullMessage = text;
     const fileBackup = hasFile ? { name: importedFile.name, content: importedFile.content } : null;
-    if (hasFile) {
-      const ext = getFileExtension(importedFile.name);
-      fullMessage = `[文件: ${importedFile.name}]\n\`\`\`${ext}\n${importedFile.content}\n\`\`\`\n` + (text || "");
-    }
+    const file_name = hasFile ? importedFile.name : null;
+    const file_content = hasFile ? importedFile.content : null;
     const sid = await ensureActiveSession();
 
     await ensureUserMetaLoaded();
@@ -4618,6 +4616,8 @@
           message: fullMessage,
           session_id: sid,
         });
+        if (file_name) { params.set("file_name", file_name); }
+        if (file_content) { params.set("file_content", file_content); }
         Object.entries(metaPayload).forEach(([k, v]) => params.set(k, String(v)));
         const url = `/chat/stream?${params.toString()}`;
         const res = await apiFetch(url, {
@@ -4800,6 +4800,8 @@
         body: JSON.stringify({
           message: fullMessage,
           session_id: sid,
+          file_name: file_name || null,
+          file_content: file_content || null,
           ...metaPayload,
         }),
       });

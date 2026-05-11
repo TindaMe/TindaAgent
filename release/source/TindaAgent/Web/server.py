@@ -405,6 +405,8 @@ def _build_runtime_version_state() -> dict[str, object]:
 class ChatRequest(BaseModel):
     message: str
     session_id: str
+    file_name: str | None = None
+    file_content: str | None = None
     meta_user_name: str | None = None
     meta_user_id: str | None = None
     meta_user_perm: str | None = None
@@ -734,20 +736,6 @@ def _build_user_message_with_meta(
         "[/USER_META]"
     )
     return f"{message}{block}" if message else block.strip()
-
-
-_FILE_PREFIX_RE = re.compile(
-    r"^\[文件: ([^\n\]]+)\]\n```[^\n]*\n([\s\S]*?)\n```\n?",
-)
-
-
-def _strip_user_meta_and_file(content: str) -> tuple[str, str | None, str | None]:
-    """Returns (clean_text, file_name, file_content) after stripping user meta and file prefix."""
-    text = _strip_user_meta_block(content)
-    m = _FILE_PREFIX_RE.match(text)
-    if m:
-        return text[m.end():].strip(), m.group(1), m.group(2)
-    return text, None, None
 
 
 def _strip_user_meta_block(content: str) -> str:
@@ -2649,7 +2637,8 @@ async def chat(req: ChatRequest):
         return JSONResponse(payload, status_code=409)
     agent = _get_agent(sid)
     message = str(req.message or "").strip()
-    if not message:
+    has_file = bool(req.file_name and req.file_content)
+    if not message and not has_file:
         return JSONResponse({"reply": "", "tool_trace": [], "tool_steps": 0, "turn_id": turn_id})
 
     if message.startswith("/"):
@@ -2693,8 +2682,11 @@ async def chat(req: ChatRequest):
             }
         )
 
+    raw_text = message
+    if req.file_name:
+        raw_text = f"[文件: {req.file_name}]\n```\n{req.file_content or ''}\n```\n" + raw_text
     llm_message = _build_user_message_with_meta(
-        message,
+        raw_text,
         meta_user_name=req.meta_user_name,
         meta_user_id=req.meta_user_id,
         meta_user_perm=req.meta_user_perm,
@@ -2739,8 +2731,8 @@ async def chat(req: ChatRequest):
     substeps = _build_substeps_from_history(agent, tool_trace)
     if pending_items:
         substeps = [s for s in substeps if s.get("kind") != "text"]
-    clean_text, file_name, file_content = _strip_user_meta_and_file(llm_message)
-    items = [sa.build_user_message(clean_text, file_name=file_name, file_content=file_content)]
+    user_clean = _strip_user_meta_block(message)
+    items = [sa.build_user_message(user_clean, file_name=req.file_name, file_content=req.file_content)]
     if substeps:
         items.append(sa.build_assistant_message(substeps))
     elif save_reply.strip():
@@ -2784,6 +2776,8 @@ async def chat(req: ChatRequest):
 async def chat_stream(
     message: str,
     session_id: str,
+    file_name: str | None = None,
+    file_content: str | None = None,
     meta_user_name: str | None = None,
     meta_user_id: str | None = None,
     meta_user_perm: str | None = None,
@@ -2887,8 +2881,11 @@ async def chat_stream(
         ]
         return HTMLResponse("".join(chunks), media_type="text/event-stream")
 
+    raw_text = str(message or "").strip()
+    if file_name:
+        raw_text = f"[文件: {file_name}]\n```\n{file_content or ''}\n```\n" + raw_text
     llm_message = _build_user_message_with_meta(
-        text,
+        raw_text,
         meta_user_name=meta_user_name,
         meta_user_id=meta_user_id,
         meta_user_perm=meta_user_perm,
@@ -2976,8 +2973,8 @@ async def chat_stream(
                 # Don't save final text when there are pending confirmations;
                 # the text will be added after confirmation.
                 substeps = [s for s in substeps if s.get("kind") != "text"]
-            clean_text, file_name, file_content = _strip_user_meta_and_file(llm_message)
-            items = [sa.build_user_message(clean_text, file_name=file_name, file_content=file_content)]
+            user_clean = _strip_user_meta_block(str(message or "").strip())
+            items = [sa.build_user_message(user_clean, file_name=file_name, file_content=file_content)]
             if substeps:
                 items.append(sa.build_assistant_message(substeps))
             else:
