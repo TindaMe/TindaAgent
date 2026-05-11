@@ -17,6 +17,9 @@
 9. **修复 Web `[error/chat] 'str' object has no attribute 'get'`** — `_build_substeps_from_history` 工具返回字符串时 `inner.get()` 崩溃。
 10. **存储入口防御** — `_load_messages_raw` 源头过滤 + 全链路 `isinstance` 守卫。
 11. **错误诊断增强** — 异常处理增加 `traceback.print_exc()`。
+12. **修复 system 通知角色错误** — stream toggle 等系统通知存储为 `role=system` 而非 `role=assistant`，避免被当成对话内容注入 LLM。
+13. **工具结果注入 LLM 上下文** — 存储的 `tool_marker` stdout 提取为 `role=tool` 消息，让 LLM 看到工具执行结果。
+14. **stdin 注入上下文** — 工具调用的命令文本也纳入 tool 消息内容，LLM 能感知自己执行了什么。
 
 ## v1.7.17 - 2026-05-10
 
