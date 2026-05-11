@@ -986,18 +986,20 @@
     .file-bar {
       display: none;
       flex-direction: column;
-      gap: 0;
+      align-self: flex-start;
+      min-width: 0;
       margin-bottom: 6px;
       background: var(--surface);
       border: 1.5px solid var(--border);
-      border-radius: 12px;
+      border-radius: 20px;
       overflow: hidden;
     }
     .file-bar-head {
       display: flex;
       align-items: center;
       gap: 6px;
-      padding: 6px 10px;
+      padding: 5px 12px;
+      cursor: default;
     }
     .file-bar .file-icon {
       display: flex;
@@ -1050,7 +1052,7 @@
       display: flex;
       flex-direction: column;
       gap: 2px;
-      padding: 4px 10px 8px;
+      padding: 4px 12px 8px;
       max-height: 160px;
       overflow-y: auto;
       border-top: 1px solid var(--border);
@@ -1829,7 +1831,7 @@
     </div>
     <div class="input-dock">
       <div class="file-bar" id="fileBar" style="display:none;">
-        <div class="file-bar-head">
+        <div class="file-bar-head" onclick="toggleFileList()">
           <span class="file-icon">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>
           </span>
