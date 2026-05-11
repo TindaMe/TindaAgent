@@ -983,9 +983,13 @@
       background: var(--gradient);
     }
 
-    .file-bar {
+    .file-bar-wrap {
       max-width: 780px;
-      margin: 0 auto 8px;
+      margin: 0 auto 2px;
+      position: relative;
+      pointer-events: auto;
+    }
+    .file-bar {
       display: flex;
       align-items: center;
       gap: 8px;
@@ -996,8 +1000,9 @@
       font-size: 12px;
       font-weight: 700;
       color: var(--accent-deep);
-      pointer-events: auto;
       box-shadow: 0 2px 8px rgba(255,110,180,0.08);
+      cursor: pointer;
+      user-select: none;
     }
     .file-bar .file-icon {
       display: flex;
@@ -1018,18 +1023,92 @@
       text-overflow: ellipsis;
       white-space: nowrap;
     }
-    .file-bar .file-remove {
+    .file-bar .file-toggle {
       flex-shrink: 0;
-      background: none;
-      border: none;
-      color: var(--text-dim);
-      cursor: pointer;
-      font-size: 16px;
-      line-height: 1;
-      padding: 0 2px;
-      transition: color 0.15s;
+      width: 18px; height: 18px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: transform 0.2s;
     }
-    .file-bar .file-remove:hover { color: var(--fail); }
+    .file-bar .file-toggle svg {
+      width: 14px; height: 14px;
+      stroke: var(--text-dim);
+      fill: none;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+    .file-bar-wrap.expanded .file-bar .file-toggle {
+      transform: rotate(180deg);
+    }
+    .file-list-panel {
+      position: absolute;
+      bottom: calc(100% + 6px);
+      left: 0; right: 0;
+      max-height: 200px;
+      overflow-y: auto;
+      background: var(--surface);
+      border: 1.5px solid var(--border);
+      border-radius: 14px;
+      box-shadow: 0 4px 16px rgba(255,110,180,0.12);
+      display: none;
+      flex-direction: column;
+      padding: 4px 6px;
+      z-index: 10;
+    }
+    .file-bar-wrap.expanded .file-list-panel {
+      display: flex;
+    }
+    .file-list-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 5px 8px;
+      border-radius: 8px;
+      font-size: 12px;
+      color: var(--text);
+      flex-shrink: 0;
+    }
+    .file-list-item:hover {
+      background: var(--surface-2);
+    }
+    .file-list-item .file-list-icon {
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+    }
+    .file-list-item .file-list-icon svg {
+      width: 13px; height: 13px;
+      stroke: var(--accent);
+      fill: none;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+    .file-list-item .file-list-name {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-weight: 500;
+    }
+    .file-list-delete {
+      flex-shrink: 0;
+      background: rgba(200,30,30,0.12);
+      border: none;
+      border-radius: 6px;
+      color: #c62828;
+      cursor: pointer;
+      font-size: 11px;
+      font-weight: 700;
+      font-family: inherit;
+      padding: 2px 10px;
+      transition: background 0.15s;
+    }
+    .file-list-delete:hover {
+      background: rgba(200,30,30,0.22);
+    }
 
     .file-btn {
       background: var(--surface-2);
@@ -1774,15 +1853,20 @@
       <div id="messages"></div>
     </div>
     <div class="input-dock">
-      <div class="file-bar" id="fileBar" style="display:none;">
-        <span class="file-icon">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-            <polyline points="14 2 14 8 20 8"></polyline>
-          </svg>
-        </span>
-        <span class="file-name" id="fileName"></span>
-        <button class="file-remove" onclick="removeFile()" title="移除文件">×</button>
+      <div class="file-bar-wrap" id="fileBarWrap" style="display:none;">
+        <div class="file-list-panel" id="fileListPanel"></div>
+        <div class="file-bar" id="fileBar">
+          <span class="file-icon">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+              <polyline points="14 2 14 8 20 8"></polyline>
+            </svg>
+          </span>
+          <span class="file-name" id="fileName"></span>
+          <span class="file-toggle">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="6 9 12 15 18 9"></polyline></svg>
+          </span>
+        </div>
       </div>
       <div class="input-box">
         <textarea id="input" rows="1" placeholder="跟 Tinda 说说话吧 ..."></textarea>
@@ -1905,10 +1989,15 @@
   const timeCustomInputEl = document.getElementById("timeCustomInput");
   const timeCustomApplyBtnEl = document.getElementById("timeCustomApplyBtn");
   const fileBtnEl = document.getElementById("fileBtn");
+  const fileBarWrapEl = document.getElementById("fileBarWrap");
   const fileBarEl = document.getElementById("fileBar");
   const fileNameEl = document.getElementById("fileName");
+  const fileListPanelEl = document.getElementById("fileListPanel");
   const fileInputEl = document.getElementById("fileInput");
   let importedFiles = [];
+  const FILE_LIST_MAX_HEIGHT = 200;
+  const FILE_LIST_ITEM_HEIGHT = 32;
+  const FILE_LIST_MAX_ITEMS = 5;
   const SESSION_KEY = "tinda_active_session_id";
   const TERM_WIDTH_KEY = "tinda_term_width";
   const STREAM_ENABLED_KEY = "tinda_stream_enabled";
@@ -3950,9 +4039,52 @@
 
   function removeFile() {
     importedFiles = [];
-    if (fileBarEl) fileBarEl.style.display = "none";
+    if (fileBarWrapEl) fileBarWrapEl.style.display = "none";
     if (fileBtnEl) fileBtnEl.classList.remove("has-file");
     if (fileInputEl) fileInputEl.value = "";
+    fileBarWrapEl?.classList.remove("expanded");
+    if (fileListPanelEl) fileListPanelEl.innerHTML = "";
+  }
+
+  function removeOneFile(index) {
+    importedFiles.splice(index, 1);
+    if (importedFiles.length === 0) {
+      removeFile();
+      return;
+    }
+    refreshFileList();
+  }
+
+  function refreshFileList() {
+    const n = importedFiles.length;
+    fileNameEl.textContent = n + " 个文件";
+    if (n === 0) {
+      removeFile();
+      return;
+    }
+    var html = "";
+    importedFiles.forEach(function(f, i) {
+      var shortName = getDisplayFileName(f.name);
+      html += '<div class="file-list-item">' +
+        '<span class="file-list-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg></span>' +
+        '<span class="file-list-name" title="' + escapeHtml(f.name) + '">' + escapeHtml(shortName) + '</span>' +
+        '<button class="file-list-delete" onclick="event.stopPropagation();removeOneFile(' + i + ')">删除</button>' +
+        '</div>';
+    });
+    fileListPanelEl.innerHTML = html;
+    var panelH = Math.min(n, FILE_LIST_MAX_ITEMS) * FILE_LIST_ITEM_HEIGHT + 8;
+    fileListPanelEl.style.maxHeight = panelH + "px";
+  }
+
+  function toggleFileList() {
+    if (!fileBarWrapEl) return;
+    var expanded = fileBarWrapEl.classList.contains("expanded");
+    if (expanded) {
+      fileBarWrapEl.classList.remove("expanded");
+    } else {
+      refreshFileList();
+      fileBarWrapEl.classList.add("expanded");
+    }
   }
 
   function getFileExtension(filename) {
@@ -3991,9 +4123,9 @@
         importedFiles.push({ name: file.name, content: ev.target.result });
         loaded++;
         if (loaded === validFiles.length) {
-          fileNameEl.textContent = importedFiles.length + " 个文件";
-          fileBarEl.style.display = "flex";
+          fileBarWrapEl.style.display = "block";
           fileBtnEl.classList.add("has-file");
+          refreshFileList();
         }
       };
       reader.onerror = function() { showToast("读取失败: " + file.name, "error"); };
@@ -4002,6 +4134,9 @@
   }
 
   fileInputEl?.addEventListener("change", handleFileSelect);
+  fileBarEl?.addEventListener("click", function(e) {
+    if (!e.target.closest(".file-list-delete")) toggleFileList();
+  });
 
   function autoResize() {
     inputEl.style.height = "auto";
