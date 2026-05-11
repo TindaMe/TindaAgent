@@ -984,20 +984,20 @@
     }
 
     .file-bar {
-      display: none;
-      flex-direction: column;
-      gap: 0;
-      margin-bottom: 6px;
-      background: var(--surface);
-      border: 1.5px solid var(--border);
-      border-radius: 12px;
-      overflow: hidden;
-    }
-    .file-bar-head {
+      max-width: 780px;
+      margin: 0 auto 8px;
       display: flex;
       align-items: center;
-      gap: 6px;
-      padding: 6px 10px;
+      gap: 8px;
+      padding: 5px 14px;
+      background: var(--surface);
+      border: 1.5px solid var(--border);
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--accent-deep);
+      pointer-events: auto;
+      box-shadow: 0 2px 8px rgba(255,110,180,0.08);
     }
     .file-bar .file-icon {
       display: flex;
@@ -1017,7 +1017,6 @@
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
-      font-size: 12px;
     }
     .file-bar .file-remove {
       flex-shrink: 0;
@@ -1049,11 +1048,13 @@
     .file-list {
       display: flex;
       flex-direction: column;
-      gap: 2px;
-      padding: 4px 10px 8px;
-      max-height: 160px;
-      overflow-y: auto;
-      border-top: 1px solid var(--border);
+      gap: 4px;
+      padding: 6px 10px;
+      background: var(--surface);
+      border: 1.5px solid var(--border);
+      border-top: none;
+      border-radius: 0 0 12px 12px;
+      margin-bottom: 6px;
     }
     .file-list-item {
       display: flex;
@@ -1829,16 +1830,14 @@
     </div>
     <div class="input-dock">
       <div class="file-bar" id="fileBar" style="display:none;">
-        <div class="file-bar-head">
-          <span class="file-icon">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>
-          </span>
-          <span class="file-name" id="fileName"></span>
-          <button class="file-toggle" id="fileToggle" onclick="toggleFileList()" title="展开文件列表">▼</button>
-          <button class="file-remove" onclick="removeFile()" title="全部移除">×</button>
-        </div>
-        <div class="file-list" id="fileList" style="display:none;"></div>
+        <span class="file-icon">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>
+        </span>
+        <span class="file-name" id="fileName"></span>
+        <button class="file-toggle" id="fileToggle" onclick="toggleFileList()" title="展开文件列表">&#9660;</button>
+        <button class="file-remove" onclick="removeFile()" title="全部移除">×</button>
       </div>
+      <div class="file-list" id="fileList" style="display:none;"></div>
       <div class="input-box">
         <textarea id="input" rows="1" placeholder="跟 Tinda 说说话吧 ..."></textarea>
         <div class="time-wrap">
@@ -4018,7 +4017,7 @@
   function toggleFileList() {
     if (!fileListEl) return;
     const visible = fileListEl.style.display !== "none";
-    fileListEl.style.display = visible ? "none" : "block";
+    fileListEl.style.display = visible ? "none" : "flex";
     if (fileToggleEl) fileToggleEl.classList.toggle("open", !visible);
   }
 
