@@ -4,6 +4,24 @@
 
 > **分类**: `Added` 新增 | `Changed` 变更 | `Fixed` 修复 | `Removed` 移除 | `BREAKING` 破坏性变更 | `Defense` 防御性加固 | `Known Issues` 已知待修
 
+## v1.8.1 - 2026-05-11
+
+### Added
+
+- **文件附件结构化存储** — 文件作为独立 `file` sub-step 存入 assistant content，server 不再正则解析文件前缀，`sendFile` 参数单独传递
+- **文件前缀统一检测** — `stripFilePrefix` 同时用于流式渲染和重载恢复，CRLF 行尾兼容
+
+### Fixed
+
+- **文件附件重复存储** — 重载时不再重复写入文件附件
+- **终端确认 UI 主题统一** — 确认弹窗从绿色/橙色改为粉色主题
+- **终端确认 reasoning 保留** — DeepSeek thinking 模式下 `reasoning_content` 原样保留，确认后工具标记和思考内容正确存储
+- **版本检查通知持久化** — 版本更新通知不再一闪而过，存储后前端可重载
+
+### Removed
+
+- **终端内联确认按钮（旧版）** — 废弃的直接 confirm/deny 按钮，已被弹窗交互替代
+
 ## v1.8.0 - 2026-05-10
 
 **会话存储全部重写，修复所有已知会话 BUG。**
