@@ -4022,7 +4022,7 @@
     const localNorm = normalizeVersionTag(localDisplay);
     const signText = appVersionSignatureId ? `，签名${appVersionSignatureId}` : "";
     const verifyText = appVersionSignatureId ? (appVersionVerified ? "，签名已验证" : "，签名未验证") : "";
-    addSystemNotice(`当前版本${localDisplay}${signText}${verifyText}，正在检查最新版本...`, { persist: false });
+    addSystemNotice(`当前版本${localDisplay}${signText}${verifyText}，正在检查最新版本...`);
 
     let latestVersion = "";
     let remoteError = "";
