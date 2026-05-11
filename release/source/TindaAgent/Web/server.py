@@ -143,6 +143,8 @@ def _build_substeps_from_history(agent: Agent, tool_trace: list[dict] | None) ->
                 if trace_idx < len(ordered_trace):
                     tinfo = ordered_trace[trace_idx]
                     trace_idx += 1
+                trace_cid = str(tinfo.get("call_id", "") or "").strip() if isinstance(tinfo, dict) else ""
+                use_cid = trace_cid or cid
                 tresult = tinfo.get("result", {}) if isinstance(tinfo, dict) else {}
                 if isinstance(tresult, dict):
                     inner = tresult.get("result", {}) if isinstance(tresult, dict) else {}
@@ -177,7 +179,7 @@ def _build_substeps_from_history(agent: Agent, tool_trace: list[dict] | None) ->
                     "ok": bool(ok),
                     "stdin": stdin[:500],
                     "stdout": stdout[:500],
-                    "id": cid.lstrip("tc_"),
+                    "id": use_cid.lstrip("tc_"),
                 })
     return substeps
 
@@ -3116,13 +3118,59 @@ async def terminal_confirm(req: TerminalConfirmRequest):
 
     confirm_turn_id = str(target.get("turn_id", "") or "").strip() or f"turn_{uuid.uuid4().hex[:12]}"
 
-    _append_assistant_continuation_messages(
-        sid,
-        reply,
-        turn_id=confirm_turn_id,
-        tool_marker=bool(tool_steps > 0),
-        tool_trace=tool_trace,
-    )
+    # Build new substeps only from messages added after the held history
+    held_len = len(getattr(agent, "_held_messages", []) or [])
+    # _held_messages includes system + user + assistant + tool from before pending
+    # After resume, agent.history = held_msgs + [system_instruction] + [assistant_response] + [tool_results...]
+    new_msgs = agent.history[held_len:]
+    new_substeps: list[dict] = []
+    for m in new_msgs:
+        if not isinstance(m, dict):
+            continue
+        if m.get("role") != "assistant":
+            continue
+        rc = m.get("reasoning_content")
+        if rc and str(rc).strip():
+            new_substeps.append({"thinking": str(rc).strip()})
+        text = m.get("content", "")
+        if isinstance(text, str) and text.strip():
+            new_substeps.append({"text": text.strip()})
+        tool_calls = m.get("tool_calls")
+        if isinstance(tool_calls, list):
+            for tc in tool_calls:
+                if not isinstance(tc, dict):
+                    continue
+                fn = tc.get("function", {}) if isinstance(tc, dict) else {}
+                name = str(fn.get("name", "unknown")) if isinstance(fn, dict) else "unknown"
+                cid = str(tc.get("id", "") or "").strip()
+                new_substeps.append({"tool_marker": {
+                    "name": name, "ok": True,
+                    "stdin": "", "stdout": "",
+                    "id": cid.lstrip("tc_"),
+                }})
+    # Also inject tool results from tool_trace for new tool calls
+    for step in tool_trace or []:
+        if not isinstance(step, dict):
+            continue
+        cid = str(step.get("call_id", "") or "").strip()
+        result = step.get("result", {}) if isinstance(step, dict) else {}
+        inner = result.get("result", {}) if isinstance(result, dict) else {}
+        ok = bool(result.get("ok", True)) if isinstance(result, dict) else True
+        stdout = ""
+        if isinstance(result, dict):
+            stdout = str(result.get("stdout") or inner.get("stdout") or result.get("output") or inner.get("output") or "")
+        # Find matching tool_marker and update with real data
+        for s in new_substeps:
+            if isinstance(s.get("tool_marker"), dict) and s["tool_marker"].get("id") == cid.lstrip("tc_"):
+                s["tool_marker"]["ok"] = ok
+                s["tool_marker"]["stdout"] = stdout[:500]
+                break
+    if new_substeps:
+        _store.append_to_last_assistant(sid, new_substeps)
+    _audit_web("PUBLIC_WRITE", "_append_assistant_continuation_messages",
+               f"assistant_continuation_appended session_id={sid}",
+               {"session_id": sid, "substeps": len(new_substeps),
+                "tool_marker": bool(tool_steps > 0)})
     _generate_title_from_first_round(sid)
 
     remaining = [row for idx, row in enumerate(pending) if idx != target_index]
