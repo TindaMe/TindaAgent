@@ -54,7 +54,7 @@ class Agent:
         self._held_messages: list[dict] | None = None
         self._held_perm: int = 0
         self._context_logger: Callable[[list[dict], str], None] | None = None
-        self.max_context_tokens: int = 16000
+        self.max_context_tokens: int = 160000
         self._tokens: int = 0
         self._refresh_tokens()
 

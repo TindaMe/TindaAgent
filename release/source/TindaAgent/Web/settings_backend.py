@@ -19,7 +19,7 @@ SETTINGS_FILE_NAME = "web-settings.json"
 DEFAULT_WEB_SETTINGS: dict[str, Any] = {
     "stream_enabled": True,
     "terminal_open": False,
-    "token_limit": 16000,
+    "token_limit": 160000,
     "quick_buttons": ["model", "stream", "terminal", "compress"],
     "restore_last_session": False,
     "last_session_id": "",

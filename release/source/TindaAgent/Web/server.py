@@ -2412,7 +2412,7 @@ def _maybe_auto_compress(session_id: str, context_rows: list[dict]) -> dict:
     if agent is None:
         return {"compressed": False, "reason": "no_agent"}
 
-    max_tokens = int(getattr(agent, "max_context_tokens", 16000))
+    max_tokens = int(getattr(agent, "max_context_tokens", 160000))
     tokens_before = int(agent.estimate_current_tokens())
 
     chat_count = sum(
