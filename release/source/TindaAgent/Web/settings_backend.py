@@ -19,7 +19,7 @@ SETTINGS_FILE_NAME = "web-settings.json"
 DEFAULT_WEB_SETTINGS: dict[str, Any] = {
     "stream_enabled": True,
     "terminal_open": False,
-    "token_limit": 160000,
+    "token_limit": 16000,
     "quick_buttons": ["model", "stream", "terminal", "compress"],
     "restore_last_session": False,
     "last_session_id": "",
@@ -58,6 +58,11 @@ def save_web_settings(data: dict[str, Any]) -> None:
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(json.dumps(clean, ensure_ascii=False, indent=2), encoding="utf-8")
     tmp.replace(path)
+
+
+def get_context_token_limit() -> int:
+    """全局唯一的上下文 token 阈值入口。来源：web-settings.json，默认 16k。"""
+    return int(load_web_settings().get("token_limit", DEFAULT_WEB_SETTINGS["token_limit"]))
 
 
 def get_restore_last_session() -> bool:

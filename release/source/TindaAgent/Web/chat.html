@@ -1842,7 +1842,7 @@
     <h3>上下文配置</h3>
     <p class="sub">设置触发自动压缩的 token 阈值（当前会话）</p>
     <label for="configTokenInput">最大上下文字 token（100 ~ 10M）</label>
-    <input type="number" id="configTokenInput" min="100" max="10000000" step="100" value="160000" placeholder="160000">
+    <input type="number" id="configTokenInput" min="100" max="10000000" step="100" value="16000" placeholder="16000">
     <div class="btn-row">
       <button class="btn" onclick="hideConfigDialog()">取消</button>
       <button class="btn save" onclick="saveConfig()">保存</button>
@@ -2039,6 +2039,22 @@
   const USER_ADMIN_PERM = 511;
   const AUTH_TOKEN_KEY = "ta_auth_token";
   const VERSION_FALLBACK = "v1.8.2";
+  const CONTEXT_TOKEN_DEFAULT = 16000;
+
+  /**
+   * 全局唯一的上下文 token 阈值入口。
+   * 优先级：localStorage 全局设置 > sessionStorage 会话缓存 > 默认 16k。
+   * 只有用户主动在设置页或配置弹窗保存才会改写前两级。
+   */
+  function getContextTokenLimit() {
+    try {
+      var s = JSON.parse(localStorage.getItem("tinda_settings") || "{}");
+      if (typeof s.token_limit === "number" && s.token_limit >= 100) return s.token_limit;
+    } catch (_) {}
+    var ss = sessionStorage.getItem("tinda_max_context_tokens");
+    if (ss) { var v = parseInt(ss, 10); if (v >= 100) return v; }
+    return CONTEXT_TOKEN_DEFAULT;
+  }
 
   function getAuthToken() {
     return String(localStorage.getItem(AUTH_TOKEN_KEY) || "").trim();
@@ -2211,14 +2227,7 @@
       try {
         const usageLen = Number(data?.usage_length || 0);
         if (usageLen > 0 && !autoCompressInFlight) {
-          let threshold = 0;
-          const s = JSON.parse(localStorage.getItem("tinda_settings") || "{}");
-          threshold = typeof s.token_limit === "number" ? s.token_limit : 0;
-          if (!threshold) {
-            const raw = sessionStorage.getItem("tinda_max_context_tokens");
-            if (raw) threshold = parseInt(raw, 10) || 0;
-          }
-          if (!threshold) threshold = 160000;
+          const threshold = getContextTokenLimit();
           if (usageLen > threshold) {
             const now = Date.now();
             if (now - lastAutoCompressTime > 300000) {
@@ -4685,17 +4694,7 @@
   function showConfigDialog() {
     const el = document.getElementById("configOverlay");
     if (!el) return;
-    // 预填当前值（优先全局设置，其次会话级缓存，最后默认值）
-    var stored = "160000";
-    try {
-      var s = JSON.parse(localStorage.getItem("tinda_settings") || "{}");
-      if (typeof s.token_limit === "number" && s.token_limit > 0) stored = String(s.token_limit);
-    } catch (_) {}
-    if (!stored || stored === "160000") {
-      var ss = sessionStorage.getItem("tinda_max_context_tokens");
-      if (ss) stored = ss;
-    }
-    document.getElementById("configTokenInput").value = stored;
+    document.getElementById("configTokenInput").value = String(getContextTokenLimit());
     el.classList.add("show");
   }
 
@@ -4706,7 +4705,7 @@
 
   async function saveConfig() {
     const input = document.getElementById("configTokenInput");
-    const val = Math.max(100, Math.min(10000000, parseInt(String(input?.value || "160000"), 10) || 160000));
+    const val = Math.max(100, Math.min(10000000, parseInt(String(input?.value || CONTEXT_TOKEN_DEFAULT), 10) || CONTEXT_TOKEN_DEFAULT));
     if (input) input.value = String(val);
     sessionStorage.setItem("tinda_max_context_tokens", String(val));
     try {

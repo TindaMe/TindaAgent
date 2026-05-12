@@ -413,7 +413,7 @@
       <p class="sub">控制 token 阈值与自动压缩</p>
       <div class="input-row">
         <label for="settingTokenLimit">压缩阈值</label>
-        <input type="number" id="settingTokenLimit" min="100" max="10000000" step="100" value="160000">
+        <input type="number" id="settingTokenLimit" min="100" max="10000000" step="100" value="16000">
         <span class="unit">tokens</span>
       </div>
       <div class="hint" style="font-size:11px;color:var(--text-dim);">超过此值自动压缩上下文（100 ~ 10M）</div>
@@ -477,6 +477,7 @@
   <script>
     const AUTH_TOKEN_KEY = "ta_auth_token";
     const SETTINGS_KEY = "tinda_settings";
+    const TOKEN_DEFAULT = 16000;
 
     function getAuthToken() {
       return String(localStorage.getItem(AUTH_TOKEN_KEY) || "").trim();
@@ -567,9 +568,9 @@
     }
 
     const tokenEl = document.getElementById("settingTokenLimit");
-    tokenEl.value = String(s.token_limit || 160000);
+    tokenEl.value = String(s.token_limit || TOKEN_DEFAULT);
     tokenEl.addEventListener("change", () => {
-      const val = Math.max(100, Math.min(10000000, parseInt(tokenEl.value, 10) || 160000));
+      const val = Math.max(100, Math.min(10000000, parseInt(tokenEl.value, 10) || TOKEN_DEFAULT));
       tokenEl.value = String(val);
       saveSettings({ token_limit: val });
       // Sync to sessionStorage so in-chat dialog sees the same value

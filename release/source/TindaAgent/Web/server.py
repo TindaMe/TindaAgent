@@ -1298,6 +1298,9 @@ def _get_agent(session_id: str, *, refresh_context: bool = True):
     mt = cfg.get("max_context_tokens")
     if isinstance(mt, int) and mt >= 100:
         _sessions[sid].max_context_tokens = int(mt)
+    else:
+        from TindaAgent.Web.settings_backend import get_context_token_limit
+        _sessions[sid].max_context_tokens = get_context_token_limit()
     return _sessions[sid]
 
 
@@ -2412,7 +2415,8 @@ def _maybe_auto_compress(session_id: str, context_rows: list[dict]) -> dict:
     if agent is None:
         return {"compressed": False, "reason": "no_agent"}
 
-    max_tokens = int(getattr(agent, "max_context_tokens", 160000))
+    from TindaAgent.Web.settings_backend import get_context_token_limit
+    max_tokens = int(getattr(agent, "max_context_tokens", 0) or get_context_token_limit())
     tokens_before = int(agent.estimate_current_tokens())
 
     chat_count = sum(
