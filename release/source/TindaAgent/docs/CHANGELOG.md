@@ -4,6 +4,23 @@
 
 > **分类**: `Added` 新增 | `Changed` 变更 | `Fixed` 修复 | `Removed` 移除 | `BREAKING` 破坏性变更 | `Defense` 防御性加固 | `Known Issues` 已知待修
 
+## v1.8.2 - 2026-05-13
+
+### Added
+
+- **多文件附件 UI** — 选多个文件后 file bar 显示"N 个文件"+ 展开箭头，点击向上弹出文件列表面板
+- **逐文件删除** — 列表每行最右侧红色半透明底红色文字"删除"按钮，支持单独移除
+- **一键清空恢复** — file bar 右侧 `×` 按钮，hover 变红，一键清除所有文件
+
+### Fixed
+
+- **文件列表面板高度自适应** — 基于 `scrollHeight` 实测渲染高度，不再硬编码估算；低于上限自适应无缝，超过上限才滚动
+
+### Changed
+
+- **文件存储架构** — server 不再正则解析文件前缀，`sendFile` 参数与消息文本分离传递
+- **文件附件结构化** — 文件作为独立 `file` sub-step 存入 assistant content，`stripFilePrefix` 统一流式渲染和重载恢复
+
 ## v1.8.1 - 2026-05-11
 
 ### Added
