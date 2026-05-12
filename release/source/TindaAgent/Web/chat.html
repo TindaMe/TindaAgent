@@ -2012,8 +2012,6 @@
   const fileInputEl = document.getElementById("fileInput");
   let importedFiles = [];
   const FILE_LIST_MAX_HEIGHT = 200;
-  const FILE_LIST_ITEM_HEIGHT = 32;
-  const FILE_LIST_MAX_ITEMS = 5;
   const SESSION_KEY = "tinda_active_session_id";
   const TERM_WIDTH_KEY = "tinda_term_width";
   const STREAM_ENABLED_KEY = "tinda_stream_enabled";
@@ -4088,8 +4086,17 @@
         '</div>';
     });
     fileListPanelEl.innerHTML = html;
-    var panelH = Math.min(n, FILE_LIST_MAX_ITEMS) * FILE_LIST_ITEM_HEIGHT + 8;
-    fileListPanelEl.style.maxHeight = panelH + "px";
+    fileListPanelEl.style.maxHeight = FILE_LIST_MAX_HEIGHT + "px";
+    fileListPanelEl.style.display = "flex";
+    var actualH = fileListPanelEl.scrollHeight;
+    var cappedH = Math.min(actualH, FILE_LIST_MAX_HEIGHT);
+    fileListPanelEl.style.maxHeight = cappedH + "px";
+    if (actualH <= FILE_LIST_MAX_HEIGHT) {
+      fileListPanelEl.style.overflowY = "hidden";
+    } else {
+      fileListPanelEl.style.overflowY = "auto";
+    }
+    fileListPanelEl.style.display = "";
   }
 
   function toggleFileList() {
