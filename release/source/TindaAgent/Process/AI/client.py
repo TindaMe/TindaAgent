@@ -4,6 +4,10 @@ import re
 from pathlib import Path
 from typing import Any, Iterator
 from openai import OpenAI
+try:
+    from openai import BadRequestError
+except ImportError:
+    BadRequestError = None
 from dotenv import load_dotenv
 from TindaAgent.Tool import tool as tool_registry
 from TindaAgent.Process.Observability import audit_event
@@ -30,6 +34,33 @@ def _parse_json(raw: str | None) -> Any:
         return json.loads(raw)
     except (TypeError, json.JSONDecodeError):
         return None
+
+
+def _extract_api_error(exc: Exception) -> str:
+    """Extract the real error message from an OpenAI SDK exception."""
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        err = body.get("error", {})
+        if isinstance(err, dict):
+            msg = str(err.get("message", "") or "")
+            if msg:
+                return msg
+        return str(body)
+    resp = getattr(exc, "response", None)
+    if resp is not None:
+        try:
+            import json as _json
+            data = _json.loads(resp.text) if hasattr(resp, "text") else _json.loads(resp.content)
+            if isinstance(data, dict):
+                err = data.get("error", {})
+                if isinstance(err, dict):
+                    msg = str(err.get("message", "") or "")
+                    if msg:
+                        return msg
+                return str(data)
+        except Exception:
+            pass
+    return str(exc)
 
 
 def _concat_reasoning(raw: Any) -> str:
@@ -343,11 +374,18 @@ class LLMClient:
 
         while True:
             force_finalize = steps >= max_tool_steps - 1 and len(trace) > 0
-            stream = self._client.chat.completions.create(
-                model=self.model, messages=msgs, temperature=temperature,
-                tools=tools, tool_choice="none" if force_finalize else "auto",
-                stream=True,
-                extra_body=self._extra_body)
+            try:
+                stream = self._client.chat.completions.create(
+                    model=self.model, messages=msgs, temperature=temperature,
+                    tools=tools, tool_choice="none" if force_finalize else "auto",
+                    stream=True,
+                    extra_body=self._extra_body)
+            except Exception as e:
+                detail = _extract_api_error(e)
+                audit_event("SYSTEM_EXECUTE", "ai", "LLMClient.stream_chat_with_tools", _THIS_FILE,
+                             f"stream_fail model={self.model} err={detail}", extra={"model": self.model,
+                             "ok": False, "error": detail, "messages_count": len(msgs), "steps": steps})
+                raise RuntimeError(detail) from e
             content_parts = []
             reasoning_parts = []
             tool_calls_map = {}
