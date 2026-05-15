@@ -441,6 +441,10 @@
     @keyframes popIn {
       to { opacity: 1; transform: translateY(0) scale(1); }
     }
+    @keyframes fadeScaleIn {
+      from { opacity: 0; transform: translateY(10px) scale(0.97); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
 
     .msg.user { flex-direction: row-reverse; }
 
@@ -1067,13 +1071,19 @@
       border: 1.5px solid var(--border);
       border-radius: 14px;
       box-shadow: 0 4px 16px rgba(255,110,180,0.12);
-      display: none;
+      display: flex;
       flex-direction: column;
       padding: 4px 6px;
       z-index: 10;
+      opacity: 0;
+      transform: translateY(8px) scale(0.98);
+      pointer-events: none;
+      transition: opacity 0.18s ease, transform 0.18s ease;
     }
     .file-bar-wrap.expanded .file-list-panel {
-      display: flex;
+      opacity: 1;
+      transform: translateY(0) scale(1);
+      pointer-events: auto;
     }
     .file-list-item {
       display: flex;
@@ -1084,10 +1094,18 @@
       font-size: 12px;
       color: var(--text);
       flex-shrink: 0;
+      transition: background 0.18s ease, transform 0.18s ease;
+      animation: fadeScaleIn 0.22s cubic-bezier(0.34,1.56,0.64,1) both;
     }
     .file-list-item:hover {
       background: var(--surface-2);
+      transform: translateY(-1px);
     }
+    .file-list-item:nth-child(1) { animation-delay: 0.02s; }
+    .file-list-item:nth-child(2) { animation-delay: 0.05s; }
+    .file-list-item:nth-child(3) { animation-delay: 0.08s; }
+    .file-list-item:nth-child(4) { animation-delay: 0.11s; }
+    .file-list-item:nth-child(5) { animation-delay: 0.14s; }
     .file-list-item .file-list-icon {
       flex-shrink: 0;
       display: flex;
@@ -1404,11 +1422,12 @@
       border-left: 1.5px solid var(--border);
       box-shadow: -16px 0 36px rgba(61, 31, 47, 0.16);
       transform: translateX(105%);
-      transition: transform 0.24s ease;
+      opacity: 0;
+      transition: transform 0.24s cubic-bezier(0.34,1.1,0.64,1), opacity 0.2s ease;
       display: flex;
       flex-direction: column;
     }
-    .records-panel.show { transform: translateX(0); }
+    .records-panel.show { transform: translateX(0); opacity: 1; }
     .records-head {
       padding: 14px 14px 10px;
       border-bottom: 1px solid var(--border);
@@ -1479,12 +1498,23 @@
       display: flex;
       flex-direction: column;
       gap: 6px;
+      transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+      animation: fadeScaleIn 0.22s cubic-bezier(0.34,1.56,0.64,1) both;
     }
     .record-item.active {
       border-color: var(--accent-2);
       box-shadow: 0 4px 14px rgba(255, 110, 180, 0.14);
       background: rgba(255, 110, 180, 0.05);
     }
+    .record-item:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 20px rgba(255,110,180,0.12);
+    }
+    .record-item:nth-child(1) { animation-delay: 0.02s; }
+    .record-item:nth-child(2) { animation-delay: 0.05s; }
+    .record-item:nth-child(3) { animation-delay: 0.08s; }
+    .record-item:nth-child(4) { animation-delay: 0.11s; }
+    .record-item:nth-child(5) { animation-delay: 0.14s; }
     .record-item-title {
       font-size: 12px;
       font-weight: 700;
@@ -1536,8 +1566,10 @@
       background: rgba(0,0,0,0.35);
       align-items: center;
       justify-content: center;
+      opacity: 0;
+      transition: opacity 0.18s ease;
     }
-    .account-popup.show { display: flex; }
+    .account-popup.show { display: flex; opacity: 1; }
     .account-card {
       background: var(--surface);
       border: 1.5px solid var(--border);
@@ -1546,6 +1578,7 @@
       min-width: 240px;
       max-width: 320px;
       box-shadow: 0 12px 32px rgba(255,110,180,0.14);
+      animation: fadeScaleIn 0.24s cubic-bezier(0.34,1.56,0.64,1);
     }
     .account-card h3 {
       margin: 0 0 10px;
@@ -1571,12 +1604,18 @@
       font-weight: 700;
       color: var(--text);
       border: 1.5px solid transparent;
-      transition: all 0.15s;
+      transition: transform 0.18s ease, background 0.18s ease, border-color 0.18s ease, color 0.18s ease;
+      animation: fadeScaleIn 0.22s cubic-bezier(0.34,1.56,0.64,1) both;
     }
     .account-item:hover {
       background: var(--surface-2);
       border-color: var(--border);
+      transform: translateX(2px);
     }
+    .account-item:nth-child(1) { animation-delay: 0.02s; }
+    .account-item:nth-child(2) { animation-delay: 0.05s; }
+    .account-item:nth-child(3) { animation-delay: 0.08s; }
+    .account-item:nth-child(4) { animation-delay: 0.11s; }
     .account-item.active {
       background: rgba(255,110,180,0.08);
       border-color: var(--accent-2);
@@ -1598,8 +1637,10 @@
       background: rgba(0,0,0,0.35);
       align-items: center;
       justify-content: center;
+      opacity: 0;
+      transition: opacity 0.18s ease;
     }
-    .config-overlay.show { display: flex; }
+    .config-overlay.show { display: flex; opacity: 1; }
     .config-dialog {
       background: var(--surface);
       border: 1.5px solid var(--border);
@@ -1608,6 +1649,7 @@
       min-width: 280px;
       box-shadow: 0 12px 32px rgba(255,110,180,0.14);
       font-family: inherit;
+      animation: fadeScaleIn 0.24s cubic-bezier(0.34,1.56,0.64,1);
     }
     .config-dialog h3 {
       margin: 0 0 4px;
@@ -2057,16 +2099,25 @@
   }
 
   function getAuthToken() {
-    return String(localStorage.getItem(AUTH_TOKEN_KEY) || "").trim();
+    const current = String(sessionStorage.getItem(AUTH_TOKEN_KEY) || "").trim();
+    if (current) return current;
+    const legacy = String(localStorage.getItem(AUTH_TOKEN_KEY) || "").trim();
+    if (legacy) {
+      sessionStorage.setItem(AUTH_TOKEN_KEY, legacy);
+      localStorage.removeItem(AUTH_TOKEN_KEY);
+    }
+    return legacy;
   }
 
   function setAuthToken(token) {
     const t = String(token || "").trim();
     if (!t) {
       localStorage.removeItem(AUTH_TOKEN_KEY);
+      sessionStorage.removeItem(AUTH_TOKEN_KEY);
       return;
     }
-    localStorage.setItem(AUTH_TOKEN_KEY, t);
+    localStorage.removeItem(AUTH_TOKEN_KEY);
+    sessionStorage.setItem(AUTH_TOKEN_KEY, t);
   }
 
   function authHeaders(extra) {
@@ -2850,7 +2901,7 @@
     let restoreEnabled = false;
     let serverLastSid = "";
     try {
-      const wr = await fetch("/web-settings");
+      const wr = await apiFetch("/web-settings");
       if (wr.ok) {
         const ws = await wr.json();
         if (ws?.restore_last_session && ws?.last_session_id) {
@@ -3333,37 +3384,6 @@
     termInitialized = true;
   }
 
-  function renderImportedTerminalEntry(entry) {
-    const kind = String(entry?.terminal_kind || "").trim();
-    const content = String(entry?.content || "");
-    if (kind === "cmd") {
-      addTermLine("cmd", content, "", { persist: false });
-      return true;
-    }
-    if (kind === "sep") {
-      addTermSep({ persist: false });
-      return true;
-    }
-    addTermLine("out", content, inferTerminalClass(content, String(entry?.terminal_class ?? entry?.class ?? "")), { persist: false });
-    return true;
-  }
-
-  function renderImportedNotice(content) {
-    const text = String(content || "").trim();
-    if (!text) return false;
-    clearEmptyState();
-    const pill = document.createElement("div");
-    pill.className = "sys-notice";
-    pill.textContent = text;
-    const spacer = messagesEl.querySelector(".sys-pin-spacer");
-    if (spacer) {
-      messagesEl.insertBefore(pill, spacer);
-    } else {
-      messagesEl.appendChild(pill);
-    }
-    return true;
-  }
-
   // renderSession is now defined in chat_renderer.js
   // Called by chat_renderer.js to display tool output in terminal
   function renderToolOutputToTerminal(toolName, callId, output, ok) {
@@ -3375,30 +3395,6 @@
       addTermLine("out", lines[i], cls);
     }
     addTermLine("sep", "─".repeat(36), cls);
-  }
-
-  async function importRecord(recordId) {
-    if (!recordId) return;
-    try {
-      const res = await apiFetch("/records/import", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          session_id: getSessionId(),
-          record_id: recordId,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok || data.ok === false) {
-        throw new Error(data?.error || `http ${res.status}`);
-      }
-      renderSession(Array.isArray(data.entries) ? data.entries : []);
-      addSystemNotice(`已切换记录：${recordId}`);
-      closeRecordsPanel();
-    } catch (e) {
-      reportErrorToTerminal(`导入记录失败：${String(e?.message || e)}`, { source: "record_import" });
-      addSystemNotice(`导入失败：${String(e?.message || e)}`);
-    }
   }
 
   async function loadCurrentSessionRecord() {
@@ -4472,7 +4468,7 @@
   async function loadAccountList() {
     if (!accountListEl) return;
     try {
-      const res = await apiFetch("/users");
+      const res = await fetch("/auth/local-users");
       const data = await res.json();
       window.__headerUsersCache = Array.isArray(data?.users) ? data.users : [];
       renderAccountList(window.__headerUsersCache, data?.current_uid || userMeta.uid);
@@ -4503,17 +4499,18 @@
 
   async function switchToAccount(uid) {
     if (!uid || uid === String(userMeta.uid || "")) { hideAccountPopup(); return; }
-    const users = Array.isArray(window.__headerUsersCache) ? window.__headerUsersCache : [];
-    const target = users.find(x => String(x?.uid || "") === uid);
-    if (!target) return;
-    const token = String(target?.token || "").trim();
-    if (!token) { showToast("目标账户缺少 token", "error"); return; }
-    setAuthToken(token);
     try {
-      const res = await apiFetch("/user/switch", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({uid}) });
+      const res = await fetch("/auth/local-login", {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({uid}),
+      });
       const data = await res.json();
       if (!res.ok || data?.ok === false) throw new Error(String(data?.error || `HTTP ${res.status}`));
-      applyUserMeta(data);
+      const token = String(data?.token || "").trim();
+      if (!token) throw new Error("本机登录未返回 token");
+      setAuthToken(token);
+      applyUserMeta(data?.user || {});
       addSystemNotice(`已切换账户：${userMeta.name} (${userMeta.uid})`, {persist:false});
       showToast("账户已切换");
       hideAccountPopup();
@@ -4521,7 +4518,6 @@
       renderQuickButtons();
       if (!adminLinkBtnEl || adminLinkBtnEl.style.display === "none") { if (location.pathname === "/user-admin") location.href = "/"; }
     } catch(e) {
-      setAuthToken("");
       showToast(`切换失败：${String(e?.message||e)}`, "error");
     }
   }

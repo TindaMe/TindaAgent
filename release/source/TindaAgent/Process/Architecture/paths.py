@@ -53,11 +53,19 @@ def get_system_root() -> Path:
 
 
 def get_user_root() -> Path:
-    return get_data_root() / "User"
+    return get_runtime_root() / "user"
 
 
 def get_users_file() -> Path:
     return get_user_root() / "users.json"
+
+
+def get_legacy_runtime_user_root() -> Path:
+    return get_data_root() / "User"
+
+
+def get_legacy_runtime_users_file() -> Path:
+    return get_legacy_runtime_user_root() / "users.json"
 
 
 def get_memory_file() -> Path:
@@ -120,7 +128,7 @@ def ensure_runtime_dirs() -> None:
     runtime = get_runtime_root()
     (runtime / "Data" / "Sessions").mkdir(parents=True, exist_ok=True)
     (runtime / "Data" / "System").mkdir(parents=True, exist_ok=True)
-    (runtime / "Data" / "User").mkdir(parents=True, exist_ok=True)
+    (runtime / "user").mkdir(parents=True, exist_ok=True)
     (runtime / "log").mkdir(parents=True, exist_ok=True)
     (runtime / "versions").mkdir(parents=True, exist_ok=True)
     (runtime / "shared").mkdir(parents=True, exist_ok=True)

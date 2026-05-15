@@ -69,6 +69,13 @@
       position: relative;
       animation: pageIn 0.42s cubic-bezier(0.4, 0, 0.2, 1) both;
     }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation: none !important;
+        transition: none !important;
+        scroll-behavior: auto !important;
+      }
+    }
 
     /* ── 浮动装饰 ── */
     .deco {
@@ -390,7 +397,14 @@
     th:first-child { border-top-left-radius: 12px; }
     th:last-child  { border-top-right-radius: 12px; }
     tbody tr { transition: background 0.18s ease; }
-    tbody tr:hover { background: rgba(254, 240, 245, 0.6); }
+    tbody tr {
+      transition: background 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease;
+      animation: cardIn 0.24s cubic-bezier(0.34,1.56,0.64,1) both;
+    }
+    tbody tr:hover {
+      background: rgba(254, 240, 245, 0.6);
+      transform: translateY(-1px);
+    }
     tbody tr:last-child td { border-bottom: none; }
     tr.current-row {
       background: rgba(255,239,247,0.95);
@@ -433,6 +447,9 @@
       padding: 7px 11px;
       font-size: 11.5px;
       border-radius: 9px;
+    }
+    .ops .btn:hover {
+      transform: translateY(-1px);
     }
 
     .empty {
@@ -478,8 +495,10 @@
       justify-content: center;
       z-index: 90;
       padding: 18px;
+      opacity: 0;
+      transition: opacity 0.18s ease;
     }
-    .perm-modal-mask.show { display: flex; }
+    .perm-modal-mask.show { display: flex; opacity: 1; }
     .perm-modal {
       width: 100%;
       max-width: 580px;
@@ -489,6 +508,7 @@
       padding: 18px;
       box-shadow: 0 24px 60px rgba(61,31,47,0.22);
       animation: modalIn 0.28s cubic-bezier(0.34,1.56,0.64,1);
+      transform-origin: center;
     }
     .perm-head {
       display: flex;
@@ -546,6 +566,7 @@
       font-size: 12.5px;
       color: var(--text-dim);
       transition: all 0.18s ease;
+      animation: cardIn 0.22s cubic-bezier(0.34,1.56,0.64,1) both;
     }
     .perm-item:hover {
       border-color: var(--border-strong);
@@ -611,6 +632,9 @@
       margin-top: 14px;
       padding-top: 12px;
       border-top: 1.5px dashed var(--border);
+    }
+    .perm-actions .btn:hover {
+      transform: translateY(-1px);
     }
 
     @media (max-width: 900px) {
@@ -759,7 +783,14 @@
   };
 
   function getAuthToken() {
-    return String(localStorage.getItem(AUTH_TOKEN_KEY) || "").trim();
+    const current = String(sessionStorage.getItem(AUTH_TOKEN_KEY) || "").trim();
+    if (current) return current;
+    const legacy = String(localStorage.getItem(AUTH_TOKEN_KEY) || "").trim();
+    if (legacy) {
+      sessionStorage.setItem(AUTH_TOKEN_KEY, legacy);
+      localStorage.removeItem(AUTH_TOKEN_KEY);
+    }
+    return legacy;
   }
 
   function authHeaders(extra) {
@@ -799,6 +830,12 @@
     const t = String(token || "");
     if (t.length <= 28) return t;
     return `${t.slice(0, 14)}...${t.slice(-8)}`;
+  }
+
+  function showOneTimeToken(token, label) {
+    const text = String(token || "").trim();
+    if (!text) return;
+    window.prompt(`${label || "新 Token"}（仅显示一次）`, text);
   }
 
   function permLabelText(value) {
@@ -864,7 +901,7 @@
           <button class="btn btn-sub" data-act="perm" ${disabled}>编辑权限</button>
           <div style="margin-top:4px;color:#9b5f78;font-size:11px;line-height:1.3;word-break:break-word;">${esc(u?.perm_label || permLabelText(u?.perm || 0))}</div>
         </td>
-        <td class="token-cell" title="${esc(u?.token || "")}">${esc(shortToken(u?.token || ""))}</td>
+        <td class="token-cell" title="完整 Token 仅在创建或重置时显示一次">${esc(shortToken(u?.token_masked || ""))}</td>
         <td>
           <div class="ops">
             <button class="btn btn-sub" data-act="token" ${disabled}>重新生成Token</button>
@@ -882,7 +919,10 @@
       ui.tbody.innerHTML = '<tr><td class="empty" colspan="5">暂无可管理账户</td></tr>';
       return;
     }
-    ui.tbody.innerHTML = rows.map(rowHtml).join("");
+    ui.tbody.innerHTML = rows.map((row, idx) => {
+      const html = rowHtml(row);
+      return html.replace("<tr ", `<tr style="animation-delay:${Math.min(0.02 + idx * 0.03, 0.18)}s" `);
+    }).join("");
   }
 
   async function loadUsers() {
@@ -934,7 +974,7 @@
       const key = String(item?.key || "");
       const label = String(item?.label || key);
       return `
-        <div class="perm-item">
+        <div class="perm-item" style="animation-delay:${Math.min(0.02 + permItems.indexOf(item) * 0.03, 0.18)}s">
           <label>
             <span>${esc(label)} <code>${esc(key)} (${bit})</code></span>
             <input type="checkbox" data-bit="${bit}" ${checked} />
@@ -1007,7 +1047,8 @@
       const data = await res.json().catch(() => ({}));
       if (!res.ok || data?.ok === false) throw new Error(String(data?.error || `HTTP ${res.status}`));
       ui.createName.value = "";
-      showNotice("创建成功（Token已自动生成）");
+      showOneTimeToken(data?.token, "账户创建成功，新 Token");
+      showNotice("创建成功（Token 已显示一次）");
       await loadUsers();
     } catch (e) {
       showNotice(`创建失败：${String(e?.message || e)}`);
@@ -1056,7 +1097,8 @@
       const res = await apiFetch(`/admin/users/${encodeURIComponent(uid)}/token/reset`, { method: "POST" });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || data?.ok === false) throw new Error(String(data?.error || `HTTP ${res.status}`));
-      showNotice("Token 已重新生成");
+      showOneTimeToken(data?.token, "Token 已重新生成");
+      showNotice("Token 已重新生成并显示一次");
       await loadUsers();
     } catch (e) {
       showNotice(`重置 Token 失败：${String(e?.message || e)}`);

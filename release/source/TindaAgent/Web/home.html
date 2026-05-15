@@ -42,6 +42,10 @@
       from { opacity: 0; transform: translateY(10px) scale(0.985); }
       to   { opacity: 1; transform: translateY(0) scale(1); }
     }
+    @keyframes softRise {
+      from { opacity: 0; transform: translateY(10px) scale(0.985); }
+      to   { opacity: 1; transform: translateY(0) scale(1); }
+    }
 
     body { display: flex; flex-direction: column; position: relative;
            animation: pageIn 0.42s cubic-bezier(0.4, 0, 0.2, 1) both; }
@@ -367,12 +371,14 @@
       width: 100%; max-width: 320px;
       padding: 28px 24px 24px;
       box-shadow: 0 20px 60px rgba(255,110,180,0.18), 0 4px 20px rgba(0,0,0,0.06);
+      opacity: 0;
       transform: scale(0.88) translateY(16px);
-      transition: transform 0.32s cubic-bezier(0.34,1.4,0.64,1);
+      transition: opacity 0.22s ease, transform 0.36s cubic-bezier(0.16, 1, 0.3, 1);
       display: flex; flex-direction: column; gap: 20px;
       position: relative;
     }
     .modal-overlay.open .modal-card {
+      opacity: 1;
       transform: scale(1) translateY(0);
     }
 
@@ -401,6 +407,7 @@
     .modal-avatar-wrap {
       display: flex; flex-direction: column;
       align-items: center; gap: 10px;
+      animation: softRise 0.34s cubic-bezier(0.16, 1, 0.3, 1) both;
     }
 
     .modal-avatar {
@@ -439,6 +446,22 @@
       display: flex; align-items: center; gap: 10px;
       padding: 8px 12px; border-radius: 12px;
       background: var(--surface-2); border: 1.5px solid var(--border);
+      opacity: 0;
+      transform: translateY(8px);
+      transition:
+        opacity 0.28s ease,
+        transform 0.28s cubic-bezier(0.16, 1, 0.3, 1),
+        border-color 0.18s ease,
+        background 0.18s ease;
+    }
+    .modal-overlay.open .info-row { opacity: 1; transform: translateY(0); }
+    .modal-overlay.open .info-row:nth-of-type(1) { transition-delay: 0.04s; }
+    .modal-overlay.open .info-row:nth-of-type(2) { transition-delay: 0.08s; }
+    .modal-overlay.open .info-row:nth-of-type(3) { transition-delay: 0.12s; }
+    .modal-overlay.open .info-row:nth-of-type(4) { transition-delay: 0.16s; }
+    .info-row:hover {
+      border-color: var(--accent-2);
+      background: rgba(255,255,255,0.82);
     }
 
     .info-icon {
@@ -474,7 +497,11 @@
       align-items: center;
       gap: 8px;
       margin-top: 2px;
+      opacity: 0;
+      transform: translateY(8px);
+      transition: opacity 0.28s ease 0.2s, transform 0.28s cubic-bezier(0.16, 1, 0.3, 1) 0.2s;
     }
+    .modal-overlay.open .switch-row { opacity: 1; transform: translateY(0); }
     .switch-row select {
       width: 100%;
       border: 1.5px solid var(--border);
@@ -485,10 +512,12 @@
       background: var(--surface);
       font-family: inherit;
       outline: none;
+      transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
     }
     .switch-row select:focus {
       border-color: var(--accent);
       box-shadow: 0 0 0 3px rgba(255, 110, 180, 0.11);
+      transform: translateY(-1px);
     }
     .switch-btn {
       border: none;
@@ -501,8 +530,14 @@
       cursor: pointer;
       font-family: inherit;
       white-space: nowrap;
+      transition: opacity 0.18s ease, transform 0.18s cubic-bezier(0.34,1.56,0.64,1), box-shadow 0.18s ease;
     }
-    .switch-btn:hover { opacity: 0.92; }
+    .switch-btn:hover {
+      opacity: 0.94;
+      transform: translateY(-1px);
+      box-shadow: 0 8px 18px rgba(255,110,180,0.18);
+    }
+    .switch-btn:active { transform: translateY(0) scale(0.98); }
     .switch-btn:disabled { opacity: 0.58; cursor: not-allowed; }
     .login-tip {
       font-size: 12px;
@@ -616,6 +651,13 @@
       gap: 7px;
       min-height: 84px;
       max-width: 100%;
+      animation: softRise 0.32s cubic-bezier(0.16, 1, 0.3, 1) both;
+      transition: border-color 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease;
+    }
+    .version-item:hover {
+      border-color: var(--accent-2);
+      transform: translateY(-2px);
+      box-shadow: 0 10px 24px rgba(255,110,180,0.12);
     }
     .version-item-main {
       display: flex;
@@ -668,7 +710,8 @@
       font-family: inherit;
       transition: opacity 0.18s ease;
     }
-    .version-btn:hover { opacity: 0.9; }
+    .version-btn:hover { opacity: 0.9; transform: translateY(-1px); }
+    .version-btn:active { transform: translateY(0) scale(0.98); }
     .version-btn.secondary {
       background: var(--surface);
       border: 1.5px solid var(--border);
@@ -695,6 +738,15 @@
       .header-decos { display: none; }
       .version-sections { grid-template-columns: 1fr; max-height: 44vh; }
       .version-modal-card { padding: 18px 14px 12px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.001ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.001ms !important;
+        scroll-behavior: auto !important;
+      }
     }
   </style>
 </head>
@@ -802,14 +854,14 @@
       </div>
       <div class="info-row">
         <span class="info-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="8" cy="12" r="3"></circle><path d="M11 12h10M17 9v6M20 10v4"></path></svg></span>
-        <span class="info-label">Token</span>
+        <span class="info-label">状态</span>
         <span class="info-value" id="u_token">加载中...</span>
       </div>
       <div class="switch-row">
-        <select id="u_switch_select" title="选择账户"></select>
-        <button id="u_switch_btn" class="switch-btn" type="button">切换</button>
+        <select id="u_switch_select" title="选择本机账户"></select>
+        <button id="u_switch_btn" class="switch-btn" type="button">登录</button>
       </div>
-      <div id="loginTip" class="login-tip">请先选择登录账户后再使用系统</div>
+      <div id="loginTip" class="login-tip">请选择本机账户登录后再使用系统</div>
       <div id="authMsg" class="auth-msg"></div>
     </div>
 
@@ -913,16 +965,25 @@
   }
 
   function getAuthToken() {
-    return String(localStorage.getItem(AUTH_TOKEN_KEY) || "").trim();
+    const current = String(sessionStorage.getItem(AUTH_TOKEN_KEY) || "").trim();
+    if (current) return current;
+    const legacy = String(localStorage.getItem(AUTH_TOKEN_KEY) || "").trim();
+    if (legacy) {
+      sessionStorage.setItem(AUTH_TOKEN_KEY, legacy);
+      localStorage.removeItem(AUTH_TOKEN_KEY);
+    }
+    return legacy;
   }
 
   function setAuthToken(token) {
     const t = String(token || "").trim();
     if (!t) {
       localStorage.removeItem(AUTH_TOKEN_KEY);
+      sessionStorage.removeItem(AUTH_TOKEN_KEY);
       return;
     }
-    localStorage.setItem(AUTH_TOKEN_KEY, t);
+    localStorage.removeItem(AUTH_TOKEN_KEY);
+    sessionStorage.setItem(AUTH_TOKEN_KEY, t);
   }
 
   function authHeaders(extra) {
@@ -1278,8 +1339,8 @@
       const permLabel = data.perm_label || "UNKNOWN";
       ui.perm.textContent = String(permValue);
       ui.perm.title = permLabel;
-      ui.token.textContent = maskToken(data.token);
-      ui.token.title = String(data.token || "");
+      ui.token.textContent = "已登录";
+      ui.token.title = "Token 不再回显";
     } catch (e) {
       ui.name.textContent = "加载失败";
       ui.uid.textContent = "加载失败";
@@ -1296,7 +1357,7 @@
     if (!Array.isArray(users) || users.length === 0) {
       const opt = document.createElement("option");
       opt.value = "";
-      opt.textContent = "无可用账户";
+      opt.textContent = "无可用本机账户";
       ui.switchSelect.appendChild(opt);
       ui.switchSelect.disabled = true;
       if (ui.switchBtn) ui.switchBtn.disabled = true;
@@ -1315,7 +1376,7 @@
 
   async function loadUsersAndSelection() {
     try {
-      const res = await apiFetch("/auth/users", { method: "GET" });
+      const res = await fetch("/auth/local-users", { method: "GET" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       window.__authUsersCache = Array.isArray(data?.users) ? data.users : [];
@@ -1327,27 +1388,24 @@
     }
   }
 
-  async function switchSelectedUser() {
+  async function loginSelectedUser() {
     if (!ui.switchSelect || !ui.switchBtn) return;
     const uid = String(ui.switchSelect.value || "").trim();
     if (!uid) return;
     const oldText = ui.switchBtn.textContent;
     ui.switchBtn.disabled = true;
-    ui.switchBtn.textContent = "切换中...";
+    ui.switchBtn.textContent = "登录中...";
     try {
-      const cachedUsers = Array.isArray(window.__authUsersCache) ? window.__authUsersCache : [];
-      const target = cachedUsers.find((x) => String(x?.uid || "") === uid) || null;
-      const token = String(target?.token || "").trim();
-      if (!token) throw new Error("目标账户缺少 token");
-      setAuthToken(token);
-
-      const res = await apiFetch("/auth/select-user", {
+      const res = await fetch("/auth/local-login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ uid }),
       });
       const data = await res.json();
       if (!res.ok || data?.ok === false) throw new Error(String(data?.error || `HTTP ${res.status}`));
+      const token = String(data?.token || "").trim();
+      if (!token) throw new Error("本机登录未返回 token");
+      setAuthToken(token);
       authState = {
         logged_in: Boolean(data?.logged_in),
         user: data?.user || null,
@@ -1358,7 +1416,7 @@
       if (ui.modalOverlay) ui.modalOverlay.classList.remove("open");
       setAuthMessage("登录成功");
     } catch (e) {
-      console.error("switch user failed:", e);
+      console.error("local login failed:", e);
       setAuthMessage(`登录失败：${String(e?.message || e)}`);
       setAuthToken("");
     } finally {
@@ -1449,7 +1507,7 @@
     smoothNavigate("/logs");
   });
 
-  ui.switchBtn?.addEventListener("click", switchSelectedUser);
+  ui.switchBtn?.addEventListener("click", loginSelectedUser);
   syncVersionBadge();
   loadAuthStatus();
   loadUsersAndSelection();

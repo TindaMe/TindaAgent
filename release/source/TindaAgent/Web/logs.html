@@ -19,6 +19,14 @@
       --accent-2: #ff9fd3;
       --gradient: #ff6eb4;
     }
+    @keyframes pageIn {
+      from { opacity: 0; transform: translateY(10px) scale(0.985); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    @keyframes fadeScaleIn {
+      from { opacity: 0; transform: translateY(10px) scale(0.97); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html, body {
       width: 100%; height: 100%;
@@ -27,7 +35,11 @@
       font-family: 'Nunito', -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
       overflow: hidden;
     }
-    body { display: grid; grid-template-rows: auto 1fr; }
+    body {
+      display: grid;
+      grid-template-rows: auto 1fr;
+      animation: pageIn 0.42s cubic-bezier(0.4, 0, 0.2, 1) both;
+    }
     header {
       display: flex;
       align-items: center;
@@ -61,11 +73,14 @@
       font-family: inherit;
       cursor: pointer;
       text-decoration: none;
+      transition: transform 0.18s ease, border-color 0.18s ease, background 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
     }
     .btn:hover {
       border-color: var(--accent-2);
       color: var(--text);
       background: var(--surface-2);
+      transform: translateY(-1px);
+      box-shadow: 0 6px 16px rgba(255,110,180,0.12);
     }
     .btn.primary {
       color: #fff;
@@ -87,6 +102,7 @@
       overflow: hidden;
       display: flex;
       flex-direction: column;
+      animation: fadeScaleIn 0.24s cubic-bezier(0.34,1.56,0.64,1) both;
     }
     .panel-head {
       padding: 10px 12px;
@@ -115,12 +131,23 @@
       font-size: 12px;
       cursor: pointer;
       line-height: 1.4;
+      transition: transform 0.18s ease, border-color 0.18s ease, background 0.18s ease, box-shadow 0.18s ease;
+      animation: fadeScaleIn 0.22s cubic-bezier(0.34,1.56,0.64,1) both;
     }
-    .file-item:hover { border-color: var(--accent-2); }
+    .file-item:hover {
+      border-color: var(--accent-2);
+      transform: translateY(-1px);
+      box-shadow: 0 6px 16px rgba(255,110,180,0.10);
+    }
     .file-item.active {
       border-color: var(--accent-2);
       background: rgba(255,110,180,0.06);
     }
+    .file-item:nth-child(1) { animation-delay: 0.02s; }
+    .file-item:nth-child(2) { animation-delay: 0.05s; }
+    .file-item:nth-child(3) { animation-delay: 0.08s; }
+    .file-item:nth-child(4) { animation-delay: 0.11s; }
+    .file-item:nth-child(5) { animation-delay: 0.14s; }
     .file-name {
       font-weight: 800;
       color: var(--text);
@@ -154,10 +181,12 @@
       font-family: inherit;
       color: var(--text);
       background: #fff;
+      transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
     }
     .toolbar input:focus {
       border-color: var(--accent);
       box-shadow: 0 0 0 3px rgba(255,110,180,0.11);
+      transform: translateY(-1px);
     }
     #status {
       margin-left: auto;
@@ -178,6 +207,11 @@
       line-height: 1.56;
       white-space: pre-wrap;
       word-break: break-word;
+      scroll-behavior: smooth;
+    }
+    pre, .files {
+      scrollbar-width: thin;
+      scrollbar-color: var(--border-strong) transparent;
     }
     .empty {
       color: var(--text-dim);
@@ -188,6 +222,13 @@
     @media (max-width: 920px) {
       .wrap { grid-template-columns: 1fr; }
       .panel.files-panel { min-height: 180px; max-height: 240px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation: none !important;
+        transition: none !important;
+        scroll-behavior: auto !important;
+      }
     }
   </style>
 </head>
@@ -243,7 +284,14 @@
   let activeFile = "";
 
   function getAuthToken() {
-    return String(localStorage.getItem(AUTH_TOKEN_KEY) || "").trim();
+    const current = String(sessionStorage.getItem(AUTH_TOKEN_KEY) || "").trim();
+    if (current) return current;
+    const legacy = String(localStorage.getItem(AUTH_TOKEN_KEY) || "").trim();
+    if (legacy) {
+      sessionStorage.setItem(AUTH_TOKEN_KEY, legacy);
+      localStorage.removeItem(AUTH_TOKEN_KEY);
+    }
+    return legacy;
   }
 
   function authHeaders(extra) {
@@ -278,6 +326,7 @@
       const el = document.createElement("button");
       el.type = "button";
       el.className = "file-item" + (name === activeFile ? " active" : "");
+      el.style.animationDelay = `${Math.min(0.02 + rows.indexOf(f) * 0.03, 0.18)}s`;
       el.innerHTML = `
         <div class="file-name">${name}</div>
         <div class="file-meta">大小: ${fmtBytes(f?.size_bytes)} · 更新时间: ${String(f?.updated_at || "")}</div>

@@ -21,6 +21,10 @@
 - **文件存储架构** — server 不再正则解析文件前缀，`sendFile` 参数与消息文本分离传递
 - **文件附件结构化** — 文件作为独立 `file` sub-step 存入 assistant content，`stripFilePrefix` 统一流式渲染和重载恢复
 
+### Removed
+
+- **废弃文件与旧兼容代码清理** — 移除未引用的临时测试脚本、旧 `records` 兼容接口、旧 `/tools` 兼容端点、空壳模块和手工调试产物。
+
 ## v1.8.1 - 2026-05-11
 
 ### Added

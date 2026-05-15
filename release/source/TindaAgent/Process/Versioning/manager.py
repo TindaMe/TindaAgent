@@ -83,13 +83,13 @@ def _copytree_filtered(src: Path, dst: Path, skip_names: set[str] | None = None)
     if skip_names is None:
         skip_names = set()
     for item in src.iterdir():
-        if item.name in skip_names:
+        if item.name in skip_names or item.name.startswith("log_backup_"):
             continue
         if item.is_symlink():
             continue
         target = dst / item.name
         if item.is_dir():
-            shutil.copytree(item, target, dirs_exist_ok=True)
+            _copytree_filtered(item, target, skip_names=skip_names)
         elif item.is_file():
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(item, target)
@@ -437,7 +437,25 @@ class VersionManager:
         app_dir.mkdir(parents=True, exist_ok=True)
 
         try:
-            _copytree_filtered(src_project, app_dir, skip_names={"__pycache__", ".git", ".pytest_cache", ".mypy_cache"})
+            _copytree_filtered(
+                src_project,
+                app_dir,
+                skip_names={
+                    ".env",
+                    ".git",
+                    ".mypy_cache",
+                    ".pytest_cache",
+                    ".trae",
+                    "__pycache__",
+                    "CLAUDE.md",
+                    "CODEX.md",
+                    "LOCALCHANGE.md",
+                    "OPENCLAW.md",
+                    "OPENCODE.md",
+                    "STANDARD.md",
+                    "TRAE.md",
+                },
+            )
             shared_data = self.shared_root / "data"
             snapshot_data = version_dir / "data_snapshot"
             if shared_data.exists():

@@ -1,4 +1,9 @@
+fastapi
+uvicorn
 openai
 python-dotenv
+pydantic
+prompt-toolkit>=3.0
+questionary
 cryptography
 jsonschema

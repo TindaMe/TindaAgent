@@ -84,6 +84,7 @@ def bootstrap_storage() -> dict:
     runtime_users = paths.get_users_file()
     runtime_memory = paths.get_memory_file()
     runtime_shared = paths.get_shared_root()
+    legacy_runtime_users = paths.get_legacy_runtime_users_file()
     legacy_data = paths.get_legacy_data_root()
     legacy_log = paths.get_legacy_log_root()
     legacy_sessions = paths.get_legacy_sessions_root()
@@ -142,6 +143,9 @@ def bootstrap_storage() -> dict:
                     result["legacy_log_backup"] = str(backup)
 
         # legacy 兼容兜底：当旧目录未重命名（例如复制失败）时，补拷已知关键文件。
+        c, f = _copy_file_if_missing(legacy_runtime_users, runtime_users)
+        copied += c
+        failed += f
         c, f = _copy_file_if_missing(legacy_users, runtime_users)
         copied += c
         failed += f

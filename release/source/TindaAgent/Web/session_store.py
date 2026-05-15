@@ -40,10 +40,12 @@ class SessionMeta:
     title: str
     created_at: str
     updated_at: str
+    owner_uid: str = ""
     message_count: int = 0
     reset_anchor_msg_id: str = ""
     summary_anchor_msg_id: str = ""
     latest_summary_message_id: str = ""
+    last_compress_anchor_msg_id: str = ""
 
 
 def _normalize_entry(raw: dict) -> dict | None:
@@ -234,12 +236,23 @@ class SessionStore:
         rows, _ = sa.store_dict_to_agent_messages(data, meta)
         return rows
 
+    def load_effective_messages(self, session_id: str) -> dict[str, Any]:
+        """Return frontend/export-visible messages after reset/compression anchors."""
+        sid = _safe_session_id(session_id)
+        if not sid:
+            return {}
+        data = self._load_messages_raw(sid)
+        meta = self.get_session(sid) or {}
+        return sa.effective_store_dict(data, meta)
+
     # ── Session lifecycle ──
 
     def _touch_session_meta(self, session_id: str, *, title: str | None = None,
+                            owner_uid: str | None = None,
                             reset_anchor_msg_id: str | None = None,
                             summary_anchor_msg_id: str | None = None,
                             latest_summary_message_id: str | None = None,
+                            last_compress_anchor_msg_id: str | None = None,
                             message_count: int | None = None) -> dict[str, Any]:
         sid = _safe_session_id(session_id)
         if not sid:
@@ -250,24 +263,31 @@ class SessionStore:
         idx = next((i for i, it in enumerate(sessions) if it.get("id") == sid), -1)
         if idx < 0:
             item = {"id": sid, "title": "新对话", "created_at": now, "updated_at": now,
-                    "message_count": 0, "reset_anchor_msg_id": "", "summary_anchor_msg_id": "",
-                    "latest_summary_message_id": ""}
+                    "owner_uid": str(owner_uid or ""), "message_count": 0,
+                    "reset_anchor_msg_id": "", "summary_anchor_msg_id": "",
+                    "latest_summary_message_id": "", "last_compress_anchor_msg_id": ""}
             sessions.append(item)
             idx = len(sessions) - 1
         row = dict(sessions[idx])
+        row.setdefault("owner_uid", "")
         row.setdefault("reset_anchor_msg_id", "")
         row.setdefault("summary_anchor_msg_id", "")
         row.setdefault("latest_summary_message_id", "")
+        row.setdefault("last_compress_anchor_msg_id", "")
         row["updated_at"] = now
         if title is not None:
             t = str(title or "").strip().strip("\"'")
             row["title"] = t[:MAX_TITLE_LEN] or "新对话"
+        if owner_uid is not None and not str(row.get("owner_uid", "") or "").strip():
+            row["owner_uid"] = str(owner_uid or "")
         if reset_anchor_msg_id is not None:
             row["reset_anchor_msg_id"] = str(reset_anchor_msg_id or "")
         if summary_anchor_msg_id is not None:
             row["summary_anchor_msg_id"] = str(summary_anchor_msg_id or "")
         if latest_summary_message_id is not None:
             row["latest_summary_message_id"] = str(latest_summary_message_id or "")
+        if last_compress_anchor_msg_id is not None:
+            row["last_compress_anchor_msg_id"] = str(last_compress_anchor_msg_id or "")
         if message_count is not None:
             row["message_count"] = max(0, int(message_count))
         sessions[idx] = row
@@ -276,7 +296,8 @@ class SessionStore:
         self._write_sessions(payload)
         return row
 
-    def create_session(self, session_id: str | None = None, title: str = "新对话") -> dict[str, Any]:
+    def create_session(self, session_id: str | None = None, title: str = "新对话",
+                       owner_uid: str | None = None) -> dict[str, Any]:
         sid = _safe_session_id(session_id or f"s_{uuid.uuid4().hex[:12]}")
         if not sid:
             sid = f"s_{uuid.uuid4().hex[:12]}"
@@ -285,16 +306,20 @@ class SessionStore:
             exists = {str(x.get("id", "")) for x in payload.get("sessions", [])}
             if sid in exists:
                 sid = f"{sid}_{uuid.uuid4().hex[:6]}"
-            row = self._touch_session_meta(sid, title=title, message_count=0)
+            row = self._touch_session_meta(sid, title=title, owner_uid=owner_uid, message_count=0)
             return row
 
-    def ensure_session(self, session_id: str) -> dict[str, Any]:
+    def ensure_session(self, session_id: str, owner_uid: str | None = None) -> dict[str, Any]:
         sid = _safe_session_id(session_id)
         if not sid:
             raise SessionStoreError("session_id invalid")
         with self._lock:
             row = self.get_session(sid)
-            return row if row else self.create_session(sid)
+            if row:
+                if owner_uid is not None and not str(row.get("owner_uid", "") or "").strip():
+                    return self._touch_session_meta(sid, owner_uid=owner_uid)
+                return row
+            return self.create_session(sid, owner_uid=owner_uid)
 
     def get_session(self, session_id: str) -> dict[str, Any] | None:
         sid = _safe_session_id(session_id)
@@ -305,11 +330,15 @@ class SessionStore:
                 return dict(it)
         return None
 
-    def list_sessions(self, limit: int = 200, offset: int = 0) -> dict[str, Any]:
+    def list_sessions(self, limit: int = 200, offset: int = 0,
+                      owner_uid: str | None = None) -> dict[str, Any]:
         limit = max(1, min(int(limit), 500))
         offset = max(0, int(offset))
         rows = sorted(self._read_sessions().get("sessions", []),
                       key=lambda x: str(x.get("updated_at", "")), reverse=True)
+        if owner_uid is not None:
+            owner = str(owner_uid or "")
+            rows = [x for x in rows if str(x.get("owner_uid", "") or "") in {"", owner}]
         total = len(rows)
         return {"sessions": rows[offset:offset + limit], "total": total, "limit": limit, "offset": offset}
 
@@ -401,6 +430,7 @@ class SessionStore:
             meta = self._touch_session_meta(sid, reset_anchor_msg_id=anchor_id,
                                             summary_anchor_msg_id="",
                                             latest_summary_message_id="",
+                                            last_compress_anchor_msg_id="",
                                             message_count=len(data))
             return {"session_id": sid, "reset_anchor_msg_id": anchor_id,
                     "message_count": len(data)}
@@ -460,13 +490,26 @@ class SessionStore:
         lock = self._get_session_lock(sid)
         with lock:
             data = self._load_messages_raw(sid)
-            raw_rows = sa.filter_raw_chat_entries(data)
+            meta = self.get_session(sid) or {}
+            full_raw_rows = sa.filter_raw_chat_entries(data)
+            if len(full_raw_rows) >= 4:
+                last_anchor_id = str(full_raw_rows[-4].get("id", "") or "")
+                if last_anchor_id and last_anchor_id == str(meta.get("last_compress_anchor_msg_id", "") or ""):
+                    return {
+                        "session_id": sid,
+                        "compressed": False,
+                        "reason": "already_compressed",
+                        "anchor_message_id": last_anchor_id,
+                        "visible_count": len(self.load_effective_messages(sid)),
+                    }
+            raw_rows = sa.filter_raw_chat_entries(sa.effective_store_dict(data, meta))
             if len(raw_rows) < 6:
                 raise SessionStoreError("消息数量不足，至少需要 6 条消息才能压缩")
             keep_tail = raw_rows[-4:]
             older = raw_rows[:-4]
             if not older:
                 raise SessionStoreError("消息数量不足，至少需要 6 条消息才能压缩")
+            anchor_id = str(keep_tail[0].get("id", "") or "")
             # Insert summary as system message
             keys = sorted(int(k) for k in data if k.isdigit())
             max_key = keys[-1] if keys else 0
@@ -474,7 +517,7 @@ class SessionStore:
             summary_msg = sa.build_system_message(summary_text)
             summary_msg["id"] = summary_id
             # Find approximate insertion point before the tail entries
-            tail_start_key = keys[-4] if len(keys) >= 4 else keys[0]
+            tail_start_key = int(keep_tail[0].get("seq", keys[-4] if len(keys) >= 4 else keys[0]))
             for k in range(tail_start_key, max_key + 1):
                 if str(k) not in data:
                     data[str(k)] = summary_msg
@@ -483,12 +526,12 @@ class SessionStore:
                 max_key += 1
                 data[str(max_key)] = summary_msg
             self._write_messages(sid, data)
-            anchor_id = raw_rows[-4].get("id", "") if raw_rows[-4:] else ""
-            self._touch_session_meta(sid, message_count=len(data),
-                                     latest_summary_message_id=summary_id,
-                                     summary_anchor_msg_id=str(anchor_id))
+            meta = self._touch_session_meta(sid, message_count=len(data),
+                                            latest_summary_message_id=summary_id,
+                                            summary_anchor_msg_id=str(anchor_id),
+                                            last_compress_anchor_msg_id=str(anchor_id))
             self._render_exports_for_session(sid)
-            return {"session_id": sid, "compressed_count": len(older),
+            return {"session_id": sid, "compressed": True, "compressed_count": len(older),
                     "summary_message_id": summary_id, "anchor_message_id": str(anchor_id),
                     "visible_count": 1 + len(keep_tail)}
 
@@ -542,9 +585,9 @@ class SessionStore:
     # ── Exports ──
 
     def _render_exports_for_session(self, session_id: str) -> None:
-        data = self._load_messages_raw(session_id)
         sid = _safe_session_id(session_id)
         meta = self.get_session(sid) or {}
+        data = self.load_effective_messages(sid)
         md_path = self.exports_dir / f"{sid}.md"
         txt_path = self.exports_dir / f"{sid}.txt"
         md = [f"# TindaAgent Session Export\n\n- session_id: `{sid}`",

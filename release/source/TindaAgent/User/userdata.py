@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import json
+import shutil
 import secrets
 from pathlib import Path
 from typing import Any
 
 from TindaAgent.Process.Architecture import perm
-from TindaAgent.Process.Architecture.paths import get_users_file
+from TindaAgent.Process.Architecture.paths import (
+    get_legacy_runtime_users_file,
+    get_legacy_users_file,
+    get_users_file,
+)
 from TindaAgent.Process.Observability import audit_event
 
 _user_registry: list["UserManager"] = []
@@ -16,6 +21,35 @@ _THIS_FILE = str(Path(__file__).resolve())
 
 def _ensure_data_dir() -> None:
     _USERS_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+
+def _migrate_users_file_if_needed() -> None:
+    if _USERS_FILE.exists():
+        return
+    for legacy in (get_legacy_runtime_users_file(), get_legacy_users_file()):
+        try:
+            if not legacy.exists() or not legacy.is_file():
+                continue
+            _USERS_FILE.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(legacy, _USERS_FILE)
+            audit_event(
+                op_type="SYSTEM_WRITE",
+                subsystem="user",
+                func="_migrate_users_file_if_needed",
+                file_path=_THIS_FILE,
+                content="users_file_migrated",
+                extra={"from": str(legacy), "to": str(_USERS_FILE)},
+            )
+            return
+        except Exception as e:
+            audit_event(
+                op_type="SYSTEM_WRITE",
+                subsystem="user",
+                func="_migrate_users_file_if_needed",
+                file_path=_THIS_FILE,
+                content=f"users_file_migrate_failed err={e}",
+                extra={"from": str(legacy), "to": str(_USERS_FILE), "ok": False},
+            )
 
 
 def _safe_int(value: Any, default: int) -> int:
@@ -81,6 +115,7 @@ def _build_user(
 
 def _load_users_from_disk() -> None:
     _ensure_data_dir()
+    _migrate_users_file_if_needed()
     if not _USERS_FILE.exists():
         audit_event(
             op_type="SYSTEM_READ",

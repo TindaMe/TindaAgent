@@ -323,6 +323,47 @@ def _entry_to_frontend(entry: dict) -> dict:
     return {"role": role, "id": msg_id, "content": str(content)}
 
 
+def effective_store_dict(store_dict: dict, meta: dict | None = None) -> dict[str, Any]:
+    """Return frontend/export-visible entries after reset and compression anchors."""
+    meta = meta or {}
+    reset_anchor = str(meta.get("reset_anchor_msg_id", "") or "").strip()
+    latest_summary_id = str(meta.get("latest_summary_message_id", "") or "").strip()
+    summary_anchor_id = str(meta.get("summary_anchor_msg_id", "") or "").strip()
+
+    entries = sorted(
+        [(int(k), v) for k, v in store_dict.items() if k.isdigit() and isinstance(v, dict)],
+        key=lambda x: x[0],
+    )
+
+    if reset_anchor:
+        reset_after = -1
+        for seq, entry in entries:
+            if str(entry.get("id", "") or "") == reset_anchor:
+                reset_after = seq
+                break
+        if reset_after >= 0:
+            entries = [(seq, entry) for seq, entry in entries if seq > reset_after]
+
+    if latest_summary_id and summary_anchor_id:
+        summary_entry = None
+        anchor_seq = -1
+        for seq, entry in entries:
+            msg_id = str(entry.get("id", "") or "")
+            if msg_id == latest_summary_id:
+                summary_entry = entry
+            if msg_id == summary_anchor_id:
+                anchor_seq = seq
+        if summary_entry is not None and anchor_seq >= 0:
+            visible = [summary_entry]
+            visible.extend(
+                entry for seq, entry in entries
+                if seq >= anchor_seq and str(entry.get("id", "") or "") != latest_summary_id
+            )
+            return {str(i + 1): entry for i, entry in enumerate(visible)}
+
+    return {str(i + 1): entry for i, (_seq, entry) in enumerate(entries)}
+
+
 # ── Token estimation ─────────────────────────────────────────────────────
 
 
@@ -351,6 +392,7 @@ def filter_raw_chat_entries(store_dict: dict) -> list[dict]:
         if role not in ("user", "assistant"):
             continue
         content = entry.get("content", {})
+        msg_id = str(entry.get("id", "") or "")
         if role == "user":
             text = ""
             if isinstance(content, dict):
@@ -364,13 +406,18 @@ def filter_raw_chat_entries(store_dict: dict) -> list[dict]:
                     text = str(content.get("user") or content.get("text") or "")
             else:
                 text = str(content or "")
-            raw.append({"role": "user", "content": text})
+            if text.strip():
+                raw.append({"role": "user", "content": text, "id": msg_id, "seq": int(k)})
         elif role == "assistant":
+            parts: list[str] = []
             if isinstance(content, dict):
                 for sk in sorted((int(k2) for k2 in content if k2.isdigit()), key=int):
                     v = content[str(sk)]
                     if isinstance(v, dict) and "text" in v:
-                        raw.append({"role": "assistant", "content": str(v["text"])})
+                        parts.append(str(v["text"]))
             elif isinstance(content, str):
-                raw.append({"role": "assistant", "content": content})
+                parts.append(content)
+            text = "\n\n".join(p for p in parts if p.strip())
+            if text.strip():
+                raw.append({"role": "assistant", "content": text, "id": msg_id, "seq": int(k)})
     return raw

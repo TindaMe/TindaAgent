@@ -17,11 +17,18 @@ from TindaAgent.Tool import tool
 from TindaAgent.Web import server
 from TindaAgent.Web.session_store import SessionStore
 from TindaAgent.Process.AI import client as ai_client
+from TindaAgent.Process.Architecture import paths as arch_paths
 from TindaAgent.Process.Observability import audit as audit_mod
 from TindaAgent.Process.Observability.audit import GlobalAuditEngine
 
 
 class LogArchiveEventLookupTests(unittest.TestCase):
+    def test_users_file_path_uses_runtime_user_root(self) -> None:
+        root = Path(os.environ["TINDA_HOME"]).resolve()
+        self.assertEqual(arch_paths.get_user_root(), root / "user")
+        self.assertEqual(arch_paths.get_users_file(), root / "user" / "users.json")
+        self.assertEqual(arch_paths.get_legacy_runtime_users_file(), root / "Data" / "User" / "users.json")
+
     def test_ai_client_create_chat_completion_with_retry_injects_stream_true(self) -> None:
         client = ai_client.LLMClient(api_key="test", base_url="https://example.com", model="deepseek-v4-flash")
 
@@ -167,6 +174,147 @@ class LogArchiveEventLookupTests(unittest.TestCase):
         self.assertIsNotNone(pair)
         self.assertEqual(pair, ("帮我看看日志", ""))
 
+    def test_session_store_compress_hides_older_messages_from_effective_view(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="tinda_compress_effective_") as tmp:
+            store = SessionStore(Path(tmp))
+            sid = "s_compress_effective"
+            store.create_session(sid, title="新对话")
+            store.append_messages(
+                sid,
+                [
+                    {"role": "user", "entry_type": "chat", "content": "old user 1"},
+                    {"role": "assistant", "entry_type": "chat", "content": "old assistant 1"},
+                    {"role": "user", "entry_type": "chat", "content": "old user 2"},
+                    {"role": "assistant", "entry_type": "chat", "content": "old assistant 2"},
+                    {"role": "user", "entry_type": "chat", "content": "tail user 1"},
+                    {"role": "assistant", "entry_type": "chat", "content": "tail assistant 1"},
+                    {"role": "user", "entry_type": "chat", "content": "tail user 2"},
+                    {"role": "assistant", "entry_type": "chat", "content": "tail assistant 2"},
+                ],
+            )
+
+            result = store.compress_context(sid, "summary of old messages")
+            raw_text = json.dumps(store.load_messages(sid), ensure_ascii=False)
+            effective = store.load_effective_messages(sid)
+            effective_text = json.dumps(effective, ensure_ascii=False)
+            md_text = (Path(tmp) / "exports" / f"{sid}.md").read_text(encoding="utf-8")
+
+        self.assertTrue(bool(result.get("compressed")))
+        self.assertIn("old user 1", raw_text)
+        self.assertNotIn("old user 1", effective_text)
+        self.assertNotIn("old assistant 2", effective_text)
+        self.assertIn("summary of old messages", effective_text)
+        self.assertIn("tail user 1", effective_text)
+        self.assertNotIn("old user 1", md_text)
+
+    def test_session_store_compress_is_idempotent_until_new_tail(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="tinda_compress_idempotent_") as tmp:
+            store = SessionStore(Path(tmp))
+            sid = "s_compress_idempotent"
+            store.create_session(sid, title="新对话")
+            store.append_messages(
+                sid,
+                [
+                    {"role": "user", "entry_type": "chat", "content": f"user {i}"}
+                    if i % 2 == 0
+                    else {"role": "assistant", "entry_type": "chat", "content": f"assistant {i}"}
+                    for i in range(8)
+                ],
+            )
+
+            first = store.compress_context(sid, "summary")
+            second = store.compress_context(sid, "summary again")
+
+        self.assertTrue(bool(first.get("compressed")))
+        self.assertFalse(bool(second.get("compressed")))
+        self.assertEqual(str(second.get("reason", "")), "already_compressed")
+
+    def test_raw_chat_rows_for_compression_excludes_tool_and_uses_effective_rows(self) -> None:
+        sid = "s_raw_compress_rows"
+
+        class _FakeStore:
+            def load_effective_messages(self, _sid: str) -> dict:
+                return {
+                    "1": {"role": "system", "id": "summary", "content": {"text": "summary"}},
+                    "2": {"role": "user", "id": "u1", "content": {"1": {"text": "hello"}}},
+                    "3": {"role": "assistant", "id": "a1", "content": {
+                        "1": {"thinking": "hidden"},
+                        "2": {"tool_marker": {"name": "run_terminal", "stdout": "secret"}},
+                        "3": {"text": "visible"},
+                    }},
+                }
+
+        with patch.object(server, "_store", _FakeStore()):
+            rows = server._raw_chat_rows_for_compression(sid)
+
+        self.assertEqual(rows, [
+            {"role": "user", "content": "hello", "id": "u1", "seq": 2},
+            {"role": "assistant", "content": "visible", "id": "a1", "seq": 3},
+        ])
+
+    def test_summary_rows_for_compression_preserves_existing_summary(self) -> None:
+        sid = "s_summary_rows"
+
+        class _FakeStore:
+            def get_session(self, _sid: str) -> dict:
+                return {"latest_summary_message_id": "summary_id"}
+
+            def load_effective_messages(self, _sid: str) -> dict:
+                return {
+                    "1": {"role": "system", "id": "summary_id", "content": {"text": "old summary"}},
+                    "2": {"role": "user", "id": "u1", "content": {"1": {"text": "new request"}}},
+                }
+
+        with patch.object(server, "_store", _FakeStore()):
+            rows = server._summary_rows_for_compression(
+                sid,
+                [{"role": "user", "content": "new request", "id": "u1", "seq": 2}],
+            )
+
+        self.assertEqual(rows[0], {"role": "system", "content": "[已有上下文摘要] old summary"})
+        self.assertEqual(rows[1]["content"], "new request")
+
+    def test_require_session_access_rejects_other_owner(self) -> None:
+        sid = "s_owned_by_other"
+
+        class _User:
+            def get_uid(self) -> str:
+                return "uid_current"
+
+        class _FakeStore:
+            def ensure_session(self, _sid: str, owner_uid: str | None = None) -> dict:
+                return {"id": _sid, "owner_uid": "uid_other"}
+
+        with patch.object(server, "_store", _FakeStore()):
+            with self.assertRaises(server.HTTPException) as ctx:
+                server._require_session_access(sid, user=_User())
+
+        self.assertEqual(int(ctx.exception.status_code), 403)
+
+    def test_require_session_access_claims_legacy_session(self) -> None:
+        sid = "s_legacy_ownerless"
+
+        class _User:
+            def get_uid(self) -> str:
+                return "uid_current"
+
+        class _FakeStore:
+            def __init__(self) -> None:
+                self.owner_uid = ""
+
+            def ensure_session(self, _sid: str, owner_uid: str | None = None) -> dict:
+                if owner_uid is not None and not self.owner_uid:
+                    self.owner_uid = owner_uid
+                return {"id": _sid, "owner_uid": self.owner_uid}
+
+        fake = _FakeStore()
+        with patch.object(server, "_store", fake):
+            _sid, meta = server._require_session_access(sid, user=_User())
+
+        self.assertEqual(_sid, sid)
+        self.assertEqual(str(meta.get("owner_uid", "")), "uid_current")
+        self.assertEqual(fake.owner_uid, "uid_current")
+
     def test_estimate_context_usage_length_counts_messages(self) -> None:
         rows = [
             {"role": "user", "content": "你好"},
@@ -176,6 +324,21 @@ class LogArchiveEventLookupTests(unittest.TestCase):
         usage = server._estimate_context_usage_length(rows)
         self.assertIsInstance(usage, int)
         self.assertGreater(usage, 0)
+
+    def test_estimate_context_usage_length_counts_only_llm_context_content(self) -> None:
+        with patch("TindaAgent.Process.AI.tokenizer.estimate_tokens", side_effect=lambda text: len(str(text))):
+            usage = server._estimate_context_usage_length(
+                [
+                    {"role": "user", "entry_type": "chat", "content": "u"},
+                    {"role": "assistant", "entry_type": "chat", "content": "aa", "reasoning_content": "hidden"},
+                    {"role": "system", "entry_type": "notice", "content": "sss"},
+                    {"role": "assistant", "entry_type": "terminal", "content": "terminal should not count"},
+                    {"role": "assistant", "entry_type": "tool_marker", "content": "marker should not count"},
+                    {"role": "debug", "entry_type": "chat", "content": "debug should not count"},
+                ]
+            )
+
+        self.assertEqual(usage, len("u") + len("aa") + len("sss"))
 
     def test_get_session_context_usage_api_returns_numeric_length(self) -> None:
         sid = "s_context_usage_api"
@@ -570,8 +733,13 @@ class LogArchiveEventLookupTests(unittest.TestCase):
             def ensure_session(self, _sid: str) -> None:
                 return None
 
+        class _FakeAgent:
+            def has_pending_confirmation(self) -> bool:
+                return True
+
         with patch.object(server, "_store", _FakeStore()), \
              patch.object(server, "_terminal_pending", pending), \
+             patch.dict(server._sessions, {sid: _FakeAgent()}, clear=True), \
              patch.object(server, "_require_login", return_value=object()):
             resp = asyncio.run(server.terminal_pending(session_id=sid))
 

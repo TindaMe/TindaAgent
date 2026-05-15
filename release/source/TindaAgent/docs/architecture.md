@@ -4,7 +4,6 @@
 flowchart TB
     subgraph Entry[入口]
         run_web_py["run_web.py<br/>uvicorn 启动"]
-        demo["Master/demo.py<br/>命令行Demo"]
     end
 
     subgraph Web[Web 层 · server.py]

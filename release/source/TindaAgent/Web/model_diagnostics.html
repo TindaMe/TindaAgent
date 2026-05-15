@@ -387,7 +387,14 @@
     const runHistory = [];
 
     function getAuthToken() {
-      return String(localStorage.getItem(AUTH_TOKEN_KEY) || "").trim();
+      const current = String(sessionStorage.getItem(AUTH_TOKEN_KEY) || "").trim();
+      if (current) return current;
+      const legacy = String(localStorage.getItem(AUTH_TOKEN_KEY) || "").trim();
+      if (legacy) {
+        sessionStorage.setItem(AUTH_TOKEN_KEY, legacy);
+        localStorage.removeItem(AUTH_TOKEN_KEY);
+      }
+      return legacy;
     }
 
     function authHeaders(extra) {

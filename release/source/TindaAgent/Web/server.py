@@ -40,6 +40,7 @@ from TindaAgent.Process.Architecture.paths import (
     get_log_root,
     get_legacy_sessions_root,
     get_sessions_root,
+    get_users_file,
 )
 from TindaAgent.Process.Observability import audit_event
 from TindaAgent.Web.session_store import SessionStore, SessionStoreError, cleanup_legacy_chat_records
@@ -53,9 +54,18 @@ from TindaAgent.Web.tool_runtime import ToolRuntimeManager
 
 app = FastAPI()
 
+_cors_origins_env = str(os.getenv("TINDA_CORS_ORIGINS", "")).strip()
+_CORS_ALLOW_ORIGINS = (
+    [x.strip() for x in _cors_origins_env.split(",") if x.strip()]
+    if _cors_origins_env
+    else ["http://localhost", "http://127.0.0.1"]
+)
+_CORS_LOCAL_ORIGIN_REGEX = r"^https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$"
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_CORS_ALLOW_ORIGINS,
+    allow_origin_regex=_CORS_LOCAL_ORIGIN_REGEX,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -311,10 +321,10 @@ _AUTH_OPEN_PATHS = {
     "/favicon.ico",
     "/system/version",
     "/user-admin",
-    "/auth/users",
     "/auth/status",
     "/auth/select-user",
-    "/web-settings",
+    "/auth/local-users",
+    "/auth/local-login",
     "/chat_renderer.js",
 }
 
@@ -428,14 +438,6 @@ class SessionTitleRequest(BaseModel):
     title: str
 
 
-class SessionCompressRequest(BaseModel):
-    session_id: str
-
-
-class SessionMessagesQuery(BaseModel):
-    include_hidden: bool = False
-
-
 class ToolJobCreateRequest(BaseModel):
     session_id: str
     command: str
@@ -448,10 +450,6 @@ class SessionEventsRequest(BaseModel):
 
 class ResetRequest(BaseModel):
     session_id: str | None = None
-
-
-class ToolLegacyRequest(BaseModel):
-    session_id: str
 
 
 class TerminalConfirmRequest(BaseModel):
@@ -544,14 +542,130 @@ def _truncate_context_preview(text: str, max_chars: int = 300) -> str:
 
 def _estimate_context_usage_length(rows: list[dict]) -> int:
     from TindaAgent.Process.AI.tokenizer import estimate_tokens
+
+    llm_roles = {"system", "user", "assistant", "tool"}
+    non_context_entry_types = {"terminal", "tool_marker"}
     total = 0
     for row in (rows or []):
         if not isinstance(row, dict):
+            continue
+        role = str(row.get("role", "") or "").strip()
+        if role not in llm_roles:
+            continue
+        entry_type = str(row.get("entry_type", "") or "").strip()
+        if entry_type in non_context_entry_types:
             continue
         content = str(row.get("content", "") or "")
         if content.strip():
             total += estimate_tokens(content)
     return int(total)
+
+
+def _raw_chat_rows_for_compression(session_id: str, fallback_rows: list[dict] | None = None) -> list[dict]:
+    """Return raw user/assistant text rows that are safe to summarize."""
+    sid = str(session_id or "").strip()
+    try:
+        load_effective = getattr(_store, "load_effective_messages", None)
+        load_messages = getattr(_store, "load_messages", None)
+        loader = load_effective if callable(load_effective) else load_messages
+        if callable(loader):
+            data = loader(sid)
+            if isinstance(data, dict):
+                return sa.filter_raw_chat_entries(data)
+    except Exception:
+        pass
+
+    raw_rows: list[dict] = []
+    for row in fallback_rows or []:
+        if not isinstance(row, dict):
+            continue
+        if bool(row.get("is_summary", False)):
+            continue
+        if str(row.get("entry_type", "chat")) != "chat":
+            continue
+        role = str(row.get("role", "") or "").strip()
+        if role not in {"user", "assistant"}:
+            continue
+        content = str(row.get("content", "") or "")
+        if content.strip():
+            raw_rows.append({"role": role, "content": content, "id": str(row.get("id", "") or "")})
+    return raw_rows
+
+
+def _summary_rows_for_compression(session_id: str, raw_rows: list[dict]) -> list[dict]:
+    """Build summary input from the currently effective context only."""
+    sid = str(session_id or "").strip()
+    summary_text = ""
+    try:
+        meta = _store.get_session(sid) or {}
+        latest_summary_id = str(meta.get("latest_summary_message_id", "") or "").strip()
+        load_effective = getattr(_store, "load_effective_messages", None)
+        if latest_summary_id and callable(load_effective):
+            data = load_effective(sid)
+            if isinstance(data, dict):
+                for entry in data.values():
+                    if not isinstance(entry, dict):
+                        continue
+                    if str(entry.get("id", "") or "") != latest_summary_id:
+                        continue
+                    content = entry.get("content", {})
+                    if isinstance(content, dict):
+                        summary_text = str(content.get("text", "") or "")
+                    elif isinstance(content, str):
+                        summary_text = content
+                    break
+    except Exception:
+        summary_text = ""
+
+    rows: list[dict] = []
+    if summary_text.strip():
+        rows.append({"role": "system", "content": f"[已有上下文摘要] {summary_text.strip()}"})
+    rows.extend(dict(x) for x in raw_rows)
+    return rows
+
+
+def _is_duplicate_compression_request(session_id: str, raw_rows: list[dict]) -> bool:
+    if len(raw_rows) < 4:
+        return False
+    try:
+        meta = _store.get_session(session_id) or {}
+    except Exception:
+        return False
+    anchor_id = str(raw_rows[-4].get("id", "") or "")
+    return bool(anchor_id and anchor_id == str(meta.get("last_compress_anchor_msg_id", "") or ""))
+
+
+def _require_session_access(session_id: str, *, user: userdata.UserManager | None = None,
+                            create: bool = True) -> tuple[str, dict]:
+    current = user or _require_login()
+    sid = str(session_id or "").strip()
+    if not sid:
+        raise HTTPException(status_code=400, detail="session_id required")
+    get_uid = getattr(current, "get_uid", None)
+    uid = str(get_uid() if callable(get_uid) else "")
+    if create:
+        try:
+            meta = _store.ensure_session(sid, owner_uid=uid)
+        except TypeError:
+            meta = _store.ensure_session(sid)
+    else:
+        meta = _store.get_session(sid) or {}
+    if not meta:
+        if create:
+            meta = {"id": sid, "owner_uid": uid}
+        else:
+            raise HTTPException(status_code=404, detail="session not found")
+    if not isinstance(meta, dict):
+        meta = {"id": sid, "owner_uid": uid}
+    owner_uid = str(meta.get("owner_uid", "") or "").strip()
+    if owner_uid and owner_uid != uid:
+        raise HTTPException(status_code=403, detail="session access denied")
+    if not owner_uid:
+        try:
+            meta = _store.ensure_session(sid, owner_uid=uid)
+        except TypeError:
+            meta = _store.ensure_session(sid)
+    return sid, meta
 
 
 def _to_diagnostic_fail(test: str, err: Exception) -> dict:
@@ -926,6 +1040,8 @@ def _get_terminal_pending(session_id: str) -> list[dict]:
         return []
     with _terminal_pending_lock:
         rows = _terminal_pending.get(sid, [])
+        if isinstance(rows, dict):
+            return [dict(rows)]
         return [dict(x) for x in rows if isinstance(x, dict)]
 
 
@@ -968,6 +1084,82 @@ def _get_web_profile(user: userdata.UserManager | None = None) -> UserProfileRes
     )
 
 
+def _profile_payload(user: userdata.UserManager | None = None) -> dict:
+    p = _get_web_profile(user)
+    return {
+        "name": p.name,
+        "uid": p.uid,
+        "perm": p.perm,
+        "perm_label": p.perm_label,
+    }
+
+
+def _mask_token(token: str) -> str:
+    text = str(token or "")
+    if not text:
+        return ""
+    if len(text) <= 12:
+        return "*" * len(text)
+    return f"{text[:6]}...{text[-4:]}"
+
+
+def _as_public_user_row(user: userdata.UserManager, *, current_uid: str = "") -> dict:
+    up = int(user.get_perm())
+    return {
+        "uid": str(user.get_uid()),
+        "name": str(user.get_name()),
+        "perm": up,
+        "perm_label": _perm_label(up),
+        "is_current": bool(current_uid and str(user.get_uid()) == current_uid),
+    }
+
+
+def _is_system_user_row(row: dict) -> bool:
+    return str(row.get("name", "") or "").startswith("web-bot-")
+
+
+def _public_user_row_from_json(row: dict, *, current_uid: str = "") -> dict | None:
+    if not isinstance(row, dict) or _is_system_user_row(row):
+        return None
+    uid = str(row.get("uid", "") or "").strip()
+    name = str(row.get("name", "") or "").strip()
+    if not uid or not name:
+        return None
+    try:
+        up = int(row.get("perm", 0) or 0)
+    except Exception:
+        up = 0
+    return {
+        "uid": uid,
+        "name": name,
+        "perm": up,
+        "perm_label": _perm_label(up),
+        "is_current": bool(current_uid and uid == current_uid),
+    }
+
+
+def _load_user_rows_from_json() -> list[dict]:
+    path = get_users_file()
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    rows = data.get("users", []) if isinstance(data, dict) else []
+    return [dict(x) for x in rows if isinstance(x, dict)]
+
+
+def _find_user_row_from_json(uid: str) -> dict | None:
+    key = str(uid or "").strip()
+    if not key:
+        return None
+    for row in _load_user_rows_from_json():
+        if str(row.get("uid", "") or "").strip() == key and not _is_system_user_row(row):
+            return row
+    return None
+
+
 def _touch_session_cache(session_id: str) -> None:
     _session_last_access[session_id] = time.time()
 
@@ -991,6 +1183,20 @@ def _resolve_user_from_token_header(request: Request) -> userdata.UserManager | 
     if user is None or userdata.is_system_user(user):
         return None
     return user
+
+
+def _is_loopback_request(request: Request) -> bool:
+    client_host = ""
+    try:
+        client_host = str(request.client.host if request.client else "")
+    except Exception:
+        client_host = ""
+    return client_host in {"127.0.0.1", "::1", "localhost"} or client_host.startswith("127.")
+
+
+def _require_local_login_request(request: Request) -> None:
+    if not _is_loopback_request(request):
+        raise HTTPException(status_code=403, detail="local login is only allowed from loopback")
 
 
 @app.middleware("http")
@@ -1208,7 +1414,7 @@ def _as_user_row(user: userdata.UserManager, *, current_uid: str = "") -> dict:
         "name": str(user.get_name()),
         "perm": up,
         "perm_label": _perm_label(up),
-        "token": str(user.get_token()),
+        "token_masked": _mask_token(str(user.get_token())),
         "is_current": bool(current_uid and str(user.get_uid()) == current_uid),
     }
 
@@ -1806,12 +2012,13 @@ async def settings_page():
 # ── Web Settings API ───────────────────────────────────────────────
 @app.get("/web-settings")
 async def get_web_settings():
+    _require_login()
     return load_web_settings()
 
 
 @app.put("/web-settings")
 async def put_web_settings(data: dict[str, Any] = Body(...)):
-    _require_login()
+    _require_admin_user()
     save_web_settings(data)
     return load_web_settings()
 
@@ -1819,12 +2026,13 @@ async def put_web_settings(data: dict[str, Any] = Body(...)):
 # ── Terminal Settings API ──────────────────────────────────────────
 @app.get("/terminal/settings")
 async def get_terminal_settings():
+    _require_login()
     return load_terminal_settings()
 
 
 @app.put("/terminal/settings")
 async def put_terminal_settings(data: dict[str, Any] = Body(...)):
-    _require_login()
+    _require_admin_user()
     return save_terminal_settings(
         whitelist=data.get("whitelist"),
         blacklist=data.get("blacklist"),
@@ -2010,17 +2218,10 @@ async def auth_status(request: Request):
     current = sec_get_current_user() or _resolve_user_from_token_header(request)
     if current is None:
         return JSONResponse({"logged_in": False, "user": None})
-    p = _get_web_profile(current)
     return JSONResponse(
         {
             "logged_in": True,
-            "user": {
-                "name": p.name,
-                "uid": p.uid,
-                "perm": p.perm,
-                "perm_label": p.perm_label,
-                "token": p.token,
-            },
+            "user": _profile_payload(current),
         }
     )
 
@@ -2034,73 +2235,67 @@ async def auth_select_user(req: UserSwitchRequest, request: Request):
             {"ok": False, "logged_in": False, "user": None, "error": "not logged in"},
             status_code=401,
         )
-    p = _get_web_profile(current)
     return JSONResponse(
         {
             "ok": True,
             "logged_in": True,
-            "user": {
-                "name": p.name,
-                "uid": p.uid,
-                "perm": p.perm,
-                "perm_label": p.perm_label,
-                "token": p.token,
-            },
+            "user": _profile_payload(current),
         }
     )
 
 
 @app.get("/auth/users")
 async def auth_users():
+    current = _require_login()
+    current_uid = str(current.get_uid())
+    users = [_as_public_user_row(u, current_uid=current_uid)
+             for u in userdata.iter_users() if not userdata.is_system_user(u)]
+    return JSONResponse({"users": users, "current_uid": current_uid})
+
+
+@app.get("/auth/local-users")
+async def auth_local_users(request: Request):
     users = []
-    for u in userdata.iter_users():
-        if userdata.is_system_user(u):
-            continue
-        users.append(
-            {
-                "uid": str(u.get_uid()),
-                "name": str(u.get_name()),
-                "perm": int(u.get_perm()),
-                "perm_label": _perm_label(int(u.get_perm())),
-                "token": str(u.get_token()),
-            }
-        )
+    for row in _load_user_rows_from_json():
+        public = _public_user_row_from_json(row)
+        if public is not None:
+            users.append(public)
     return JSONResponse({"users": users})
+
+
+@app.post("/auth/local-login")
+async def auth_local_login(req: UserSwitchRequest, request: Request):
+    _require_local_login_request(request)
+    uid = str(req.uid or "").strip()
+    if not uid:
+        return JSONResponse({"ok": False, "error": "uid required"}, status_code=400)
+    target = _find_user_row_from_json(uid)
+    public = _public_user_row_from_json(target or {})
+    if target is None or public is None:
+        return JSONResponse({"ok": False, "error": "user not found"}, status_code=404)
+    return JSONResponse(
+        {
+            "ok": True,
+            "logged_in": True,
+            "user": public,
+            "token": str(target.get("token", "") or ""),
+        }
+    )
 
 
 @app.get("/user/profile")
 async def user_profile():
     _require_login()
-    p = _get_web_profile()
-    return JSONResponse(
-        {
-            "name": p.name,
-            "uid": p.uid,
-            "perm": p.perm,
-            "perm_label": p.perm_label,
-            "token": p.token,
-        }
-    )
+    return JSONResponse(_profile_payload())
 
 
 @app.get("/users")
 async def list_users():
     _require_login()
-    users = []
-    for u in userdata.iter_users():
-        if userdata.is_system_user(u):
-            continue
-        users.append(
-            {
-                "uid": str(u.get_uid()),
-                "name": str(u.get_name()),
-                "perm": int(u.get_perm()),
-                "perm_label": _perm_label(int(u.get_perm())),
-                "token": str(u.get_token()),
-            }
-        )
     current = sec_get_current_user()
     current_uid = str(current.get_uid()) if current is not None else ""
+    users = [_as_public_user_row(u, current_uid=current_uid)
+             for u in userdata.iter_users() if not userdata.is_system_user(u)]
     return JSONResponse({"users": users, "current_uid": current_uid})
 
 
@@ -2205,15 +2400,10 @@ async def switch_user(req: UserSwitchRequest):
         target = userdata.get_user_from_uid(uid)
         if target is None or userdata.is_system_user(target):
             return JSONResponse({"ok": False, "error": "user not found"}, status_code=404)
-    p = _get_web_profile()
     return JSONResponse(
         {
             "ok": True,
-            "name": p.name,
-            "uid": p.uid,
-            "perm": p.perm,
-            "perm_label": p.perm_label,
-            "token": p.token,
+            **_profile_payload(),
         }
     )
 
@@ -2243,7 +2433,7 @@ async def admin_create_user(req: UserCreateRequest):
         created = userdata.create_user(req.name, int(req.perm), req.token, actor=current)
     except (ValueError, PermissionError) as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
-    return JSONResponse({"ok": True, "user": _as_user_row(created)})
+    return JSONResponse({"ok": True, "user": _as_user_row(created), "token": str(created.get_token())})
 
 
 @app.patch("/admin/users/{uid}")
@@ -2306,7 +2496,13 @@ async def admin_reset_user_token(uid: str):
         return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
     if updated is None:
         return JSONResponse({"ok": False, "error": "user not found"}, status_code=404)
-    return JSONResponse({"ok": True, "user": _as_user_row(updated, current_uid=str(current.get_uid()))})
+    return JSONResponse(
+        {
+            "ok": True,
+            "user": _as_user_row(updated, current_uid=str(current.get_uid())),
+            "token": str(updated.get_token()),
+        }
+    )
 
 
 @app.delete("/admin/users/{uid}")
@@ -2357,34 +2553,34 @@ async def switch_model(req: ModelSwitchRequest):
 
 @app.post("/sessions")
 async def create_session(req: SessionCreateRequest):
-    _require_login()
+    current = _require_login()
     if bool(req.reuse_if_current_empty):
         current_id = str(req.current_session_id or "").strip()
         if current_id:
             meta = _store.get_session(current_id) or {}
+            if str(meta.get("owner_uid", "") or "").strip() not in {"", str(current.get_uid())}:
+                meta = {}
             try:
                 msg_count = int(meta.get("message_count", 0))
             except Exception:
                 msg_count = 0
             if msg_count <= 0 and str(meta.get("id", "")).strip():
+                if not str(meta.get("owner_uid", "") or "").strip():
+                    meta = _store.ensure_session(str(meta.get("id", "")), owner_uid=str(current.get_uid()))
                 return JSONResponse({"ok": True, "session": meta, "reused": True})
-    row = _store.create_session(title=str(req.title or "新对话"))
+    row = _store.create_session(title=str(req.title or "新对话"), owner_uid=str(current.get_uid()))
     return JSONResponse({"ok": True, "session": row, "reused": False})
 
 
 @app.get("/sessions")
 async def list_sessions(limit: int = 100, offset: int = 0):
-    _require_login()
-    return JSONResponse(_store.list_sessions(limit=limit, offset=offset))
+    current = _require_login()
+    return JSONResponse(_store.list_sessions(limit=limit, offset=offset, owner_uid=str(current.get_uid())))
 
 
 @app.patch("/sessions/{session_id}/config")
 async def patch_session_config(session_id: str, data: dict[str, Any] = Body(...)):
-    _require_login()
-    sid = str(session_id or "").strip()
-    if not sid:
-        return JSONResponse({"ok": False, "error": "session_id required"}, status_code=400)
-    _store.ensure_session(sid)
+    sid, _meta = _require_session_access(session_id)
     cfg = _session_config.setdefault(sid, {})
     if "max_context_tokens" in data:
         v = data["max_context_tokens"]
@@ -2397,10 +2593,7 @@ async def patch_session_config(session_id: str, data: dict[str, Any] = Body(...)
 
 @app.get("/sessions/{session_id}/config")
 async def get_session_config(session_id: str):
-    _require_login()
-    sid = str(session_id or "").strip()
-    if not sid:
-        return JSONResponse({"ok": False, "error": "session_id required"}, status_code=400)
+    sid, _meta = _require_session_access(session_id)
     cfg = dict(_session_config.get(sid, {}))
     _audit_web("SYSTEM_READ", "get_session_config",
                f"session_config_read session_id={sid}",
@@ -2418,13 +2611,9 @@ def _maybe_auto_compress(session_id: str, context_rows: list[dict]) -> dict:
     from TindaAgent.Web.settings_backend import get_context_token_limit
     max_tokens = int(getattr(agent, "max_context_tokens", 0) or get_context_token_limit())
     tokens_before = int(agent.estimate_current_tokens())
+    raw_rows = _raw_chat_rows_for_compression(sid, context_rows)
 
-    chat_count = sum(
-        1 for r in context_rows
-        if str(r.get("entry_type", "chat")) == "chat"
-        and str(r.get("role", "")) in {"user", "assistant"}
-        and not bool(r.get("is_summary", False))
-    )
+    chat_count = len(raw_rows)
 
     trigger = ""
     if chat_count >= 80 and tokens_before <= max_tokens:
@@ -2441,20 +2630,20 @@ def _maybe_auto_compress(session_id: str, context_rows: list[dict]) -> dict:
             "max_context_tokens": max_tokens,
         }
 
-    raw_rows = [
-        r for r in context_rows
-        if str(r.get("entry_type", "chat")) == "chat"
-        and str(r.get("role", "")) in {"user", "assistant"}
-        and not bool(r.get("is_summary", False))
-    ]
     if len(raw_rows) < 6:
         return {
             "compressed": False,
             "reason": "insufficient_messages",
             "estimated_tokens_before": tokens_before,
         }
+    if _is_duplicate_compression_request(sid, raw_rows):
+        return {
+            "compressed": False,
+            "reason": "already_compressed",
+            "estimated_tokens_before": tokens_before,
+        }
 
-    summary_src = raw_rows[:-4]
+    summary_src = _summary_rows_for_compression(sid, raw_rows[:-4])
     try:
         summary = _compress_messages_with_llm(summary_src)
         if not summary:
@@ -2485,12 +2674,7 @@ def _maybe_auto_compress(session_id: str, context_rows: list[dict]) -> dict:
 
 @app.get("/sessions/{session_id}/context-usage")
 async def get_session_context_usage(session_id: str):
-    _require_login()
-    sid = str(session_id or "").strip()
-    if not sid:
-        return JSONResponse({"ok": False, "error": "session_id required"}, status_code=400)
-
-    _store.ensure_session(sid)
+    sid, _meta = _require_session_access(session_id)
     rows = _store.get_context_messages(sid)
     usage_length = _estimate_context_usage_length(rows)
     meta = _store.get_session(sid) or {}
@@ -2521,21 +2705,21 @@ async def get_session_context_usage(session_id: str):
 
 @app.delete("/sessions/{session_id}")
 async def delete_session(session_id: str):
-    _require_login()
-    ok = _store.delete_session(session_id)
-    _sessions.pop(session_id, None)
-    _session_last_access.pop(session_id, None)
-    _session_config.pop(session_id, None)
-    _clear_terminal_pending(session_id)
+    sid, _meta = _require_session_access(session_id, create=False)
+    ok = _store.delete_session(sid)
+    _sessions.pop(sid, None)
+    _session_last_access.pop(sid, None)
+    _session_config.pop(sid, None)
+    _clear_terminal_pending(sid)
     if not ok:
         return JSONResponse({"ok": False, "error": "session not found"}, status_code=404)
-    return JSONResponse({"ok": True, "session_id": session_id})
+    return JSONResponse({"ok": True, "session_id": sid})
 
 
 @app.delete("/sessions")
 async def delete_all_sessions():
-    _require_login()
-    payload = _store.list_sessions(limit=10000, offset=0)
+    current = _require_login()
+    payload = _store.list_sessions(limit=10000, offset=0, owner_uid=str(current.get_uid()))
     sessions_list = payload.get("sessions", [])
     deleted = 0
     for row in sessions_list:
@@ -2556,17 +2740,17 @@ async def delete_all_sessions():
 
 @app.get("/sessions/{session_id}/messages")
 async def get_session_messages(session_id: str):
-    _require_login()
-    _store.ensure_session(session_id)
-    data = _store.load_messages(session_id)
+    sid, _meta = _require_session_access(session_id)
+    load_effective = getattr(_store, "load_effective_messages", None)
+    data = load_effective(sid) if callable(load_effective) else _store.load_messages(sid)
     entries = sa.store_dict_to_frontend(data)
-    return JSONResponse({"ok": True, "session_id": session_id, "entries": entries})
+    return JSONResponse({"ok": True, "session_id": sid, "entries": entries})
 
 
 @app.post("/sessions/{session_id}/title")
 async def update_session_title(session_id: str, req: SessionTitleRequest):
-    _require_login()
-    row = _store.set_session_title(session_id, req.title)
+    sid, _meta = _require_session_access(session_id)
+    row = _store.set_session_title(sid, req.title)
     return JSONResponse({"ok": True, "session": row})
 
 
@@ -2575,24 +2759,30 @@ async def compress_session_context(session_id: str):
     current = _require_login()
     if not _has_llm_perm(current):
         return JSONResponse({"ok": False, "error": "权限不足：当前账户不可执行上下文压缩"}, status_code=403)
-    rows = _store.get_context_messages(session_id)
+    sid, _meta = _require_session_access(session_id, user=current)
+    rows = _store.get_context_messages(sid)
     _audit_web(
         "SYSTEM_EXECUTE",
         "compress_session_context",
-        f"compress_start session_id={session_id}",
-        {"session_id": session_id, "context_rows": len(rows)},
+        f"compress_start session_id={sid}",
+        {"session_id": sid, "context_rows": len(rows)},
     )
     # 只拿原始 chat 做摘要，不把终端/notice/tool_marker 混进去
-    raw_rows = [
-        x for x in rows
-        if not bool(x.get("is_summary", False))
-        and str(x.get("entry_type", "chat")) == "chat"
-        and str(x.get("role", "")) in {"user", "assistant"}
-    ]
+    raw_rows = _raw_chat_rows_for_compression(sid, rows)
+    if _is_duplicate_compression_request(sid, raw_rows):
+        return JSONResponse(
+            {
+                "ok": True,
+                "session_id": sid,
+                "compressed": False,
+                "reason": "already_compressed",
+                "anchor_message_id": str(raw_rows[-4].get("id", "") or ""),
+            }
+        )
     if len(raw_rows) < 6:
         return JSONResponse({"ok": False, "error": "消息数量不足，至少需要 6 条消息才能压缩"}, status_code=400)
 
-    summary_src = raw_rows[:-4]
+    summary_src = _summary_rows_for_compression(sid, raw_rows[:-4])
     if not summary_src:
         return JSONResponse({"ok": False, "error": "消息数量不足，至少需要 6 条消息才能压缩"}, status_code=400)
 
@@ -2600,22 +2790,22 @@ async def compress_session_context(session_id: str):
         summary = _compress_messages_with_llm(summary_src)
         if not summary:
             raise ValueError("摘要为空")
-        result = _store.compress_context(session_id, summary)
+        result = _store.compress_context(sid, summary)
     except SessionStoreError as e:
         _audit_web("SYSTEM_EXECUTE", "compress_session_context",
-                   f"compress_failed session_id={session_id} err={e}",
-                   {"session_id": session_id, "ok": False, "error": str(e)})
+                   f"compress_failed session_id={sid} err={e}",
+                   {"session_id": sid, "ok": False, "error": str(e)})
         return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
     except Exception as e:
-        logger.warning("compress failed: session=%s err=%s", session_id, e)
+        logger.warning("compress failed: session=%s err=%s", sid, e)
         _audit_web("SYSTEM_EXECUTE", "compress_session_context",
-                   f"compress_error session_id={session_id} err={e}",
-                   {"session_id": session_id, "ok": False, "error": str(e)})
+                   f"compress_error session_id={sid} err={e}",
+                   {"session_id": sid, "ok": False, "error": str(e)})
         return JSONResponse({"ok": False, "error": "压缩失败"}, status_code=500)
 
     _audit_web("SYSTEM_EXECUTE", "compress_session_context",
                f"compress_done session_id={session_id}",
-               {"session_id": session_id, "ok": True, **{k: v for k, v in result.items() if k != "session_id"}})
+               {"session_id": sid, "ok": True, **{k: v for k, v in result.items() if k != "session_id"}})
     return JSONResponse({"ok": True, **result})
 
 
@@ -2628,7 +2818,7 @@ async def chat(req: ChatRequest):
     if not sid:
         return JSONResponse({"error": "session_id required"}, status_code=400)
 
-    _store.ensure_session(sid)
+    sid, _meta = _require_session_access(sid, user=current)
     turn_id = f"turn_{uuid.uuid4().hex[:12]}"
     pending_count = _pending_confirm_count(sid)
     if pending_count > 0:
@@ -2805,7 +2995,14 @@ async def chat_stream(
         ]
         return HTMLResponse("".join(chunks), media_type="text/event-stream")
 
-    _store.ensure_session(sid)
+    try:
+        sid, _meta = _require_session_access(sid, user=current)
+    except HTTPException as e:
+        chunks = [
+            _sse_event("error", {"message": str(e.detail)}),
+            _sse_event("done", {"reply": "", "tool_trace": [], "tool_steps": 0, "turn_id": turn_id}),
+        ]
+        return HTMLResponse("".join(chunks), media_type="text/event-stream")
     pending_count = _pending_confirm_count(sid)
     if pending_count > 0:
         # 若 agent 已无挂起确认，说明 pending 列表是残留的，主动清理
@@ -3007,11 +3204,7 @@ async def chat_stream(
 
 @app.get("/terminal/pending")
 async def terminal_pending(session_id: str = Query(default="")):
-    _require_login()
-    sid = str(session_id or "").strip()
-    if not sid:
-        return JSONResponse({"ok": False, "error": "session_id required"}, status_code=400)
-    _store.ensure_session(sid)
+    sid, _meta = _require_session_access(session_id)
     pending = _get_terminal_pending(sid)
     agent = _sessions.get(sid)
     if pending and (agent is None or not bool(getattr(agent, "has_pending_confirmation", lambda: False)())):
@@ -3029,11 +3222,10 @@ async def terminal_pending(session_id: str = Query(default="")):
 
 @app.post("/terminal/confirm")
 async def terminal_confirm(req: TerminalConfirmRequest):
-    _require_login()
     sid = str(req.session_id or "").strip()
     if not sid:
         return JSONResponse({"ok": False, "error": "session_id required"}, status_code=400)
-    _store.ensure_session(sid)
+    sid, _meta = _require_session_access(sid)
 
     pending = _get_terminal_pending(sid)
     if not pending:
@@ -3237,11 +3429,10 @@ async def terminal_confirm(req: TerminalConfirmRequest):
 
 @app.post("/reset")
 async def reset_chat(req: ResetRequest):
-    _require_login()
     sid = str(req.session_id or "").strip()
     if not sid:
         return JSONResponse({"ok": False, "error": "session_id required"}, status_code=400)
-    _store.ensure_session(sid)
+    sid, _meta = _require_session_access(sid)
     result = _store.mark_reset_anchor(sid)
     _sessions.pop(sid, None)
     _session_last_access.pop(sid, None)
@@ -3250,23 +3441,13 @@ async def reset_chat(req: ResetRequest):
     return JSONResponse({"ok": True, **result})
 
 
-@app.post("/tools")
-async def tools_legacy(req: ToolLegacyRequest):
-    _require_login()
-    # 兼容旧前端：保留接口
-    profile = _get_web_profile()
-    from TindaAgent.Tool import tool as tool_registry
-
-    return JSONResponse({"tools": tool_registry.list_tools(profile.perm)})
-
-
 @app.post("/session/events")
 async def session_events(req: SessionEventsRequest):
     """Persist frontend events: chat messages -> session file, terminal -> terminal file."""
-    _require_login()
     sid = str(req.session_id or "").strip()
     if not sid:
         return JSONResponse({"ok": False, "error": "session_id required"}, status_code=400)
+    sid, _meta = _require_session_access(sid)
 
     chat_rows: list[dict] = []
     term_rows: list[dict] = []
@@ -3319,19 +3500,19 @@ async def session_events(req: SessionEventsRequest):
 
 @app.get("/sessions/{session_id}/terminal")
 async def get_session_terminal(session_id: str):
-    _require_login()
-    entries = _store.load_terminal(session_id)
-    return JSONResponse({"ok": True, "session_id": session_id, "entries": entries})
+    sid, _meta = _require_session_access(session_id)
+    entries = _store.load_terminal(sid)
+    return JSONResponse({"ok": True, "session_id": sid, "entries": entries})
 
 
 @app.post("/sessions/{session_id}/tool-jobs")
 async def create_tool_job(session_id: str, req: ToolJobCreateRequest):
-    _require_login()
+    sid, _meta = _require_session_access(session_id)
     if str(req.session_id or "").strip() != str(session_id).strip():
         return JSONResponse({"ok": False, "error": "session_id mismatch"}, status_code=400)
     profile = _get_web_profile()
     try:
-        job = _tool_runtime.submit_command(session_id, req.command, profile.perm)
+        job = _tool_runtime.submit_command(sid, req.command, profile.perm)
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
     return JSONResponse({"ok": True, "job": job})
@@ -3339,82 +3520,21 @@ async def create_tool_job(session_id: str, req: ToolJobCreateRequest):
 
 @app.get("/sessions/{session_id}/tool-events")
 async def get_tool_events(session_id: str, after_seq: int = 0, limit: int = 200):
-    _require_login()
-    payload = _tool_runtime.get_events(session_id, after_seq=after_seq, limit=limit)
+    sid, _meta = _require_session_access(session_id)
+    payload = _tool_runtime.get_events(sid, after_seq=after_seq, limit=limit)
     events = payload.get("events", [])
     if events:
-        _persist_terminal_events(session_id, events)
+        _persist_terminal_events(sid, events)
     return JSONResponse(payload)
 
 
 @app.get("/sessions/{session_id}/tool-jobs/{job_id}")
 async def get_tool_job(session_id: str, job_id: str):
-    _require_login()
-    row = _tool_runtime.get_job(session_id, job_id)
+    sid, _meta = _require_session_access(session_id)
+    row = _tool_runtime.get_job(sid, job_id)
     if row is None:
         return JSONResponse({"ok": False, "error": "job not found"}, status_code=404)
     return JSONResponse({"ok": True, "job": row})
-
-
-# 兼容旧记录面板接口：映射到新会话结构
-@app.get("/records")
-async def records_compat(limit: int = 50, offset: int = 0, q: str = ""):
-    rows = _store.list_sessions(limit=limit, offset=offset).get("sessions", [])
-    if q:
-        kw = q.lower().strip()
-        rows = [x for x in rows if kw in str(x.get("id", "")).lower() or kw in str(x.get("title", "")).lower()]
-    mapped = [
-        {
-            "record_id": str(x.get("id", "")),
-            "session_id": str(x.get("id", "")),
-            "created_at": x.get("created_at", ""),
-            "updated_at": x.get("updated_at", ""),
-            "message_count": x.get("message_count", 0),
-            "size_bytes": 0,
-            "has_md": True,
-            "has_txt": True,
-        }
-        for x in rows
-    ]
-    return JSONResponse({"records": mapped, "total": len(mapped), "limit": limit, "offset": offset})
-
-
-@app.get("/records/session")
-async def records_session_compat(session_id: str):
-    rows = _store.load_messages(session_id)
-    if not rows:
-        return JSONResponse({"found": False, "session_id": session_id})
-    meta = _store.get_session(session_id) or {}
-    return JSONResponse(
-        {
-            "found": True,
-            "session_id": session_id,
-            "record": {
-                "record_id": session_id,
-                "created_at": meta.get("created_at", ""),
-                "updated_at": meta.get("updated_at", ""),
-                "message_count": len(rows),
-            },
-            "entries": rows,
-        }
-    )
-
-
-class ImportRecordRequest(BaseModel):
-    session_id: str
-    record_id: str
-
-
-@app.post("/records/import")
-async def import_record_compat(req: ImportRecordRequest):
-    # 新架构不再导入旧 record，兼容返回当前会话
-    rows = _store.load_messages(req.record_id)
-    if not rows:
-        return JSONResponse({"ok": False, "error": "记录不存在或不再支持旧格式导入"}, status_code=400)
-    _store.delete_session(req.session_id)
-    _store.create_session(req.session_id, title="新对话")
-    _store.append_messages(req.session_id, rows)
-    return JSONResponse({"ok": True, "session_id": req.session_id, "entries": rows})
 
 
 if __name__ == "__main__":
