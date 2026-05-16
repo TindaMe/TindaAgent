@@ -29,6 +29,15 @@ class LogArchiveEventLookupTests(unittest.TestCase):
         self.assertEqual(arch_paths.get_users_file(), root / "user" / "users.json")
         self.assertEqual(arch_paths.get_legacy_runtime_users_file(), root / "Data" / "User" / "users.json")
 
+    def test_local_login_allows_wsl_host_gateway_only(self) -> None:
+        with patch.object(server, "_iter_wsl_host_gateway_ips", return_value={"172.19.80.1"}):
+            self.assertTrue(server._is_local_client_host("127.0.0.1"))
+            self.assertTrue(server._is_local_client_host("::1"))
+            self.assertTrue(server._is_local_client_host("localhost"))
+            self.assertTrue(server._is_local_client_host("172.19.80.1"))
+            self.assertFalse(server._is_local_client_host("172.19.80.2"))
+            self.assertFalse(server._is_local_client_host("192.168.1.20"))
+
     def test_ai_client_create_chat_completion_with_retry_injects_stream_true(self) -> None:
         client = ai_client.LLMClient(api_key="test", base_url="https://example.com", model="deepseek-v4-flash")
 

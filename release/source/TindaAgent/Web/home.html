@@ -9,10 +9,10 @@
   <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <style>
     :root {
-      --bg: #fff5f9;
-      --surface: #ffffff;
-      --surface-2: #fef0f5;
-      --border: #fcd5e5;
+      --bg: #ffeaf2;
+      --surface: rgba(255, 242, 248, 0.74);
+      --surface-2: rgba(255, 234, 243, 0.68);
+      --border: #f6c9da;
       --border-strong: #f9a8c9;
       --text: #3d1f2f;
       --text-dim: #9b5f78;
@@ -21,8 +21,14 @@
       --accent-2: #ff9fd3;
       --accent-deep: #c2185b;
       --lavender: #a78bfa;
-      --gradient: #ff6eb4;
-      --gradient-lavender: #c084fc;
+      --accent-fill: #ff6eb4;
+      --lavender-fill: #c084fc;
+      --ease-out-terminal: cubic-bezier(0.4, 0, 0.2, 1);
+      --ios-glass: rgba(255, 238, 246, 0.74);
+      --ios-glass-strong: rgba(255, 245, 250, 0.82);
+      --ios-border: rgba(255, 255, 255, 0.82);
+      --ios-shadow: 0 18px 44px rgba(120, 55, 82, 0.11), 0 2px 8px rgba(120, 55, 82, 0.05);
+      --ios-pressed: inset 7px 7px 16px rgba(182, 104, 136, 0.12), inset -7px -7px 16px rgba(255, 255, 255, 0.82);
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -46,9 +52,47 @@
       from { opacity: 0; transform: translateY(10px) scale(0.985); }
       to   { opacity: 1; transform: translateY(0) scale(1); }
     }
+    @keyframes homeCardEnter {
+      0% {
+        opacity: 0;
+        transform: translateY(54px) scale(0.94);
+      }
+      58% {
+        opacity: 1;
+        transform: translateY(-6px) scale(1.012);
+      }
+      100% {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+      }
+    }
+    @keyframes homeItemReveal {
+      0% {
+        opacity: 0;
+        translate: 0 -14px;
+      }
+      100% {
+        opacity: 1;
+        translate: 0 0;
+      }
+    }
+    @keyframes homeItemRevealMuted {
+      0% {
+        opacity: 0;
+        translate: 0 -14px;
+      }
+      100% {
+        opacity: 0.55;
+        translate: 0 0;
+      }
+    }
 
-    body { display: flex; flex-direction: column; position: relative;
-           animation: pageIn 0.42s cubic-bezier(0.4, 0, 0.2, 1) both; }
+    body {
+      display: flex;
+      flex-direction: column;
+      position: relative;
+      animation: pageIn 0.42s cubic-bezier(0.4, 0, 0.2, 1) both;
+    }
 
     /* ── 浮动装饰 ── */
     .deco {
@@ -89,7 +133,7 @@
 
     .brand-logo {
       width: 34px; height: 34px; border-radius: 50%;
-      background: var(--gradient);
+      background: var(--accent-fill);
       display: flex; align-items: center; justify-content: center;
       box-shadow: 0 4px 16px rgba(255,110,180,0.38);
       animation: wiggle 3.5s ease-in-out infinite; flex-shrink: 0;
@@ -109,7 +153,7 @@
     }
 
     .brand-name {
-      background: var(--gradient);
+      background: var(--accent-fill);
       -webkit-background-clip: text; background-clip: text;
       -webkit-text-fill-color: transparent;
     }
@@ -166,11 +210,34 @@
       display: flex; flex-direction: column;
       align-items: center; gap: 16px;
       text-align: center;
-      animation: heroFadeIn 0.7s cubic-bezier(0.34,1.3,0.64,1) forwards;
+      opacity: 0;
+      transform-origin: center bottom;
+      animation: homeCardEnter 0.82s cubic-bezier(0.16, 1.12, 0.3, 1) 0.08s both;
     }
-    @keyframes heroFadeIn {
-      from { opacity: 0; transform: translateY(20px) scale(0.96); }
-      to   { opacity: 1; transform: translateY(0) scale(1); }
+    .hero > * {
+      opacity: 0;
+      translate: 0 -14px;
+      animation: homeItemReveal 0.42s cubic-bezier(0.16, 1, 0.3, 1) both;
+    }
+    .hero .avatar-wrap { animation-delay: 0.66s; }
+    .hero .hero-title { animation-delay: 0.78s; }
+    .hero .sparkle-row {
+      animation-name: homeItemRevealMuted;
+      animation-delay: 0.84s;
+    }
+    .hero .hero-subtitle { animation-delay: 0.92s; }
+    .hero .tags { animation-delay: 1.02s; }
+    .hero .btn-chat { animation-delay: 1.14s; }
+    .hero .btn-admin { animation-delay: 1.22s; }
+    .hero .btn-admin:not(.show) {
+      animation: none;
+      opacity: 0;
+      translate: 0 -14px;
+    }
+    .hero .btn-chat.disabled {
+      animation: none;
+      opacity: 0.55;
+      translate: 0 0;
     }
 
     /* ── Avatar ── */
@@ -183,7 +250,7 @@
 
     .avatar-circle {
       width: 96px; height: 96px; border-radius: 50%;
-      background: var(--gradient);
+      background: var(--accent-fill);
       display: flex; align-items: center; justify-content: center;
       box-shadow: 0 12px 40px rgba(255,110,180,0.32);
       animation: floatAvatar 3.5s ease-in-out infinite;
@@ -205,7 +272,7 @@
     .avatar-badge {
       position: absolute; bottom: 2px; right: 2px;
       width: 22px; height: 22px; border-radius: 50%;
-      background: var(--gradient-lavender);
+      background: var(--lavender-fill);
       border: 2.5px solid var(--bg);
       display: flex; align-items: center; justify-content: center;
     }
@@ -222,7 +289,7 @@
     /* ── Title ── */
     .hero-title {
       font-size: 28px; font-weight: 800;
-      background: var(--gradient);
+      background: var(--accent-fill);
       -webkit-background-clip: text; background-clip: text;
       -webkit-text-fill-color: transparent;
       letter-spacing: 0.5px;
@@ -250,19 +317,24 @@
 
     /* ── Feature tags ── */
     .tags {
-      display: flex; flex-wrap: wrap; gap: 8px;
-      justify-content: center;
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+      width: min(100%, 456px);
     }
 
     .tag {
       display: inline-flex;
       align-items: center;
+      justify-content: center;
       gap: 6px;
       background: var(--surface);
       border: 1.5px solid var(--border);
       color: var(--text-dim);
-      padding: 5px 14px; border-radius: 999px;
+      min-width: 0;
+      padding: 5px 10px; border-radius: 999px;
       font-size: 12px; font-weight: 600;
+      white-space: nowrap;
       transition: all 0.2s cubic-bezier(0.34,1.56,0.64,1);
     }
     .tag:hover {
@@ -291,7 +363,7 @@
       gap: 10px;
       width: 280px;
       padding: 14px 32px;
-      background: var(--gradient);
+      background: var(--accent-fill);
       color: #fff; border: none;
       border-radius: 999px;
       font-family: inherit; font-size: 16px; font-weight: 700;
@@ -357,7 +429,7 @@
       display: flex; align-items: center; justify-content: center;
       padding: 20px;
       opacity: 0; pointer-events: none;
-      transition: opacity 0.25s ease;
+      transition: opacity 0.34s var(--ease-out-terminal), backdrop-filter 0.34s var(--ease-out-terminal);
     }
     .modal-overlay.open {
       opacity: 1; pointer-events: auto;
@@ -373,13 +445,17 @@
       box-shadow: 0 20px 60px rgba(255,110,180,0.18), 0 4px 20px rgba(0,0,0,0.06);
       opacity: 0;
       transform: scale(0.88) translateY(16px);
-      transition: opacity 0.22s ease, transform 0.36s cubic-bezier(0.16, 1, 0.3, 1);
+      transition: opacity 0.3s ease, transform 0.42s var(--ease-out-terminal);
       display: flex; flex-direction: column; gap: 20px;
       position: relative;
     }
     .modal-overlay.open .modal-card {
       opacity: 1;
       transform: scale(1) translateY(0);
+    }
+    .modal-overlay.closing .modal-card {
+      opacity: 0;
+      transform: scale(0.88) translateY(16px);
     }
 
     .modal-close {
@@ -412,7 +488,7 @@
 
     .modal-avatar {
       width: 72px; height: 72px; border-radius: 50%;
-      background: var(--gradient);
+      background: var(--accent-fill);
       display: flex; align-items: center; justify-content: center;
       box-shadow: 0 8px 28px rgba(255,110,180,0.28);
     }
@@ -428,7 +504,7 @@
 
     .modal-username {
       font-size: 17px; font-weight: 700;
-      background: var(--gradient);
+      background: var(--accent-fill);
       -webkit-background-clip: text; background-clip: text;
       -webkit-text-fill-color: transparent;
     }
@@ -459,6 +535,11 @@
     .modal-overlay.open .info-row:nth-of-type(2) { transition-delay: 0.08s; }
     .modal-overlay.open .info-row:nth-of-type(3) { transition-delay: 0.12s; }
     .modal-overlay.open .info-row:nth-of-type(4) { transition-delay: 0.16s; }
+    .modal-overlay.closing .info-row {
+      opacity: 0;
+      transform: translateY(8px);
+      transition-delay: 0s !important;
+    }
     .info-row:hover {
       border-color: var(--accent-2);
       background: rgba(255,255,255,0.82);
@@ -502,6 +583,11 @@
       transition: opacity 0.28s ease 0.2s, transform 0.28s cubic-bezier(0.16, 1, 0.3, 1) 0.2s;
     }
     .modal-overlay.open .switch-row { opacity: 1; transform: translateY(0); }
+    .modal-overlay.closing .switch-row {
+      opacity: 0;
+      transform: translateY(8px);
+      transition-delay: 0s;
+    }
     .switch-row select {
       width: 100%;
       border: 1.5px solid var(--border);
@@ -526,7 +612,7 @@
       font-size: 12px;
       font-weight: 700;
       color: #fff;
-      background: var(--gradient);
+      background: var(--accent-fill);
       cursor: pointer;
       font-family: inherit;
       white-space: nowrap;
@@ -705,7 +791,7 @@
       font-size: 11px;
       font-weight: 800;
       color: #fff;
-      background: var(--gradient);
+      background: var(--accent-fill);
       cursor: pointer;
       font-family: inherit;
       transition: opacity 0.18s ease;
@@ -729,6 +815,144 @@
       color: var(--text-dim);
       font-size: 12px;
       background: var(--surface-2);
+    }
+
+    body::before,
+    body::after {
+      content: "";
+      position: fixed;
+      border-radius: 999px;
+      pointer-events: none;
+      filter: blur(52px);
+      opacity: 0.72;
+      z-index: 0;
+    }
+    body::before {
+      width: 260px;
+      height: 260px;
+      left: 10%;
+      top: 16%;
+      background: rgba(255, 168, 204, 0.28);
+    }
+    body::after {
+      width: 230px;
+      height: 230px;
+      right: 9%;
+      bottom: 14%;
+      background: rgba(255, 198, 219, 0.34);
+    }
+    header,
+    .hero,
+    .modal-card,
+    .version-current,
+    .version-section,
+    .version-item,
+    .version-empty,
+    .login-tip {
+      background: var(--ios-glass);
+      border-color: var(--ios-border);
+      box-shadow: var(--ios-shadow), inset 1px 1px 0 rgba(255,255,255,0.78), inset -1px -1px 0 rgba(255,110,180,0.08);
+      backdrop-filter: blur(24px) saturate(1.18);
+      -webkit-backdrop-filter: blur(24px) saturate(1.18);
+    }
+    .hero {
+      width: min(92vw, 520px);
+      padding: 34px 34px 30px;
+      border: 1px solid var(--ios-border);
+      border-radius: 34px;
+    }
+    .tag,
+    .info-row,
+    .switch-row,
+    .switch-row select {
+      background: var(--ios-glass-strong);
+      border-color: var(--ios-border);
+      box-shadow: inset 1px 1px 0 rgba(255,255,255,0.72), 0 8px 20px rgba(61,31,47,0.06);
+      backdrop-filter: blur(18px) saturate(1.12);
+      -webkit-backdrop-filter: blur(18px) saturate(1.12);
+    }
+    .switch-row {
+      border: 1px solid var(--ios-border);
+      border-radius: 14px;
+      padding: 7px;
+    }
+    .switch-row select {
+      background: transparent;
+      border-color: transparent;
+      box-shadow: none;
+    }
+    .brand-logo,
+    .avatar-circle,
+    .modal-avatar,
+    .avatar-badge {
+      box-shadow: 9px 9px 22px rgba(182,104,136,0.18), -9px -9px 22px rgba(255,255,255,0.72), inset 1px 1px 0 rgba(255,255,255,0.42);
+    }
+    .btn-chat,
+    .btn-admin,
+    .modal-close,
+    .switch-btn,
+    .version-btn,
+    .version-badge-btn {
+      overflow: hidden;
+      border: 1px solid var(--ios-border);
+      box-shadow: var(--ios-shadow), inset 1px 1px 0 rgba(255,255,255,0.78), inset -1px -1px 0 rgba(255,110,180,0.10);
+      backdrop-filter: blur(22px) saturate(1.16);
+      -webkit-backdrop-filter: blur(22px) saturate(1.16);
+      transition: transform 0.22s var(--ease-out-terminal), box-shadow 0.22s ease, border-color 0.22s ease, background 0.22s ease, color 0.22s ease, opacity 0.18s ease;
+    }
+    .btn-chat,
+    .switch-btn,
+    .version-btn:not(.secondary) {
+      background: rgba(255, 110, 180, 0.86);
+      color: #fff;
+    }
+    .btn-admin,
+    .modal-close,
+    .version-badge-btn,
+    .version-btn.secondary {
+      background: var(--ios-glass-strong);
+      color: var(--text-dim);
+    }
+    .btn-chat:hover,
+    .btn-admin:hover,
+    .switch-btn:hover,
+    .version-btn:hover,
+    .version-badge-btn:hover {
+      border-color: rgba(255, 255, 255, 0.92);
+      transform: translateY(-3px);
+      box-shadow: 0 20px 48px rgba(61,31,47,0.14), inset 1px 1px 0 rgba(255,255,255,0.9), inset -1px -1px 0 rgba(255,110,180,0.12);
+    }
+    .modal-close:hover {
+      border-color: rgba(255, 255, 255, 0.92);
+      transform: rotate(90deg) scale(1.08);
+      box-shadow: 0 16px 36px rgba(61,31,47,0.12), inset 1px 1px 0 rgba(255,255,255,0.9);
+    }
+    .btn-chat:active,
+    .btn-admin:active,
+    .switch-btn:active,
+    .version-btn:active,
+    .version-badge-btn:active {
+      transform: translateY(0) scale(0.98);
+      box-shadow: var(--ios-pressed);
+    }
+    .btn-chat.disabled,
+    .switch-btn:disabled,
+    .version-btn:disabled {
+      opacity: 0.56;
+      cursor: not-allowed;
+      transform: none;
+      box-shadow: none;
+    }
+    @media (max-width: 640px) {
+      .hero {
+        width: min(100%, 360px);
+        padding: 28px 18px 24px;
+        border-radius: 30px;
+      }
+      .tags {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        width: min(100%, 260px);
+      }
     }
 
     @media (max-width: 640px) {
@@ -929,7 +1153,53 @@
   const USER_ADMIN_PERM = 511;
   let authState = { logged_in: false, user: null };
   let versionModalBusy = false;
+  const modalClosing = { account: false, version: false };
   const AUTH_TOKEN_KEY = "ta_auth_token";
+
+  function waitForTransition(node, { property = "opacity", timeout = 420 } = {}) {
+    return new Promise((resolve) => {
+      if (!node) {
+        resolve();
+        return;
+      }
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        node.removeEventListener("transitionend", onEnd);
+        clearTimeout(timer);
+        resolve();
+      };
+      const onEnd = (event) => {
+        if (event.target !== node) return;
+        if (property && event.propertyName !== property) return;
+        finish();
+      };
+      const timer = setTimeout(finish, timeout);
+      node.addEventListener("transitionend", onEnd);
+    });
+  }
+
+  function openModalNode(node, key) {
+    if (!node) return;
+    if (key) modalClosing[key] = false;
+    node.classList.remove("closing");
+    node.classList.add("open");
+    node.setAttribute("aria-hidden", "false");
+  }
+
+  async function closeModalNode(node, key, { timeout = 460 } = {}) {
+    if (!node) return;
+    if (!node.classList.contains("open") && !node.classList.contains("closing")) return;
+    if (key && modalClosing[key]) return;
+    if (key) modalClosing[key] = true;
+    node.classList.add("closing");
+    node.classList.remove("open");
+    node.setAttribute("aria-hidden", "true");
+    await waitForTransition(node, { property: "opacity", timeout });
+    node.classList.remove("closing");
+    if (key) modalClosing[key] = false;
+  }
 
   function normalizeVersion(v) {
     const raw = String(v || "").trim();
@@ -1293,7 +1563,7 @@
     if (ui.loginTip) ui.loginTip.style.display = loggedIn ? "none" : "block";
     if (ui.modalOverlay) {
       if (!loggedIn) {
-        ui.modalOverlay.classList.add("open");
+        openModalNode(ui.modalOverlay, "account");
         ui.modalOverlay.classList.add("login-required");
       } else {
         ui.modalOverlay.classList.remove("login-required");
@@ -1413,7 +1683,7 @@
       updateAuthUI();
       await loadProfile();
       await loadUsersAndSelection();
-      if (ui.modalOverlay) ui.modalOverlay.classList.remove("open");
+      if (ui.modalOverlay) void closeModalNode(ui.modalOverlay, "account");
       setAuthMessage("登录成功");
     } catch (e) {
       console.error("local login failed:", e);
@@ -1426,12 +1696,12 @@
   }
 
   function openModal() {
-    document.getElementById("modalOverlay").classList.add("open");
+    openModalNode(document.getElementById("modalOverlay"), "account");
   }
 
   function closeModal() {
     if (!authState.logged_in) return;
-    document.getElementById("modalOverlay").classList.remove("open");
+    closeModalNode(document.getElementById("modalOverlay"), "account");
   }
 
   function closeModalOnBackdrop(e) {
@@ -1440,14 +1710,14 @@
 
   function openVersionModal() {
     if (!ui.versionModalOverlay) return;
-    ui.versionModalOverlay.classList.add("open");
+    openModalNode(ui.versionModalOverlay, "version");
     setVersionModalMessage("");
     loadVersionModalData();
   }
 
   function closeVersionModal() {
     if (!ui.versionModalOverlay) return;
-    ui.versionModalOverlay.classList.remove("open");
+    closeModalNode(ui.versionModalOverlay, "version");
   }
 
   function closeVersionModalOnBackdrop(e) {

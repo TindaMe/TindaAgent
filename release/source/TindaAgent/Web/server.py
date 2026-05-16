@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+import ipaddress
 import threading
 import time
 import uuid
@@ -1185,18 +1186,57 @@ def _resolve_user_from_token_header(request: Request) -> userdata.UserManager | 
     return user
 
 
-def _is_loopback_request(request: Request) -> bool:
-    client_host = ""
+def _iter_wsl_host_gateway_ips() -> set[str]:
+    ips: set[str] = set()
+    try:
+        text = Path("/etc/resolv.conf").read_text(encoding="utf-8", errors="ignore")
+        for line in text.splitlines():
+            parts = line.strip().split()
+            if len(parts) >= 2 and parts[0] == "nameserver":
+                ips.add(parts[1])
+    except Exception:
+        pass
+    try:
+        route_text = Path("/proc/net/route").read_text(encoding="utf-8", errors="ignore")
+        for line in route_text.splitlines()[1:]:
+            cols = line.split()
+            if len(cols) < 3 or cols[1] != "00000000":
+                continue
+            raw_gateway = int(cols[2], 16).to_bytes(4, "little")
+            ips.add(str(ipaddress.IPv4Address(raw_gateway)))
+    except Exception:
+        pass
+    return ips
+
+
+def _is_local_client_host(client_host: str) -> bool:
+    host = str(client_host or "").strip().strip("[]").lower()
+    if not host:
+        return False
+    if host == "localhost":
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    if ip.is_loopback:
+        return True
+    if ip.version == 4 and str(ip) in _iter_wsl_host_gateway_ips():
+        return True
+    return False
+
+
+def _is_local_login_request(request: Request) -> bool:
     try:
         client_host = str(request.client.host if request.client else "")
     except Exception:
         client_host = ""
-    return client_host in {"127.0.0.1", "::1", "localhost"} or client_host.startswith("127.")
+    return _is_local_client_host(client_host)
 
 
 def _require_local_login_request(request: Request) -> None:
-    if not _is_loopback_request(request):
-        raise HTTPException(status_code=403, detail="local login is only allowed from loopback")
+    if not _is_local_login_request(request):
+        raise HTTPException(status_code=403, detail="local login is only allowed from this machine")
 
 
 @app.middleware("http")

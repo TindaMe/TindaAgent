@@ -27,6 +27,7 @@
       --gradient: #ff6eb4;
       --gradient-lavender: #c084fc;
       --gradient-soft: rgba(255, 110, 180, 0.08);
+      --ease-out-terminal: cubic-bezier(0.4, 0, 0.2, 1);
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -62,12 +63,73 @@
       from { opacity: 0; transform: translateY(12px) scale(0.96); }
       to   { opacity: 1; transform: translateY(0) scale(1); }
     }
+    @keyframes permBlockOut {
+      to { opacity: 0; transform: translateY(-12px) scale(0.98); filter: blur(3px); }
+    }
+    @keyframes permItemOut {
+      to { opacity: 0; transform: translateY(-14px) scale(0.97); filter: blur(3px); }
+    }
+    @keyframes rowLeave {
+      to { opacity: 0; transform: translateX(22px) scale(0.97); filter: blur(4px); }
+    }
+    @keyframes pageItemLeave {
+      to { opacity: 0; transform: translateY(-18px) scale(0.985); filter: blur(4px); }
+    }
+    @keyframes userListStretch {
+      0% {
+        opacity: 0.72;
+        transform: translateY(-10px) scaleY(0.94);
+      }
+      58% {
+        opacity: 1;
+        transform: translateY(1px) scaleY(1.018);
+      }
+      100% {
+        opacity: 1;
+        transform: translateY(0) scaleY(1);
+      }
+    }
+    @keyframes userTableSurfaceStretch {
+      0% {
+        opacity: 0;
+        transform: translateY(-8px) scaleY(0.88);
+      }
+      64% {
+        opacity: 1;
+        transform: translateY(0) scaleY(1.018);
+      }
+      100% {
+        opacity: 1;
+        transform: translateY(0) scaleY(1);
+      }
+    }
+    @keyframes userRowEnter {
+      0% {
+        opacity: 0;
+        transform: translateY(-12px) scale(0.992);
+      }
+      62% {
+        opacity: 1;
+        transform: translateY(1px) scale(1.001);
+      }
+      100% {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+      }
+    }
 
     body {
       display: flex;
       flex-direction: column;
       position: relative;
       animation: pageIn 0.42s cubic-bezier(0.4, 0, 0.2, 1) both;
+    }
+    body.page-leaving {
+      pointer-events: none;
+    }
+    body.page-leaving .page-exit-item {
+      animation: pageItemLeave 0.26s var(--ease-out-terminal) both;
+      animation-delay: var(--page-leave-delay, 0s);
     }
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after {
@@ -232,6 +294,18 @@
     .card:nth-child(1) { animation-delay: 0.04s; }
     .card:nth-child(2) { animation-delay: 0.10s; }
     .card:nth-child(3) { animation-delay: 0.16s; }
+    .users-card {
+      transform-origin: top center;
+    }
+    .users-card.list-ready {
+      animation: none;
+      opacity: 1;
+      transform: none;
+    }
+    .users-card.list-animating {
+      animation: userListStretch 0.52s cubic-bezier(0.16, 1, 0.3, 1) both;
+      will-change: transform, opacity;
+    }
 
     .card h3 {
       font-size: 15px;
@@ -360,6 +434,11 @@
       border-radius: 14px;
       background: #fff;
       box-shadow: inset 0 0 0 1px rgba(252, 213, 229, 0.4);
+      transform-origin: top center;
+    }
+    .users-card.list-animating .table-wrap {
+      animation: userTableSurfaceStretch 0.44s cubic-bezier(0.16, 1, 0.3, 1) both;
+      will-change: transform, opacity;
     }
     .table-wrap::-webkit-scrollbar { height: 9px; width: 9px; }
     .table-wrap::-webkit-scrollbar-track { background: var(--surface-2); }
@@ -396,10 +475,21 @@
     }
     th:first-child { border-top-left-radius: 12px; }
     th:last-child  { border-top-right-radius: 12px; }
-    tbody tr { transition: background 0.18s ease; }
     tbody tr {
       transition: background 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease;
       animation: cardIn 0.24s cubic-bezier(0.34,1.56,0.64,1) both;
+    }
+    .users-card tbody tr.row-entering > td {
+      opacity: 0;
+      transform-origin: top center;
+      animation: userRowEnter 0.34s cubic-bezier(0.16,1.08,0.3,1) both;
+      will-change: transform, opacity;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .users-card tbody tr.row-entering > td {
+        opacity: 1 !important;
+        transform: none !important;
+      }
     }
     tbody tr:hover {
       background: rgba(254, 240, 245, 0.6);
@@ -484,22 +574,47 @@
     .notice.show { opacity: 1; transform: translateY(0) scale(1); }
 
     /* ── Modal ── */
-    .perm-modal-mask {
+    .perm-modal-mask,
+    .confirm-modal-mask {
       position: fixed;
       inset: 0;
       background: rgba(61,31,47,0.32);
-      backdrop-filter: blur(8px);
-      -webkit-backdrop-filter: blur(8px);
-      display: none;
+      backdrop-filter: blur(0);
+      -webkit-backdrop-filter: blur(0);
+      display: flex;
       align-items: center;
       justify-content: center;
       z-index: 90;
       padding: 18px;
       opacity: 0;
-      transition: opacity 0.18s ease;
+      visibility: hidden;
+      pointer-events: none;
+      transition:
+        opacity 0.34s var(--ease-out-terminal),
+        backdrop-filter 0.34s var(--ease-out-terminal),
+        visibility 0s linear 0.56s;
     }
-    .perm-modal-mask.show { display: flex; opacity: 1; }
-    .perm-modal {
+    .perm-modal-mask.show,
+    .confirm-modal-mask.show,
+    .perm-modal-mask.closing,
+    .confirm-modal-mask.closing {
+      opacity: 1;
+      visibility: visible;
+      pointer-events: auto;
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      transition-delay: 0s;
+    }
+    .perm-modal-mask.closing,
+    .confirm-modal-mask.closing {
+      opacity: 0;
+      pointer-events: none;
+      backdrop-filter: blur(0);
+      -webkit-backdrop-filter: blur(0);
+    }
+    .confirm-modal-mask { z-index: 100; }
+    .perm-modal,
+    .confirm-modal {
       width: 100%;
       max-width: 580px;
       background: #fff;
@@ -507,8 +622,40 @@
       border-radius: 20px;
       padding: 18px;
       box-shadow: 0 24px 60px rgba(61,31,47,0.22);
-      animation: modalIn 0.28s cubic-bezier(0.34,1.56,0.64,1);
       transform-origin: center;
+      opacity: 0;
+      transform: translateY(18px) scale(0.94);
+      transition:
+        opacity 0.22s ease,
+        transform 0.32s cubic-bezier(0.16,1.18,0.3,1);
+      will-change: transform, opacity;
+    }
+    .perm-modal-mask.show .perm-modal,
+    .confirm-modal-mask.show .confirm-modal {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+    .perm-modal-mask.closing .perm-modal {
+      opacity: 0;
+      transform: translateY(-10px) scale(0.98);
+      transition:
+        opacity 0.16s ease 0.34s,
+        transform 0.5s var(--ease-out-terminal);
+    }
+    .confirm-modal-mask.closing .confirm-modal {
+      opacity: 0;
+      transform: translateY(-10px) scale(0.98);
+      transition:
+        opacity 0.24s ease,
+        transform 0.34s var(--ease-out-terminal);
+    }
+    .confirm-modal { max-width: 440px; }
+    .confirm-message {
+      margin: 10px 0 0;
+      color: var(--text-dim);
+      font-size: 13px;
+      line-height: 1.55;
+      word-break: break-word;
     }
     .perm-head {
       display: flex;
@@ -567,6 +714,23 @@
       color: var(--text-dim);
       transition: all 0.18s ease;
       animation: cardIn 0.22s cubic-bezier(0.34,1.56,0.64,1) both;
+      animation-delay: var(--enter-delay, 0s);
+    }
+    .perm-modal-mask.closing .perm-head {
+      animation: permBlockOut 0.22s var(--ease-out-terminal) both;
+      animation-delay: 0.28s;
+    }
+    .perm-modal-mask.closing .perm-sub {
+      animation: permBlockOut 0.22s var(--ease-out-terminal) both;
+      animation-delay: 0.23s;
+    }
+    .perm-modal-mask.closing .perm-item {
+      animation: permItemOut 0.24s var(--ease-out-terminal) both;
+      animation-delay: var(--leave-delay, 0s);
+    }
+    .perm-modal-mask.closing .perm-actions {
+      animation: permBlockOut 0.22s var(--ease-out-terminal) both;
+      animation-delay: 0s;
     }
     .perm-item:hover {
       border-color: var(--border-strong);
@@ -633,6 +797,25 @@
       padding-top: 12px;
       border-top: 1.5px dashed var(--border);
     }
+    .confirm-actions {
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+      margin-top: 16px;
+    }
+    .confirm-actions .danger {
+      background: var(--danger);
+      border-color: var(--danger-deep);
+      color: #fff;
+    }
+    .confirm-actions .danger:hover {
+      background: var(--danger-deep);
+      color: #fff;
+    }
+    tbody tr.row-leaving {
+      pointer-events: none;
+      animation: rowLeave 0.28s cubic-bezier(0.22,1,0.36,1) forwards;
+    }
     .perm-actions .btn:hover {
       transform: translateY(-1px);
     }
@@ -662,11 +845,11 @@
     <span class="badge">ADMIN</span>
   </div>
   <div class="actions">
-    <a class="top-btn" href="/" onclick="event.preventDefault(); location.href='/'">
+    <a class="top-btn" href="/" onclick="event.preventDefault(); smoothExitNavigate('/')">
       <svg viewBox="0 0 24 24"><path d="M3 11l9-8 9 8"/><path d="M5 9v11h14V9"/></svg>
       返回主页
     </a>
-    <a class="top-btn" href="/app" onclick="event.preventDefault(); location.href='/app'">
+    <a class="top-btn" href="/app" onclick="event.preventDefault(); smoothExitNavigate('/app')">
       <svg viewBox="0 0 24 24"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
       进入聊天
     </a>
@@ -705,7 +888,7 @@
     <div id="createPermPreview" class="status-line" style="margin-top:10px;">当前创建权限：NONE</div>
   </section>
 
-  <section class="card">
+  <section id="usersCard" class="card users-card">
     <h3>
       <span class="h-icon" aria-hidden="true">
         <svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
@@ -749,9 +932,21 @@
   </div>
 </div>
 
+<div id="confirmMask" class="confirm-modal-mask" aria-hidden="true">
+  <div class="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+    <div class="perm-title" id="confirmTitle">确认操作</div>
+    <div id="confirmMessage" class="confirm-message">-</div>
+    <div class="confirm-actions">
+      <button id="confirmCancelBtn" class="btn btn-sub" type="button">取消</button>
+      <button id="confirmOkBtn" class="btn danger" type="button">确认</button>
+    </div>
+  </div>
+</div>
+
 <script>
   const ui = {
     currentInfo: document.getElementById("currentInfo"),
+    usersCard: document.getElementById("usersCard"),
     tbody: document.getElementById("usersTbody"),
     createName: document.getElementById("createName"),
     createPermBtn: document.getElementById("createPermBtn"),
@@ -766,6 +961,11 @@
     permAllOffBtn: document.getElementById("permAllOffBtn"),
     permAllOnBtn: document.getElementById("permAllOnBtn"),
     permSaveBtn: document.getElementById("permSaveBtn"),
+    confirmMask: document.getElementById("confirmMask"),
+    confirmTitle: document.getElementById("confirmTitle"),
+    confirmMessage: document.getElementById("confirmMessage"),
+    confirmCancelBtn: document.getElementById("confirmCancelBtn"),
+    confirmOkBtn: document.getElementById("confirmOkBtn"),
   };
 
   let currentUid = "";
@@ -773,6 +973,9 @@
   let permItems = [];
   let createPermValue = 0;
   let noticeTimer = 0;
+  let usersRenderTimer = 0;
+  let usersListAnimTimer = 0;
+  let usersRenderSeq = 0;
   const AUTH_TOKEN_KEY = "ta_auth_token";
 
   const permModalState = {
@@ -781,6 +984,31 @@
     workingPerm: 0,
     saving: false,
   };
+  const confirmState = {
+    resolver: null,
+    closing: false,
+  };
+  let permModalClosing = false;
+  let pageLeaving = false;
+
+  function smoothExitNavigate(url) {
+    if (pageLeaving) return;
+    pageLeaving = true;
+    const targets = Array.from(document.querySelectorAll("header, main .card"))
+      .filter((node) => {
+        const rect = node.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+      })
+      .sort((a, b) => b.getBoundingClientRect().top - a.getBoundingClientRect().top);
+    targets.forEach((node, idx) => {
+      node.classList.add("page-exit-item");
+      node.style.setProperty("--page-leave-delay", `${Math.min(idx * 0.055, 0.28)}s`);
+    });
+    document.body.classList.add("page-leaving");
+    window.setTimeout(() => {
+      location.href = url;
+    }, 520);
+  }
 
   function getAuthToken() {
     const current = String(sessionStorage.getItem(AUTH_TOKEN_KEY) || "").trim();
@@ -815,6 +1043,59 @@
       ui.notice.classList.remove("show");
       noticeTimer = 0;
     }, 2400);
+  }
+
+  function waitForModalExit(node, timeout = 320) {
+    return new Promise((resolve) => {
+      if (!node) {
+        resolve();
+        return;
+      }
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        node.removeEventListener("transitionend", onEnd);
+        clearTimeout(timer);
+        resolve();
+      };
+      const onEnd = (event) => {
+        if (event.target !== node || event.propertyName !== "opacity") return;
+        finish();
+      };
+      const timer = setTimeout(finish, timeout);
+      node.addEventListener("transitionend", onEnd);
+    });
+  }
+
+  function showConfirmDialog({ title = "确认操作", message = "", okText = "确认", danger = true } = {}) {
+    if (!ui.confirmMask) return Promise.resolve(false);
+    if (confirmState.resolver) confirmState.resolver(false);
+    confirmState.closing = false;
+    ui.confirmTitle.textContent = String(title || "确认操作");
+    ui.confirmMessage.textContent = String(message || "");
+    ui.confirmOkBtn.textContent = String(okText || "确认");
+    ui.confirmOkBtn.classList.toggle("danger", Boolean(danger));
+    ui.confirmMask.setAttribute("aria-hidden", "false");
+    ui.confirmMask.classList.remove("closing");
+    ui.confirmMask.classList.add("show");
+    return new Promise((resolve) => {
+      confirmState.resolver = resolve;
+    });
+  }
+
+  async function closeConfirmDialog(result = false) {
+    if (!ui.confirmMask || confirmState.closing) return;
+    confirmState.closing = true;
+    ui.confirmMask.classList.add("closing");
+    ui.confirmMask.classList.remove("show");
+    ui.confirmMask.setAttribute("aria-hidden", "true");
+    await waitForModalExit(ui.confirmMask, 380);
+    ui.confirmMask.classList.remove("closing");
+    const resolver = confirmState.resolver;
+    confirmState.resolver = null;
+    confirmState.closing = false;
+    if (resolver) resolver(Boolean(result));
   }
 
   function esc(s) {
@@ -915,14 +1196,60 @@
 
   function renderTable() {
     const rows = Array.isArray(usersCache) ? usersCache : [];
+    usersRenderSeq += 1;
+    const seq = usersRenderSeq;
+    if (usersRenderTimer) {
+      clearTimeout(usersRenderTimer);
+      usersRenderTimer = 0;
+    }
+    ui.tbody.innerHTML = "";
+    triggerUsersListAnimation();
+
     if (!rows.length) {
-      ui.tbody.innerHTML = '<tr><td class="empty" colspan="5">暂无可管理账户</td></tr>';
+      appendUserRow('<tr><td class="empty" colspan="5">暂无可管理账户</td></tr>');
       return;
     }
-    ui.tbody.innerHTML = rows.map((row, idx) => {
-      const html = rowHtml(row);
-      return html.replace("<tr ", `<tr style="animation-delay:${Math.min(0.02 + idx * 0.03, 0.18)}s" `);
-    }).join("");
+
+    let idx = 0;
+    const interval = rows.length > 60 ? 18 : rows.length > 24 ? 26 : 38;
+    const appendNext = () => {
+      if (seq !== usersRenderSeq) return;
+      appendUserRow(rowHtml(rows[idx]));
+      idx += 1;
+      if (idx < rows.length) {
+        usersRenderTimer = window.setTimeout(appendNext, interval);
+      } else {
+        usersRenderTimer = 0;
+      }
+    };
+    appendNext();
+  }
+
+  function appendUserRow(html) {
+    if (!ui.tbody) return;
+    ui.tbody.insertAdjacentHTML("beforeend", html);
+    const rowEl = ui.tbody.lastElementChild;
+    if (!rowEl) return;
+    rowEl.classList.add("row-entering");
+    window.setTimeout(() => {
+      rowEl.classList.remove("row-entering");
+    }, 420);
+  }
+
+  function triggerUsersListAnimation() {
+    if (!ui.usersCard) return;
+    if (usersListAnimTimer) {
+      clearTimeout(usersListAnimTimer);
+      usersListAnimTimer = 0;
+    }
+    ui.usersCard.classList.remove("list-animating", "list-ready");
+    void ui.usersCard.offsetWidth;
+    ui.usersCard.classList.add("list-animating");
+    usersListAnimTimer = window.setTimeout(() => {
+      ui.usersCard?.classList.remove("list-animating");
+      ui.usersCard?.classList.add("list-ready");
+      usersListAnimTimer = 0;
+    }, 620);
   }
 
   async function loadUsers() {
@@ -944,6 +1271,9 @@
     ui.permTitle.textContent = "设置创建账户权限";
     ui.permSub.textContent = `当前权限：${permLabelText(permModalState.workingPerm)}`;
     renderPermList();
+    permModalClosing = false;
+    ui.permMask.classList.remove("closing");
+    ui.permMask.setAttribute("aria-hidden", "false");
     ui.permMask.classList.add("show");
   }
 
@@ -958,12 +1288,22 @@
     ui.permTitle.textContent = "修改账户权限";
     ui.permSub.textContent = `UID: ${uid} · 当前权限：${permLabelText(permModalState.workingPerm)}`;
     renderPermList();
+    permModalClosing = false;
+    ui.permMask.classList.remove("closing");
+    ui.permMask.setAttribute("aria-hidden", "false");
     ui.permMask.classList.add("show");
   }
 
-  function closePermModal(force = false) {
+  async function closePermModal(force = false) {
     if (permModalState.saving && !force) return;
+    if (!ui.permMask || permModalClosing) return;
+    permModalClosing = true;
+    ui.permMask.classList.add("closing");
     ui.permMask.classList.remove("show");
+    ui.permMask.setAttribute("aria-hidden", "true");
+    await new Promise((resolve) => setTimeout(resolve, 560));
+    ui.permMask.classList.remove("closing");
+    permModalClosing = false;
   }
 
   function renderPermList() {
@@ -973,8 +1313,11 @@
       const checked = (permModalState.workingPerm & bit) === bit ? "checked" : "";
       const key = String(item?.key || "");
       const label = String(item?.label || key);
+      const idx = permItems.indexOf(item);
+      const enterDelay = Math.min(0.02 + idx * 0.03, 0.18);
+      const leaveDelay = Math.min((permItems.length - 1 - idx) * 0.035, 0.28);
       return `
-        <div class="perm-item" style="animation-delay:${Math.min(0.02 + permItems.indexOf(item) * 0.03, 0.18)}s">
+        <div class="perm-item" style="--enter-delay:${enterDelay}s; --leave-delay:${leaveDelay}s">
           <label>
             <span>${esc(label)} <code>${esc(key)} (${bit})</code></span>
             <input type="checkbox" data-bit="${bit}" ${checked} />
@@ -1088,7 +1431,12 @@
   async function resetTokenRow(rowEl) {
     const uid = String(rowEl?.getAttribute("data-uid") || "").trim();
     if (!uid || uid === currentUid) return;
-    const ok = window.confirm(`确定为 ${uid} 重新生成 Token 吗？`);
+    const ok = await showConfirmDialog({
+      title: "重新生成 Token",
+      message: `确定为 ${uid} 重新生成 Token 吗？旧 Token 会立即失效。`,
+      okText: "重新生成",
+      danger: true,
+    });
     if (!ok) return;
 
     const tokenBtn = rowEl.querySelector('button[data-act="token"]');
@@ -1109,7 +1457,12 @@
   async function deleteRow(rowEl) {
     const uid = String(rowEl?.getAttribute("data-uid") || "").trim();
     if (!uid || uid === currentUid) return;
-    const ok = window.confirm(`确定删除账户 ${uid} 吗？此操作不可恢复。`);
+    const ok = await showConfirmDialog({
+      title: "删除账户",
+      message: `确定删除账户 ${uid} 吗？此操作不可恢复。`,
+      okText: "删除账户",
+      danger: true,
+    });
     if (!ok) return;
 
     const delBtn = rowEl.querySelector('button[data-act="del"]');
@@ -1118,6 +1471,8 @@
       const res = await apiFetch(`/admin/users/${encodeURIComponent(uid)}`, { method: "DELETE" });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || data?.ok === false) throw new Error(String(data?.error || `HTTP ${res.status}`));
+      rowEl.classList.add("row-leaving");
+      await new Promise((resolve) => setTimeout(resolve, 260));
       showNotice("删除成功");
       await loadUsers();
     } catch (e) {
@@ -1151,6 +1506,11 @@
     recalcModalPermFromInputs();
   });
   ui.permSaveBtn?.addEventListener("click", savePermModal);
+  ui.confirmCancelBtn?.addEventListener("click", () => closeConfirmDialog(false));
+  ui.confirmOkBtn?.addEventListener("click", () => closeConfirmDialog(true));
+  ui.confirmMask?.addEventListener("click", (e) => {
+    if (e.target === ui.confirmMask) closeConfirmDialog(false);
+  });
 
   ui.tbody?.addEventListener("click", (e) => {
     const target = e.target;
@@ -1166,7 +1526,12 @@
   });
 
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") closePermModal();
+    if (e.key !== "Escape") return;
+    if (ui.confirmMask?.classList.contains("show")) {
+      closeConfirmDialog(false);
+      return;
+    }
+    closePermModal();
   });
 
   (async () => {

@@ -27,6 +27,9 @@
       from { opacity: 0; transform: translateY(10px) scale(0.97); }
       to { opacity: 1; transform: translateY(0) scale(1); }
     }
+    @keyframes pageItemLeave {
+      to { opacity: 0; transform: translateY(-18px) scale(0.985); }
+    }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html, body {
       width: 100%; height: 100%;
@@ -39,6 +42,13 @@
       display: grid;
       grid-template-rows: auto 1fr;
       animation: pageIn 0.42s cubic-bezier(0.4, 0, 0.2, 1) both;
+    }
+    body.page-leaving {
+      pointer-events: none;
+    }
+    body.page-leaving .page-exit-item {
+      animation: pageItemLeave 0.34s cubic-bezier(0.4, 0, 0.2, 1) both;
+      animation-delay: var(--page-leave-delay, 0s);
     }
     header {
       display: flex;
@@ -239,8 +249,8 @@
       <span>日志查看</span>
     </div>
     <div class="actions">
-      <a class="btn" href="/" onclick="event.preventDefault(); location.href='/'">主页</a>
-      <a class="btn" href="/app" onclick="event.preventDefault(); location.href='/app'">聊天</a>
+      <a class="btn" href="/" onclick="event.preventDefault(); smoothExitNavigate('/')">主页</a>
+      <a class="btn" href="/app" onclick="event.preventDefault(); smoothExitNavigate('/app')">聊天</a>
       <button id="refreshFilesBtn" class="btn primary" type="button">刷新列表</button>
     </div>
   </header>
@@ -282,6 +292,31 @@
   const logTextEl = document.getElementById("logText");
   let filesCache = [];
   let activeFile = "";
+  let pageLeaving = false;
+
+  function smoothExitNavigate(url) {
+    if (pageLeaving) return;
+    pageLeaving = true;
+    const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
+    if (reduceMotion) {
+      location.href = url;
+      return;
+    }
+    const targets = Array.from(document.querySelectorAll("header, .wrap .panel"))
+      .filter((node) => {
+        const rect = node.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+      })
+      .sort((a, b) => b.getBoundingClientRect().top - a.getBoundingClientRect().top);
+    targets.forEach((node, idx) => {
+      node.classList.add("page-exit-item");
+      node.style.setProperty("--page-leave-delay", `${Math.min(idx * 0.055, 0.18)}s`);
+    });
+    document.body.classList.add("page-leaving");
+    window.setTimeout(() => {
+      location.href = url;
+    }, 480);
+  }
 
   function getAuthToken() {
     const current = String(sessionStorage.getItem(AUTH_TOKEN_KEY) || "").trim();
