@@ -22,6 +22,7 @@ python run_web.py
 - **Local user auth** — JSON-backed local accounts with token-based request isolation and permission bits
 - **Context token accounting** — Counts only content that is actually sent to the LLM request context, with DeepSeek tokenizer support
 - **Web UX** — Pink themed Web UI with smooth entry/exit motion for home, chat, logs, user management, and session panels
+- **Motion polish** — Layered glass-card animation system: HOME cards, changelog Markdown, runtime charts, chat header, input bar, overlays, terminal panel, admin/log/settings panels, and page exits use staggered direction-aware transitions
 - **Version management** — GitHub Releases integration, Ed25519 signature verification, multi-version install and switch
 - **Audit logging** — Structured event log (`total.jsonl`) with lookup by ID
 
@@ -74,6 +75,17 @@ Set these in `.env` at the project root.
 - Sessions are stored under `~/.tinda/agent/Data/Sessions`.
 - Logs are stored under `~/.tinda/agent/log`.
 - DeepSeek tokenizer files are loaded from `~/.tinda/agent/tokenizer/` when available; otherwise token counting falls back to a heuristic estimator.
+
+## Web Motion
+
+The Web UI uses a layered motion system rather than single-step fades:
+
+- HOME animates the changelog, hero card, and runtime status card as separate glass panels.
+- Changelog Markdown fades in from top to bottom, while long code blocks and tables wrap instead of causing horizontal scrolling.
+- Runtime status blocks, heatmaps, bar charts, donut charts, startup time, and system time appear in a top-down staggered sequence.
+- Chat exit closes transient UI first, including terminal, model/time/session overlays, then plays the page exit transition.
+- Settings, logs, model diagnostics, and user administration share the same theme bootstrap, dark glass palette, button alignment, and explicit transition rules.
+- Motion respects reduced-motion preferences through CSS `prefers-reduced-motion` fallbacks.
 
 ## CLI Commands
 

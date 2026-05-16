@@ -4,6 +4,18 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>用户管理 · TindaAgent</title>
+  <script>
+    /* FOUC 预防 — 必须在 CSS 解析前同步设置 data-theme */
+    (function () {
+      try {
+        var t = localStorage.getItem("tinda_theme");
+        if (t !== "dark" && t !== "light") {
+          t = (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) ? "dark" : "light";
+        }
+        document.documentElement.dataset.theme = t;
+      } catch (e) { document.documentElement.dataset.theme = "light"; }
+    })();
+  </script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -28,6 +40,76 @@
       --gradient-lavender: #c084fc;
       --gradient-soft: rgba(255, 110, 180, 0.08);
       --ease-out-terminal: cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    /* ── 深色模式：夜樱玻璃 ── */
+    [data-theme="dark"] {
+      --bg: radial-gradient(circle at 14% 8%, rgba(255, 105, 168, 0.11), transparent 32%),
+            radial-gradient(circle at 86% 12%, rgba(151, 117, 255, 0.085), transparent 34%),
+            linear-gradient(180deg, #120d13 0%, #0b090d 100%);
+      --surface: rgba(29, 21, 29, 0.88);
+      --surface-2: rgba(40, 29, 39, 0.82);
+      --surface-3: rgba(51, 37, 49, 0.78);
+      --border: rgba(255, 194, 219, 0.13);
+      --border-strong: rgba(255, 143, 190, 0.28);
+      --text: #f7edf3;
+      --text-dim: #c8aebb;
+      --text-faint: #8f7482;
+      --accent: #ff78b7;
+      --accent-2: #ffadcf;
+      --accent-deep: #ff8fc4;
+      --lavender: #a99aff;
+      --danger: #ff7777;
+      --danger-deep: #ff9a9a;
+      --gradient: linear-gradient(135deg, #ff6fae 0%, #ff98c7 100%);
+      --gradient-lavender: #a99aff;
+      --gradient-soft: rgba(255, 120, 183, 0.10);
+    }
+
+    /* 深色模式硬编码颜色覆盖 */
+    [data-theme="dark"] body { color-scheme: dark; }
+    [data-theme="dark"] header {
+      background: rgba(18, 13, 18, 0.74) !important;
+      border-bottom: 1px solid var(--border) !important;
+      box-shadow: 0 10px 32px rgba(0, 0, 0, 0.22);
+    }
+    [data-theme="dark"] tbody tr            { background: var(--surface); }
+    [data-theme="dark"] tbody tr:hover      { background: rgba(255, 120, 183, 0.075); }
+    [data-theme="dark"] tbody tr.current    { background: rgba(255, 120, 183, 0.13); }
+    [data-theme="dark"] tbody tr.current:hover { background: rgba(255, 120, 183, 0.18); }
+    [data-theme="dark"] thead { background: var(--surface-2); }
+    [data-theme="dark"] table tr { border-bottom-color: var(--border); }
+    [data-theme="dark"] .perm-item:hover    { background: var(--surface-2); border-color: var(--border-strong); }
+    [data-theme="dark"] .perm-item.checked  { background: rgba(255, 120, 183, 0.14); }
+    [data-theme="dark"] .perm-item code     { background: rgba(255, 120, 183, 0.10); color: #ffc4dc; }
+    [data-theme="dark"] input,
+    [data-theme="dark"] select,
+    [data-theme="dark"] textarea {
+      background: var(--surface);
+      color: var(--text);
+      border-color: var(--border);
+    }
+    [data-theme="dark"] input:focus,
+    [data-theme="dark"] select:focus,
+    [data-theme="dark"] textarea:focus { background: var(--surface-2); }
+    [data-theme="dark"] .modal-mask { background: rgba(5, 4, 7, 0.72); }
+    [data-theme="dark"] .notice-toast {
+      background: var(--surface-2);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+    [data-theme="dark"] .card {
+      box-shadow: 0 18px 44px rgba(0, 0, 0, 0.26), inset 0 1px 0 rgba(255, 255, 255, 0.035);
+    }
+    [data-theme="dark"] .card:hover {
+      box-shadow: 0 22px 52px rgba(0, 0, 0, 0.30), 0 0 0 1px rgba(255, 143, 190, 0.08);
+    }
+    [data-theme="dark"] .btn-main {
+      box-shadow: 0 10px 28px rgba(255, 105, 168, 0.20);
+    }
+    [data-theme="dark"] .btn-sub:hover {
+      background: var(--surface-3);
+      color: var(--accent-2);
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -191,7 +273,7 @@
       width: 34px; height: 34px;
       border-radius: 50%;
       background: var(--gradient);
-      display: flex; align-items: center; justify-content: center;
+      display: grid; place-items: center;
       box-shadow: 0 4px 16px rgba(255,110,180,0.38);
       animation: wiggle 3.5s ease-in-out infinite;
       flex-shrink: 0;
@@ -201,6 +283,7 @@
       stroke: #fff; fill: none;
       stroke-width: 2;
       stroke-linecap: round; stroke-linejoin: round;
+      display: block;
     }
     .brand-name {
       background: var(--gradient);
@@ -227,6 +310,7 @@
     .top-btn {
       display: inline-flex;
       align-items: center;
+      justify-content: center;
       gap: 6px;
       border: 1.5px solid var(--border);
       background: #fff;
@@ -236,8 +320,13 @@
       text-decoration: none;
       font-weight: 700;
       font-size: 12px;
+      line-height: 1;
       cursor: pointer;
-      transition: all 0.2s cubic-bezier(0.34,1.56,0.64,1);
+      transition: transform 0.2s cubic-bezier(0.34,1.56,0.64,1),
+                  border-color 0.2s ease,
+                  background 0.2s ease,
+                  color 0.2s ease,
+                  box-shadow 0.2s ease;
     }
     .top-btn:hover {
       border-color: var(--accent);
@@ -251,6 +340,7 @@
       stroke: currentColor; fill: none;
       stroke-width: 2;
       stroke-linecap: round; stroke-linejoin: round;
+      display: block;
     }
 
     /* ── Main ── */
@@ -320,9 +410,8 @@
       border-radius: 8px;
       background: var(--gradient-soft);
       border: 1.5px solid var(--border);
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
+      display: grid;
+      place-items: center;
       flex-shrink: 0;
     }
     .h-icon svg {
@@ -330,6 +419,7 @@
       stroke: var(--accent-deep); fill: none;
       stroke-width: 2;
       stroke-linecap: round; stroke-linejoin: round;
+      display: block;
     }
 
     .status-line {
@@ -356,7 +446,11 @@
       color: var(--text);
       background: #fff;
       outline: none;
-      transition: all 0.2s ease;
+      transition: transform 0.2s ease,
+                  border-color 0.2s ease,
+                  box-shadow 0.2s ease,
+                  background 0.2s ease,
+                  color 0.2s ease;
     }
     input::placeholder { color: var(--text-faint); }
     input:hover { border-color: var(--border-strong); }
@@ -382,10 +476,21 @@
       cursor: pointer;
       white-space: nowrap;
       letter-spacing: 0.3px;
-      transition: all 0.22s cubic-bezier(0.34,1.56,0.64,1);
+      transition: transform 0.22s cubic-bezier(0.34,1.56,0.64,1),
+                  background 0.22s ease,
+                  border-color 0.22s ease,
+                  color 0.22s ease,
+                  box-shadow 0.22s ease,
+                  opacity 0.22s ease;
       display: inline-flex;
       align-items: center;
+      justify-content: center;
       gap: 6px;
+      line-height: 1;
+    }
+    .btn svg {
+      display: block;
+      flex-shrink: 0;
     }
     .btn-main {
       color: #fff;
@@ -537,6 +642,7 @@
       padding: 7px 11px;
       font-size: 11.5px;
       border-radius: 9px;
+      min-height: 28px;
     }
     .ops .btn:hover {
       transform: translateY(-1px);
@@ -564,7 +670,8 @@
       font-weight: 600;
       opacity: 0;
       transform: translateY(10px) scale(0.96);
-      transition: all 0.22s cubic-bezier(0.34,1.56,0.64,1);
+      transition: opacity 0.22s ease,
+                  transform 0.22s cubic-bezier(0.34,1.56,0.64,1);
       pointer-events: none;
       max-width: 460px;
       line-height: 1.45;
@@ -712,7 +819,10 @@
       background: var(--surface-2);
       font-size: 12.5px;
       color: var(--text-dim);
-      transition: all 0.18s ease;
+      transition: transform 0.18s ease,
+                  border-color 0.18s ease,
+                  background 0.18s ease,
+                  color 0.18s ease;
       animation: cardIn 0.22s cubic-bezier(0.34,1.56,0.64,1) both;
       animation-delay: var(--enter-delay, 0s);
     }
@@ -771,7 +881,10 @@
       background: #fff;
       cursor: pointer;
       position: relative;
-      transition: all 0.18s ease;
+      transition: background 0.18s ease,
+                  border-color 0.18s ease,
+                  box-shadow 0.18s ease,
+                  transform 0.18s ease;
       flex-shrink: 0;
     }
     .perm-item input[type="checkbox"]:hover { border-color: var(--accent); }
@@ -1549,5 +1662,6 @@
     }
   })();
 </script>
+<script src="/theme_toggle.js"></script>
 </body>
 </html>

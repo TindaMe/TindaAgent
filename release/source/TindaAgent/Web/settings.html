@@ -4,6 +4,18 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>TindaAgent · 设置</title>
+  <script>
+    /* FOUC 预防 — 必须在 CSS 解析前同步设置 data-theme */
+    (function () {
+      try {
+        var t = localStorage.getItem("tinda_theme");
+        if (t !== "dark" && t !== "light") {
+          t = (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) ? "dark" : "light";
+        }
+        document.documentElement.dataset.theme = t;
+      } catch (e) { document.documentElement.dataset.theme = "light"; }
+    })();
+  </script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -22,6 +34,93 @@
       --accent-deep: #c2185b;
       --lavender: #a78bfa;
       --gradient: linear-gradient(90deg, #ff6eb4 0%, #ff9fd3 100%);
+    }
+
+    /* ── 深色模式：夜樱玻璃 ── */
+    [data-theme="dark"] {
+      --bg: radial-gradient(circle at 15% 8%, rgba(255, 105, 168, 0.11), transparent 32%),
+            radial-gradient(circle at 84% 10%, rgba(151, 117, 255, 0.085), transparent 34%),
+            linear-gradient(180deg, #120d13 0%, #0b090d 100%);
+      --surface: rgba(29, 21, 29, 0.88);
+      --surface-2: rgba(40, 29, 39, 0.82);
+      --border: rgba(255, 194, 219, 0.13);
+      --border-strong: rgba(255, 143, 190, 0.28);
+      --text: #f7edf3;
+      --text-dim: #c8aebb;
+      --text-faint: #8f7482;
+      --accent: #ff78b7;
+      --accent-2: #ffadcf;
+      --accent-deep: #ff8fc4;
+      --lavender: #a99aff;
+      --gradient: linear-gradient(135deg, #ff6fae 0%, #ff98c7 100%);
+    }
+
+    /* 深色模式硬编码颜色覆盖 */
+    [data-theme="dark"] body { color-scheme: dark; }
+    [data-theme="dark"] header {
+      background: rgba(18, 13, 18, 0.74) !important;
+      border-bottom: 1px solid var(--border) !important;
+      box-shadow: 0 10px 32px rgba(0, 0, 0, 0.22);
+    }
+    /* switch 拨钮 / toast 颜色覆盖 */
+    [data-theme="dark"] .switch .slider::before {
+      background: #fff4f9;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+    }
+    [data-theme="dark"] .toast {
+      background: var(--surface-2);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+    [data-theme="dark"] .card {
+      box-shadow: 0 18px 44px rgba(0, 0, 0, 0.26), inset 0 1px 0 rgba(255, 255, 255, 0.035);
+    }
+
+    /* ── 深/浅色切换按钮 ── */
+    .theme-toggle {
+      width: 32px; height: 32px;
+      border-radius: 50%;
+      background: var(--surface-2);
+      border: 1.5px solid var(--border);
+      color: var(--accent);
+      display: grid; place-items: center;
+      padding: 0;
+      line-height: 1;
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: transform 0.32s cubic-bezier(0.34, 1.56, 0.64, 1),
+                  background 0.24s ease,
+                  border-color 0.24s ease,
+                  color 0.24s ease;
+    }
+    .theme-toggle:hover {
+      transform: scale(1.08) rotate(-15deg);
+      background: rgba(255, 110, 180, 0.12);
+      border-color: var(--accent);
+    }
+    [data-theme="dark"] .theme-toggle:hover {
+      background: rgba(255, 121, 198, 0.18);
+    }
+    .theme-toggle:active { transform: scale(0.94); }
+    .theme-toggle:focus-visible {
+      outline: none;
+      box-shadow: 0 0 0 3px rgba(255, 110, 180, 0.2);
+    }
+    .theme-icon {
+      width: 17px; height: 17px;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      display: block;
+      animation: themeIconIn 0.42s cubic-bezier(0.16, 1.12, 0.3, 1);
+    }
+    [data-theme="light"] .theme-toggle .theme-moon { display: none; }
+    [data-theme="dark"]  .theme-toggle .theme-sun  { display: none; }
+    @keyframes themeIconIn {
+      from { opacity: 0; transform: scale(0.6) rotate(-90deg); }
+      to   { opacity: 1; transform: scale(1) rotate(0); }
     }
     * { box-sizing: border-box; }
     body {
@@ -81,9 +180,10 @@
       width: 30px; height: 30px;
       border-radius: 50%;
       background: var(--gradient);
-      display: flex;
-      align-items: center;
-      justify-content: center;
+      display: grid;
+      place-items: center;
+      padding: 0;
+      line-height: 1;
       animation: wiggle 3.5s ease-in-out infinite;
     }
     .brand-logo svg {
@@ -92,6 +192,7 @@
       stroke-width: 2;
       stroke-linecap: round;
       stroke-linejoin: round;
+      display: block;
     }
     @keyframes wiggle {
       0%,100% { transform: rotate(-5deg); }
@@ -114,10 +215,14 @@
       width: 34px; height: 34px;
       border-radius: 50%;
       cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      transition: all 0.22s cubic-bezier(0.34,1.56,0.64,1);
+      display: grid;
+      place-items: center;
+      padding: 0;
+      line-height: 1;
+      transition: transform 0.22s cubic-bezier(0.34,1.56,0.64,1),
+                  background 0.22s ease,
+                  border-color 0.22s ease,
+                  color 0.22s ease;
       text-decoration: none;
       flex-shrink: 0;
     }
@@ -134,6 +239,7 @@
       stroke-width: 2;
       stroke-linecap: round;
       stroke-linejoin: round;
+      display: block;
     }
 
     .wrap {
@@ -293,6 +399,7 @@
       font-weight: 700;
       color: var(--text);
       padding: 0;
+      line-height: 1;
       text-decoration: none;
       transition: color 0.15s;
     }
@@ -305,6 +412,7 @@
       stroke-width: 2;
       stroke-linecap: round;
       stroke-linejoin: round;
+      display: block;
     }
 
     .version-row {
@@ -434,6 +542,27 @@
       <div class="hint" style="font-size:11px;color:var(--text-dim);">压缩历史对话生成摘要时使用的模型</div>
     </div>
 
+    <!-- 外观 / 主题 -->
+    <div class="card">
+      <h2>外观</h2>
+      <p class="sub">浅色 / 深色模式切换。首次访问会自动检测系统偏好。</p>
+      <div class="toggle-row">
+        <div>
+          <label>深色模式</label>
+          <div class="hint">点击右侧按钮在浅色 ☀️ 和深色 🌙 之间切换。配置自动同步到本机所有标签页。</div>
+        </div>
+        <button id="themeToggle" class="theme-toggle" type="button" aria-label="切换深色模式" data-theme="light">
+          <svg class="theme-icon theme-sun" viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="12" cy="12" r="4.5"></circle>
+            <path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"></path>
+          </svg>
+          <svg class="theme-icon theme-moon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+          </svg>
+        </button>
+      </div>
+    </div>
+
     <div class="card">
       <h2>快捷按钮</h2>
       <p class="sub">点击左侧按钮直接使用，右侧开关控制是否显示在聊天 Header</p>
@@ -469,7 +598,7 @@
       <p class="sub">TindaAgent 版本信息</p>
       <div class="version-row">
         <span>版本</span>
-        <span class="ver" id="versionLabel">v1.8.2</span>
+        <span class="ver" id="versionLabel">v1.8.3</span>
       </div>
     </div>
   </div>
@@ -741,10 +870,11 @@
       try {
         const res = await apiFetch("/system/version");
         const data = await res.json();
-        const v = data?.effective_version || data?.version || "v1.8.2";
+        const v = data?.effective_version || data?.version || "v1.8.3";
         document.getElementById("versionLabel").textContent = v.startsWith("v") ? v : "v" + v;
       } catch {}
     })();
   </script>
+  <script src="/theme_toggle.js"></script>
 </body>
 </html>

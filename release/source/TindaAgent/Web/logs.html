@@ -4,6 +4,18 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>日志查看 · TindaAgent</title>
+  <script>
+    /* FOUC 预防 — 必须在 CSS 解析前同步设置 data-theme */
+    (function () {
+      try {
+        var t = localStorage.getItem("tinda_theme");
+        if (t !== "dark" && t !== "light") {
+          t = (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) ? "dark" : "light";
+        }
+        document.documentElement.dataset.theme = t;
+      } catch (e) { document.documentElement.dataset.theme = "light"; }
+    })();
+  </script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -17,7 +29,50 @@
       --text-dim: #9b5f78;
       --accent: #ff6eb4;
       --accent-2: #ff9fd3;
+      --border-strong: #f9a8c9;
       --gradient: #ff6eb4;
+    }
+
+    /* ── 深色模式：夜樱玻璃 ── */
+    [data-theme="dark"] {
+      --bg: radial-gradient(circle at 15% 8%, rgba(255, 105, 168, 0.11), transparent 32%),
+            radial-gradient(circle at 84% 10%, rgba(151, 117, 255, 0.085), transparent 34%),
+            linear-gradient(180deg, #120d13 0%, #0b090d 100%);
+      --surface: rgba(29, 21, 29, 0.88);
+      --surface-2: rgba(40, 29, 39, 0.82);
+      --border: rgba(255, 194, 219, 0.13);
+      --border-strong: rgba(255, 143, 190, 0.28);
+      --text: #f7edf3;
+      --text-dim: #c8aebb;
+      --accent: #ff78b7;
+      --accent-2: #ffadcf;
+      --gradient: linear-gradient(135deg, #ff6fae 0%, #ff98c7 100%);
+    }
+
+    /* 深色模式硬编码颜色覆盖 */
+    [data-theme="dark"] body { color-scheme: dark; }
+    [data-theme="dark"] header {
+      background: rgba(18, 13, 18, 0.74) !important;
+      border-bottom: 1px solid var(--border) !important;
+      box-shadow: 0 10px 32px rgba(0, 0, 0, 0.22);
+    }
+    [data-theme="dark"] .brand-dot {
+      box-shadow: 0 0 0 4px rgba(255, 120, 183, 0.18);
+    }
+    [data-theme="dark"] .file-item { background: var(--surface); }
+    [data-theme="dark"] .toolbar input {
+      background: var(--surface);
+      color: var(--text);
+      border-color: var(--border);
+    }
+    [data-theme="dark"] .btn.primary { color: #fff4f9; }
+    [data-theme="dark"] pre {
+      background: rgba(9, 7, 10, 0.88);
+      color: #eadde4;
+      border: 1px solid var(--border);
+    }
+    [data-theme="dark"] .panel {
+      box-shadow: 0 18px 44px rgba(0, 0, 0, 0.26), inset 0 1px 0 rgba(255, 255, 255, 0.035);
     }
     @keyframes pageIn {
       from { opacity: 0; transform: translateY(10px) scale(0.985); }
@@ -83,6 +138,10 @@
       font-family: inherit;
       cursor: pointer;
       text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      line-height: 1;
       transition: transform 0.18s ease, border-color 0.18s ease, background 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
     }
     .btn:hover {
@@ -187,6 +246,7 @@
       border-radius: 8px;
       padding: 5px 8px;
       font-size: 12px;
+      line-height: 1;
       outline: none;
       font-family: inherit;
       color: var(--text);
@@ -496,5 +556,6 @@
     await loadFiles();
   })();
 </script>
+<script src="/theme_toggle.js"></script>
 </body>
 </html>

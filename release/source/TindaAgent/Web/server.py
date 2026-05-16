@@ -281,6 +281,7 @@ _HTML_LOG_VIEW = _load_html("logs.html")
 _HTML_MODEL_DIAGNOSTICS = _load_html("model_diagnostics.html")
 _JS_CHAT_RENDERER = _load_html("chat_renderer.js")
 _JS_MARKDOWN_RENDERER = _load_html("markdown_renderer.js")
+_JS_THEME_TOGGLE = _load_html("theme_toggle.js")
 _LOG_ROOT = get_log_root()
 _CONTEXT_LOG_FILE = _LOG_ROOT / "llm_context.jsonl"
 _LOG_MAX_READ_BYTES = 2 * 1024 * 1024
@@ -320,6 +321,7 @@ def _usage_event_from_request(request: Request) -> dict[str, object] | None:
         "/favicon.ico",
         "/chat_renderer.js",
         "/markdown_renderer.js",
+        "/theme_toggle.js",
     }:
         return None
     if path.startswith(("/home/stats", "/home/changelog")):
@@ -447,6 +449,7 @@ _AUTH_OPEN_PATHS = {
     "/auth/local-login",
     "/chat_renderer.js",
     "/markdown_renderer.js",
+    "/theme_toggle.js",
 }
 
 
@@ -2276,6 +2279,12 @@ async def chat_renderer_js():
 async def markdown_renderer_js():
     from fastapi.responses import Response
     return Response(content=_JS_MARKDOWN_RENDERER, media_type="application/javascript")
+
+
+@app.get("/theme_toggle.js")
+async def theme_toggle_js():
+    from fastapi.responses import Response
+    return Response(content=_JS_THEME_TOGGLE, media_type="application/javascript")
 
 
 @app.get("/settings", response_class=HTMLResponse)
