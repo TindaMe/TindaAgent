@@ -7,6 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="/markdown_renderer.js"></script>
   <style>
     :root {
       --bg: #ffeaf2;
@@ -972,6 +973,308 @@
         scroll-behavior: auto !important;
       }
     }
+
+    /* ─────────────────────── HOME 三栏布局 ─────────────────────── */
+    main.home-grid {
+      display: grid;
+      grid-template-columns: minmax(280px, 1fr) minmax(380px, 1.4fr) minmax(320px, 1fr);
+      gap: 22px;
+      align-items: stretch;
+      padding: 22px 22px 26px;
+      max-width: 1600px;
+      margin: 0 auto;
+      width: 100%;
+      box-sizing: border-box;
+    }
+    @media (max-width: 1200px) {
+      main.home-grid { grid-template-columns: 1fr; max-width: 720px; }
+    }
+
+    /* ── 通用玻璃卡片 ── */
+    .home-card {
+      position: relative;
+      background: var(--ios-glass-strong);
+      border: 1.5px solid var(--ios-border);
+      border-radius: 28px;
+      box-shadow: var(--ios-shadow);
+      backdrop-filter: blur(28px) saturate(160%);
+      -webkit-backdrop-filter: blur(28px) saturate(160%);
+      padding: 22px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      opacity: 0;
+      animation: homeCardEnter 0.72s cubic-bezier(0.16, 1.12, 0.3, 1) both;
+    }
+    .home-card.changelog-card { animation-delay: 0.08s; }
+    .home-card.hero-card      { animation-delay: 0.16s; }
+    .home-card.stats-card     { animation-delay: 0.24s; }
+
+    .home-card .card-head {
+      display: flex; justify-content: space-between; align-items: baseline;
+      gap: 8px; padding-bottom: 4px;
+    }
+    .home-card .card-title {
+      display: inline-flex; align-items: center; gap: 8px;
+      font-weight: 700; color: var(--text); font-size: 15px;
+    }
+    .card-title-icon {
+      width: 18px; height: 18px;
+      stroke: var(--accent); fill: none;
+      stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round;
+    }
+    .home-card .card-sub {
+      font-size: 11.5px; color: var(--text-faint);
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* ── 左：Changelog ── */
+    .changelog-card .card-body {
+      flex: 1;
+      overflow-y: auto;
+      max-height: calc(100vh - 220px);
+      min-height: 360px;
+      padding-right: 8px;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(255, 110, 180, 0.35) transparent;
+      color: var(--text);
+      line-height: 1.6;
+      font-size: 13px;
+    }
+    .changelog-card .card-body::-webkit-scrollbar { width: 6px; }
+    .changelog-card .card-body::-webkit-scrollbar-thumb { background: rgba(255, 110, 180, 0.35); border-radius: 3px; }
+    .changelog-skeleton { text-align: center; color: var(--text-faint); padding: 24px; font-size: 12px; }
+
+    .changelog-body h1, .changelog-body h2, .changelog-body h3,
+    .changelog-body h4, .changelog-body h5, .changelog-body h6 {
+      font-weight: 700;
+      margin: 16px 0 8px;
+      color: var(--text);
+      letter-spacing: 0.2px;
+    }
+    .changelog-body h1 { font-size: 18px; margin-top: 6px; }
+    .changelog-body h2 {
+      font-size: 15px; color: var(--accent-deep);
+      padding-bottom: 4px;
+      border-bottom: 1px dashed var(--border);
+    }
+    .changelog-body h3 { font-size: 13.5px; color: var(--text-dim); margin-top: 12px; }
+    .changelog-body p  { margin: 6px 0; color: var(--text); }
+    .changelog-body ul { margin: 6px 0 8px; padding-left: 18px; }
+    .changelog-body li { margin: 3px 0; }
+    .changelog-body ul li::marker { color: var(--accent); }
+    .changelog-body strong { color: var(--accent-deep); }
+    .changelog-body em { color: var(--text-dim); }
+    .changelog-body code {
+      background: rgba(255, 110, 180, 0.10);
+      color: var(--accent-deep);
+      padding: 1px 6px; border-radius: 6px;
+      font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+      font-size: 11.5px;
+    }
+    .changelog-body pre {
+      background: rgba(255, 234, 245, 0.7);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 12px;
+      overflow-x: auto;
+      margin: 8px 0;
+    }
+    .changelog-body pre code { background: transparent; color: var(--text); padding: 0; }
+    .changelog-body blockquote {
+      border-left: 3px solid var(--accent);
+      background: rgba(255, 110, 180, 0.06);
+      padding: 6px 12px;
+      margin: 8px 0;
+      color: var(--text-dim);
+      border-radius: 0 8px 8px 0;
+    }
+    .changelog-body a { color: var(--accent-deep); text-decoration: underline; text-decoration-color: rgba(194, 24, 91, 0.35); }
+    .changelog-body hr { border: none; border-top: 1px dashed var(--border); margin: 12px 0; }
+    .changelog-body .md-table-wrap { overflow-x: auto; margin: 8px 0; }
+    .changelog-body table { border-collapse: collapse; width: 100%; font-size: 12px; }
+    .changelog-body th, .changelog-body td { border: 1px solid var(--border); padding: 5px 8px; }
+    .changelog-body th { background: rgba(255, 110, 180, 0.08); color: var(--text); }
+
+    /* ── 中：hero 卡片包裹 ── */
+    .home-card.hero-card {
+      justify-content: center;
+      align-items: center;
+      padding: 26px 22px;
+    }
+    .home-card.hero-card .hero {
+      width: 100%;
+      padding: 0;
+      border: none;
+      background: transparent;
+      box-shadow: none;
+    }
+
+    /* ── 右：运行状态面板 ── */
+    .stats-card {
+      gap: 14px;
+      max-height: calc(100vh - 110px);
+      overflow-y: auto;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(255, 110, 180, 0.35) transparent;
+    }
+    .stats-card::-webkit-scrollbar { width: 6px; }
+    .stats-card::-webkit-scrollbar-thumb { background: rgba(255, 110, 180, 0.35); border-radius: 3px; }
+
+    .stats-block {
+      padding: 14px 14px;
+      border-radius: 18px;
+      background: rgba(255, 255, 255, 0.5);
+      border: 1px solid var(--border);
+      box-shadow: inset 1px 1px 0 rgba(255, 255, 255, 0.6);
+    }
+    .stats-block .block-head {
+      display: flex; justify-content: space-between; align-items: center;
+      font-size: 12px; color: var(--text-dim);
+      margin-bottom: 10px;
+      gap: 8px;
+    }
+    .block-head-sub { color: var(--text-faint); font-size: 11px; font-variant-numeric: tabular-nums; }
+
+    /* 月份导航 */
+    .month-nav {
+      background: transparent;
+      border: 1px solid transparent;
+      cursor: pointer;
+      color: var(--accent);
+      font-size: 13px;
+      padding: 4px 10px;
+      border-radius: 10px;
+      transition: background 0.18s, transform 0.18s;
+    }
+    .month-nav:hover { background: rgba(255, 110, 180, 0.12); transform: scale(1.08); }
+    .month-nav:active { transform: scale(0.94); }
+    .month-select {
+      background: var(--ios-glass-strong);
+      border: 1px solid var(--ios-border);
+      border-radius: 12px;
+      padding: 4px 10px;
+      font-size: 12px;
+      color: var(--text);
+      font-family: inherit;
+      cursor: pointer;
+      box-shadow: inset 1px 1px 0 rgba(255, 255, 255, 0.7);
+    }
+
+    /* 热力图 */
+    .heatmap-weekdays {
+      display: grid;
+      grid-template-columns: repeat(7, 1fr);
+      gap: 4px;
+      font-size: 10px;
+      color: var(--text-faint);
+      margin-bottom: 6px;
+      text-align: center;
+      letter-spacing: 0.6px;
+    }
+    .heatmap-grid {
+      display: grid;
+      grid-template-columns: repeat(7, 1fr);
+      gap: 4px;
+      touch-action: pan-y;
+      user-select: none;
+    }
+    .heatmap-grid .cell {
+      aspect-ratio: 1 / 1;
+      border-radius: 6px;
+      background: #f0e6eb;
+      transition: transform 0.18s, box-shadow 0.18s;
+      position: relative;
+      cursor: default;
+    }
+    .heatmap-grid .cell:hover:not(.empty) {
+      transform: scale(1.16);
+      box-shadow: 0 0 0 2px rgba(255, 110, 180, 0.45);
+      z-index: 2;
+    }
+    .heatmap-grid .cell.lvl-0 { background: #f0e6eb; }
+    .heatmap-grid .cell.lvl-1 { background: rgba(255, 110, 180, 0.28); }
+    .heatmap-grid .cell.lvl-2 { background: rgba(255, 110, 180, 0.5); }
+    .heatmap-grid .cell.lvl-3 { background: rgba(255, 110, 180, 0.75); }
+    .heatmap-grid .cell.lvl-4 { background: var(--accent); }
+    .heatmap-grid .cell.empty {
+      background: transparent;
+      pointer-events: none;
+      box-shadow: none;
+    }
+    .heatmap-grid .cell.today {
+      box-shadow: 0 0 0 2px rgba(194, 24, 91, 0.55);
+    }
+    .heatmap-legend {
+      display: flex; gap: 4px; align-items: center; justify-content: flex-end;
+      margin-top: 10px; font-size: 10px; color: var(--text-faint);
+    }
+    .heatmap-legend .lvl { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+    .heatmap-legend .lvl-0 { background: #f0e6eb; }
+    .heatmap-legend .lvl-1 { background: rgba(255, 110, 180, 0.28); }
+    .heatmap-legend .lvl-2 { background: rgba(255, 110, 180, 0.5); }
+    .heatmap-legend .lvl-3 { background: rgba(255, 110, 180, 0.75); }
+    .heatmap-legend .lvl-4 { background: var(--accent); }
+
+    /* 24h 柱状图 */
+    .bar24-svg { width: 100%; height: 110px; display: block; }
+    .bar24-svg rect { transition: opacity 0.2s; }
+    .bar24-svg rect:hover { opacity: 1 !important; }
+
+    /* 扇形图(donut) */
+    .stats-donut {
+      display: flex; align-items: center; gap: 14px;
+      padding: 14px;
+    }
+    .donut-svg {
+      width: 78px; height: 78px;
+      flex-shrink: 0;
+    }
+    .donut-info { flex: 1; min-width: 0; }
+    .donut-title { font-size: 12px; color: var(--text-dim); margin-bottom: 2px; }
+    .donut-percent {
+      font-size: 22px; font-weight: 800; color: var(--accent-deep);
+      margin: 2px 0;
+      font-variant-numeric: tabular-nums;
+    }
+    .donut-detail {
+      font-size: 11px; color: var(--text-faint);
+      font-variant-numeric: tabular-nums;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    #diskBlock .donut-percent { color: #6d28a9; }
+
+    /* 启动 / 系统时间 */
+    .stats-meta {
+      display: flex; flex-direction: column; gap: 6px;
+      padding: 14px 16px;
+    }
+    .meta-row {
+      display: flex; justify-content: space-between; align-items: center;
+      font-size: 12px;
+      padding: 2px 0;
+    }
+    .meta-label { color: var(--text-dim); }
+    .meta-value {
+      color: var(--text);
+      font-variant-numeric: tabular-nums;
+      font-weight: 600;
+    }
+
+    /* 移动端收紧 */
+    @media (max-width: 1200px) {
+      main.home-grid { padding: 16px; gap: 16px; }
+      .changelog-card .card-body { max-height: 50vh; }
+      .stats-card { max-height: none; }
+    }
+    @media (max-width: 640px) {
+      .home-card { padding: 18px; border-radius: 24px; }
+      .heatmap-weekdays { font-size: 9px; }
+      .donut-svg { width: 64px; height: 64px; }
+      .donut-percent { font-size: 18px; }
+    }
   </style>
 </head>
 <body>
@@ -987,61 +1290,165 @@
   <span class="header-decos" aria-hidden="true"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span>
 </header>
 
-<main>
-  <div class="hero">
+<main class="home-grid">
 
-    <!-- 头像 -->
-    <div class="avatar-wrap" onclick="openModal()" title="点击查看账户">
-      <div class="avatar-circle" aria-hidden="true">
-        <svg viewBox="0 0 24 24"><path d="M9 3h6"></path><path d="M12 3v4"></path><rect x="5" y="7" width="14" height="14" rx="3"></rect><path d="M9 12h.01M15 12h.01M9 16h6"></path></svg>
+  <!-- 左侧：Changelog 卡片 -->
+  <section class="home-card changelog-card" aria-label="更新日志">
+    <header class="card-head">
+      <span class="card-title">
+        <svg class="card-title-icon" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M9 4h7l4 4v12a1 1 0 0 1-1 1H9a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z"></path>
+          <path d="M15 4v5h5"></path>
+          <path d="M12 14h4M12 17h4M12 11h2"></path>
+        </svg>
+        更新日志
+      </span>
+      <span class="card-sub" id="changelogVersion">CHANGELOG.md</span>
+    </header>
+    <div class="card-body changelog-body" id="changelogBody">
+      <div class="changelog-skeleton">加载中…</div>
+    </div>
+  </section>
+
+  <!-- 中间：保留原 hero -->
+  <section class="home-card hero-card">
+    <div class="hero">
+
+      <!-- 头像 -->
+      <div class="avatar-wrap" onclick="openModal()" title="点击查看账户">
+        <div class="avatar-circle" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M9 3h6"></path><path d="M12 3v4"></path><rect x="5" y="7" width="14" height="14" rx="3"></rect><path d="M9 12h.01M15 12h.01M9 16h6"></path></svg>
+        </div>
+        <div class="avatar-badge" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M20 21a8 8 0 0 0-16 0"></path><circle cx="12" cy="8" r="3.2"></circle></svg>
+        </div>
       </div>
-      <div class="avatar-badge" aria-hidden="true">
-        <svg viewBox="0 0 24 24"><path d="M20 21a8 8 0 0 0-16 0"></path><circle cx="12" cy="8" r="3.2"></circle></svg>
+
+      <!-- 标题 -->
+      <div class="hero-title">TindaAgent</div>
+      <div class="sparkle-row" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"></path></svg>
+        <svg viewBox="0 0 24 24"><path d="M12 4l2.2 4.9L19 10l-4.8 2.1L12 17l-2.2-4.9L5 10l4.8-2.1z"></path></svg>
+        <svg viewBox="0 0 24 24"><path d="M12 2.8v4M12 17.2v4M2.8 12h4M17.2 12h4"></path><circle cx="12" cy="12" r="3"></circle></svg>
+        <svg viewBox="0 0 24 24"><path d="M12 4l2.2 4.9L19 10l-4.8 2.1L12 17l-2.2-4.9L5 10l4.8-2.1z"></path></svg>
+        <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"></path></svg>
+      </div>
+      <div class="hero-subtitle">Tinda 开发的 AI Agent 助手<br>可对话 · 可调用工具 · 可扩展</div>
+
+      <!-- 功能标签 -->
+      <div class="tags">
+        <span class="tag"><span class="tag-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 6h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H11l-4.5 3v-3H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z"></path></svg></span>智能对话</span>
+        <span class="tag"><span class="tag-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M14.7 6.3a2.8 2.8 0 1 0-4-4l-1 1a2.8 2.8 0 0 0 0 4"></path><path d="M9.3 17.7a2.8 2.8 0 1 0 4 4l1-1a2.8 2.8 0 0 0 0-4"></path><path d="M8 12h8"></path></svg></span>工具调用</span>
+        <span class="tag"><span class="tag-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3l7 3v6c0 4.2-2.9 7.8-7 8.8-4.1-1-7-4.6-7-8.8V6z"></path><path d="M9.5 12.5l1.8 1.8 3.4-3.4"></path></svg></span>权限管理</span>
+        <span class="tag"><span class="tag-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M16 7h3a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2h-3"></path><path d="M8 17H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h3"></path><path d="M9 12h6"></path></svg></span>可扩展</span>
+      </div>
+
+      <!-- 打开聊天按钮 -->
+      <a class="btn-chat" href="/app">
+        <svg class="btn-chat-icon" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M5 6h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H11l-4.5 3v-3H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z"></path>
+        </svg>
+        打开聊天
+      </a>
+      <a id="adminBtn" class="btn-admin" href="/user-admin">
+        <svg class="btn-chat-icon" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 3l7 3v6c0 4.2-2.9 7.8-7 8.8-4.1-1-7-4.6-7-8.8V6z"></path>
+          <path d="M9.5 12.5l1.8 1.8 3.4-3.4"></path>
+        </svg>
+        用户管理
+      </a>
+      <a id="logsBtn" class="btn-admin" href="/logs">
+        <svg class="btn-chat-icon" viewBox="0 0 24 24" aria-hidden="true">
+          <rect x="4" y="4" width="16" height="16" rx="2"></rect>
+          <path d="M8 9h8M8 13h8M8 17h6"></path>
+        </svg>
+        日志查看
+      </a>
+
+    </div>
+  </section>
+
+  <!-- 右侧：运行状态面板 -->
+  <section class="home-card stats-card" aria-label="运行状态">
+    <header class="card-head">
+      <span class="card-title">
+        <svg class="card-title-icon" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4 19V5"></path>
+          <path d="M4 19h16"></path>
+          <path d="M8 14v3M12 9v8M16 12v5"></path>
+        </svg>
+        运行状态
+      </span>
+      <span class="card-sub" id="statsTotal">实时</span>
+    </header>
+
+    <!-- 1. 月度热力图 -->
+    <div class="stats-block stats-heatmap">
+      <header class="block-head">
+        <button class="month-nav" id="monthPrev" type="button" aria-label="上一月">◀</button>
+        <select class="month-select" id="monthSelect" aria-label="选择月份"></select>
+        <button class="month-nav" id="monthNext" type="button" aria-label="下一月">▶</button>
+      </header>
+      <div class="heatmap-weekdays" aria-hidden="true">
+        <span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span>
+      </div>
+      <div class="heatmap-grid" id="heatmapGrid" role="grid" aria-label="使用频率热力图"></div>
+      <div class="heatmap-legend">
+        <span>少</span>
+        <span class="lvl lvl-0" aria-hidden="true"></span>
+        <span class="lvl lvl-1" aria-hidden="true"></span>
+        <span class="lvl lvl-2" aria-hidden="true"></span>
+        <span class="lvl lvl-3" aria-hidden="true"></span>
+        <span class="lvl lvl-4" aria-hidden="true"></span>
+        <span>多</span>
       </div>
     </div>
 
-    <!-- 标题 -->
-    <div class="hero-title">TindaAgent</div>
-    <div class="sparkle-row" aria-hidden="true">
-      <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"></path></svg>
-      <svg viewBox="0 0 24 24"><path d="M12 4l2.2 4.9L19 10l-4.8 2.1L12 17l-2.2-4.9L5 10l4.8-2.1z"></path></svg>
-      <svg viewBox="0 0 24 24"><path d="M12 2.8v4M12 17.2v4M2.8 12h4M17.2 12h4"></path><circle cx="12" cy="12" r="3"></circle></svg>
-      <svg viewBox="0 0 24 24"><path d="M12 4l2.2 4.9L19 10l-4.8 2.1L12 17l-2.2-4.9L5 10l4.8-2.1z"></path></svg>
-      <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"></path></svg>
-    </div>
-    <div class="hero-subtitle">Tinda 开发的 AI Agent 助手<br>可对话 · 可调用工具 · 可扩展</div>
-
-    <!-- 功能标签 -->
-    <div class="tags">
-      <span class="tag"><span class="tag-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 6h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H11l-4.5 3v-3H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z"></path></svg></span>智能对话</span>
-      <span class="tag"><span class="tag-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M14.7 6.3a2.8 2.8 0 1 0-4-4l-1 1a2.8 2.8 0 0 0 0 4"></path><path d="M9.3 17.7a2.8 2.8 0 1 0 4 4l1-1a2.8 2.8 0 0 0 0-4"></path><path d="M8 12h8"></path></svg></span>工具调用</span>
-      <span class="tag"><span class="tag-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3l7 3v6c0 4.2-2.9 7.8-7 8.8-4.1-1-7-4.6-7-8.8V6z"></path><path d="M9.5 12.5l1.8 1.8 3.4-3.4"></path></svg></span>权限管理</span>
-      <span class="tag"><span class="tag-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M16 7h3a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2h-3"></path><path d="M8 17H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h3"></path><path d="M9 12h6"></path></svg></span>可扩展</span>
+    <!-- 2. 24h 柱状图（3h 间隔） -->
+    <div class="stats-block stats-bar24">
+      <header class="block-head">
+        <span>近 24 小时使用</span>
+        <span class="block-head-sub" id="bar24Total">--</span>
+      </header>
+      <svg class="bar24-svg" id="bar24Svg" viewBox="0 0 320 110" preserveAspectRatio="xMidYMid meet" aria-label="24 小时柱状图"></svg>
     </div>
 
-    <!-- 打开聊天按钮 -->
-    <a class="btn-chat" href="/app">
-      <svg class="btn-chat-icon" viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M5 6h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H11l-4.5 3v-3H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z"></path>
-      </svg>
-      打开聊天
-    </a>
-    <a id="adminBtn" class="btn-admin" href="/user-admin">
-      <svg class="btn-chat-icon" viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M12 3l7 3v6c0 4.2-2.9 7.8-7 8.8-4.1-1-7-4.6-7-8.8V6z"></path>
-        <path d="M9.5 12.5l1.8 1.8 3.4-3.4"></path>
-      </svg>
-      用户管理
-    </a>
-    <a id="logsBtn" class="btn-admin" href="/logs">
-      <svg class="btn-chat-icon" viewBox="0 0 24 24" aria-hidden="true">
-        <rect x="4" y="4" width="16" height="16" rx="2"></rect>
-        <path d="M8 9h8M8 13h8M8 17h6"></path>
-      </svg>
-      日志查看
-    </a>
+    <!-- 3. 内存扇形图 -->
+    <div class="stats-block stats-donut" id="memBlock">
+      <svg class="donut-svg" id="memDonut" viewBox="0 0 100 100" aria-hidden="true"></svg>
+      <div class="donut-info">
+        <div class="donut-title">内存使用</div>
+        <div class="donut-percent" id="memPercent">--%</div>
+        <div class="donut-detail" id="memDetail">-- / --</div>
+      </div>
+    </div>
 
-  </div>
+    <!-- 4. 存储扇形图 -->
+    <div class="stats-block stats-donut" id="diskBlock">
+      <svg class="donut-svg" id="diskDonut" viewBox="0 0 100 100" aria-hidden="true"></svg>
+      <div class="donut-info">
+        <div class="donut-title">存储使用</div>
+        <div class="donut-percent" id="diskPercent">--%</div>
+        <div class="donut-detail" id="diskDetail">-- / --</div>
+      </div>
+    </div>
+
+    <!-- 5+6. 启动时间 / 系统时间 -->
+    <div class="stats-block stats-meta">
+      <div class="meta-row">
+        <span class="meta-label">启动于</span>
+        <span class="meta-value" id="startedAt">--</span>
+      </div>
+      <div class="meta-row">
+        <span class="meta-label">运行</span>
+        <span class="meta-value" id="uptime">--</span>
+      </div>
+      <div class="meta-row">
+        <span class="meta-label">系统时间</span>
+        <span class="meta-value" id="systemTime">--</span>
+      </div>
+    </div>
+  </section>
 </main>
 
 <!-- 账户信息弹窗 -->
@@ -1781,6 +2188,281 @@
   syncVersionBadge();
   loadAuthStatus();
   loadUsersAndSelection();
+
+  /* ─────────────────────── Changelog 面板 ─────────────────────── */
+  const ChangelogPanel = (function () {
+    const bodyEl = document.getElementById("changelogBody");
+    const versionEl = document.getElementById("changelogVersion");
+
+    async function load() {
+      if (!bodyEl) return;
+      try {
+        const r = await fetch("/home/changelog", { cache: "no-store" });
+        const j = await r.json();
+        if (!j || !j.ok) throw new Error("changelog response not ok");
+        const md = String(j.markdown || "");
+        const renderer = window.MarkdownRenderer && window.MarkdownRenderer.render;
+        if (typeof renderer !== "function") {
+          bodyEl.innerHTML = '<div class="changelog-skeleton">渲染器未加载</div>';
+          return;
+        }
+        bodyEl.innerHTML = renderer(md);
+        // 提取首个 ## 标题作为副标题
+        const m = md.match(/^##\s+(.+)$/m);
+        if (m && versionEl) versionEl.textContent = m[1].trim();
+      } catch (e) {
+        if (bodyEl) bodyEl.innerHTML = '<div class="changelog-skeleton">加载失败，稍后重试</div>';
+      }
+    }
+    return { load };
+  })();
+
+  /* ─────────────────────── 运行状态面板 ─────────────────────── */
+  const StatsPanel = (function () {
+    let stats = null;
+    let currentMonth = "";
+    let serverEpoch = 0;     // 服务器 system_time 的 epoch ms
+    let serverStartedAt = 0; // started_at 的 epoch ms
+    let lastSyncPerf = 0;    // performance.now() 上次同步时刻
+    let pollTimer = null;
+    let clockTimer = null;
+
+    function fmtBytes(n) {
+      n = Number(n) || 0;
+      if (n < 1024) return n + " B";
+      const units = ["KB", "MB", "GB", "TB"];
+      let v = n / 1024, i = 0;
+      while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+      return v.toFixed(v < 10 ? 2 : 1) + " " + units[i];
+    }
+
+    function fmtDuration(sec) {
+      sec = Math.max(0, Math.floor(sec));
+      const d = Math.floor(sec / 86400);
+      const h = Math.floor((sec % 86400) / 3600);
+      const m = Math.floor((sec % 3600) / 60);
+      const s = sec % 60;
+      const parts = [];
+      if (d > 0) parts.push(d + "d");
+      if (d > 0 || h > 0) parts.push(h + "h");
+      if (d > 0 || h > 0 || m > 0) parts.push(m + "m");
+      parts.push(s + "s");
+      return parts.join(" ");
+    }
+
+    function pad2(n) { return String(n).padStart(2, "0"); }
+
+    function fmtLocal(date) {
+      try {
+        const d = (date instanceof Date) ? date : new Date(date);
+        return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+      } catch (e) {
+        return "--";
+      }
+    }
+
+    async function fetchStats(month) {
+      const q = month ? "?month=" + encodeURIComponent(month) : "";
+      const r = await fetch("/home/stats" + q, { cache: "no-store" });
+      const j = await r.json();
+      if (!j || !j.ok) throw new Error("stats response not ok");
+      return j;
+    }
+
+    function renderMonthSelect(months) {
+      const sel = document.getElementById("monthSelect");
+      if (!sel) return;
+      sel.innerHTML = months.map((m) => `<option value="${m}">${m}</option>`).join("");
+      sel.value = currentMonth;
+    }
+
+    function renderHeatmap(monthStr, days) {
+      const grid = document.getElementById("heatmapGrid");
+      if (!grid) return;
+      const [y, m] = monthStr.split("-").map(Number);
+      const firstDay = new Date(y, m - 1, 1).getDay(); // 0=Sun
+      const todayIso = (function () {
+        const t = new Date();
+        return `${t.getFullYear()}-${pad2(t.getMonth() + 1)}-${pad2(t.getDate())}`;
+      })();
+      const cells = [];
+      for (let i = 0; i < firstDay; i++) cells.push('<div class="cell empty"></div>');
+      days.forEach((d) => {
+        const lvl = Math.max(0, Math.min(4, Number(d.level) || 0));
+        const isToday = d.date === todayIso;
+        const cls = `cell lvl-${lvl}${isToday ? " today" : ""}`;
+        const title = `${d.date} · ${d.count || 0} 次`;
+        cells.push(`<div class="${cls}" title="${title}" role="gridcell" aria-label="${title}"></div>`);
+      });
+      grid.innerHTML = cells.join("");
+    }
+
+    function renderBar24(buckets) {
+      const svg = document.getElementById("bar24Svg");
+      const totalEl = document.getElementById("bar24Total");
+      if (!svg) return;
+      const W = 320, H = 110, padL = 8, padR = 8, padTop = 18, padBottom = 18;
+      const slotCount = buckets.length || 8;
+      const slotW = (W - padL - padR) / slotCount;
+      const barW = slotW * 0.62;
+      const gap = (slotW - barW) / 2;
+      const drawH = H - padTop - padBottom;
+      let html = "";
+      let totalCount = 0;
+      buckets.forEach((b, i) => {
+        const pct = Math.max(0, Math.min(100, Number(b.percent) || 0));
+        const count = Number(b.count) || 0;
+        totalCount += count;
+        const h = Math.max(2, (pct / 100) * drawH);
+        const x = padL + i * slotW + gap;
+        const y = padTop + (drawH - h);
+        const opacity = (0.45 + pct / 200).toFixed(2);
+        const labelY = H - 5;
+        const valueY = Math.max(padTop - 4, y - 4);
+        html += `
+          <rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barW.toFixed(1)}" height="${h.toFixed(1)}" rx="3"
+                fill="rgb(255, 110, 180)" opacity="${opacity}">
+            <title>${b.label} · ${count} 次 (${pct.toFixed(1)}%)</title>
+          </rect>
+          <text x="${(x + barW / 2).toFixed(1)}" y="${labelY}" font-size="9" fill="#d4a0b5"
+                text-anchor="middle" font-family="Nunito, sans-serif">${b.label}</text>
+          ${pct > 0 ? `<text x="${(x + barW / 2).toFixed(1)}" y="${valueY.toFixed(1)}" font-size="9"
+                fill="#9b5f78" text-anchor="middle" font-family="Nunito, sans-serif">${Math.round(pct)}%</text>` : ""}
+        `;
+      });
+      svg.innerHTML = html;
+      if (totalEl) totalEl.textContent = `共 ${totalCount} 次`;
+    }
+
+    function renderDonut(svgId, percent, color) {
+      const svg = document.getElementById(svgId);
+      if (!svg) return;
+      const r = 38;
+      const c = 2 * Math.PI * r;
+      const pct = Math.max(0, Math.min(100, Number(percent) || 0));
+      const filled = (c * pct) / 100;
+      const remain = c - filled;
+      svg.innerHTML = `
+        <circle cx="50" cy="50" r="${r}" fill="none" stroke="#f0e6eb" stroke-width="10"/>
+        <circle cx="50" cy="50" r="${r}" fill="none" stroke="${color}" stroke-width="10"
+                stroke-dasharray="${filled.toFixed(2)} ${remain.toFixed(2)}"
+                stroke-linecap="round"
+                transform="rotate(-90 50 50)"/>
+      `;
+    }
+
+    function applyStats(j) {
+      stats = j;
+      currentMonth = (j.usage && j.usage.month) || currentMonth || "";
+
+      try {
+        serverEpoch = new Date(j.system_time).getTime() || Date.now();
+      } catch (e) { serverEpoch = Date.now(); }
+      try {
+        serverStartedAt = new Date(j.started_at).getTime() || (Date.now() - (j.uptime_seconds || 0) * 1000);
+      } catch (e) { serverStartedAt = Date.now() - (j.uptime_seconds || 0) * 1000; }
+      lastSyncPerf = performance.now();
+
+      if (j.usage) {
+        renderMonthSelect(j.usage.months || []);
+        renderHeatmap(currentMonth, j.usage.days || []);
+        renderBar24(j.usage.last24h || []);
+      }
+
+      if (j.memory) {
+        const pct = Number(j.memory.percent) || 0;
+        renderDonut("memDonut", pct, "rgb(255, 110, 180)");
+        document.getElementById("memPercent").textContent = pct.toFixed(1) + "%";
+        document.getElementById("memDetail").textContent = `${fmtBytes(j.memory.used)} / ${fmtBytes(j.memory.total)}`;
+      }
+      if (j.storage) {
+        const pct = Number(j.storage.percent) || 0;
+        renderDonut("diskDonut", pct, "rgb(167, 139, 250)");
+        document.getElementById("diskPercent").textContent = pct.toFixed(1) + "%";
+        document.getElementById("diskDetail").textContent = `${fmtBytes(j.storage.used)} / ${fmtBytes(j.storage.total)}`;
+      }
+
+      const startedEl = document.getElementById("startedAt");
+      if (startedEl) startedEl.textContent = fmtLocal(new Date(serverStartedAt));
+      tickClock();
+    }
+
+    function tickClock() {
+      if (!serverEpoch || !serverStartedAt) return;
+      const elapsed = performance.now() - lastSyncPerf;
+      const nowMs = serverEpoch + elapsed;
+      const sysEl = document.getElementById("systemTime");
+      const upEl = document.getElementById("uptime");
+      if (sysEl) sysEl.textContent = fmtLocal(new Date(nowMs));
+      if (upEl) upEl.textContent = fmtDuration(Math.floor((nowMs - serverStartedAt) / 1000));
+    }
+
+    async function refresh(month) {
+      try {
+        const j = await fetchStats(month || currentMonth);
+        applyStats(j);
+      } catch (e) {
+        /* 静默失败，下次轮询再试 */
+      }
+    }
+
+    function stepMonth(delta) {
+      if (!stats || !stats.usage || !Array.isArray(stats.usage.months)) return;
+      const months = stats.usage.months;
+      const idx = months.indexOf(currentMonth);
+      if (idx < 0) return;
+      const nextIdx = Math.max(0, Math.min(months.length - 1, idx + delta));
+      const next = months[nextIdx];
+      if (next && next !== currentMonth) {
+        currentMonth = next;
+        refresh(next);
+      }
+    }
+
+    function bindEvents() {
+      const prev = document.getElementById("monthPrev");
+      const next = document.getElementById("monthNext");
+      const sel = document.getElementById("monthSelect");
+      if (prev) prev.addEventListener("click", () => stepMonth(-1));
+      if (next) next.addEventListener("click", () => stepMonth(1));
+      if (sel) sel.addEventListener("change", (e) => {
+        currentMonth = e.target.value;
+        refresh(currentMonth);
+      });
+
+      const grid = document.getElementById("heatmapGrid");
+      if (grid) {
+        let tx = null;
+        grid.addEventListener("touchstart", (e) => { tx = e.touches[0].clientX; }, { passive: true });
+        grid.addEventListener("touchend", (e) => {
+          if (tx === null) return;
+          const dx = e.changedTouches[0].clientX - tx;
+          if (Math.abs(dx) > 50) stepMonth(dx > 0 ? -1 : 1);
+          tx = null;
+        });
+        grid.addEventListener("wheel", (e) => {
+          if (Math.abs(e.deltaX) < 30) return;
+          e.preventDefault();
+          stepMonth(e.deltaX > 0 ? 1 : -1);
+        }, { passive: false });
+      }
+    }
+
+    function start() {
+      bindEvents();
+      refresh().then(() => {
+        if (clockTimer) clearInterval(clockTimer);
+        if (pollTimer) clearInterval(pollTimer);
+        clockTimer = setInterval(tickClock, 1000);
+        pollTimer = setInterval(() => refresh(currentMonth), 30000);
+      });
+    }
+
+    return { start };
+  })();
+
+  ChangelogPanel.load();
+  StatsPanel.start();
 </script>
 </body>
 </html>

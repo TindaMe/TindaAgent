@@ -436,52 +436,74 @@ class SessionStore:
                     "message_count": len(data)}
 
     def maybe_first_round_messages(self, session_id: str) -> tuple[str, str] | None:
+        """
+        提取首轮对话用于自动生成标题。
+
+        规则(v1.8.2):
+          - 找到第一条 chat user 消息(忽略 system/notice/tool_marker/terminal)
+          - 找到该 user 之后第一条 chat assistant 消息(同样忽略 tool_marker/terminal)
+          - 若有 user 但无紧随 assistant,返回 (user_text, "") 作为 fallback
+          - 完全无 user 消息时返回 None
+        """
+        def _extract_user_text(content: Any) -> str:
+            if isinstance(content, dict):
+                for sk in sorted((int(k2) for k2 in content if isinstance(k2, str) and k2.isdigit()), key=int):
+                    v = content[str(sk)]
+                    if isinstance(v, dict):
+                        text = str(v.get("user") or v.get("text") or "")
+                        if text:
+                            return text
+                return str(content.get("user") or content.get("text") or "")
+            if isinstance(content, str):
+                return content
+            return ""
+
+        def _extract_assistant_text(content: Any) -> str:
+            if isinstance(content, dict):
+                thinking_texts: list[str] = []
+                for sk in sorted((int(k2) for k2 in content if isinstance(k2, str) and k2.isdigit()), key=int):
+                    v = content[str(sk)]
+                    if not isinstance(v, dict):
+                        continue
+                    if "text" in v:
+                        return str(v["text"])
+                    if "thinking" in v:
+                        thinking_texts.append(str(v["thinking"]))
+                if thinking_texts:
+                    return thinking_texts[0]
+                return ""
+            if isinstance(content, str):
+                return content
+            return ""
+
         data = self._load_messages_raw(session_id)
-        entries = [(int(k), data[k]) for k in data if k.isdigit() and isinstance(data[k], dict)]
+        entries = [(int(k), data[k]) for k in data if isinstance(k, str) and k.isdigit() and isinstance(data[k], dict)]
         entries.sort()
-        user_msgs = []
-        asst_msgs = []
-        for _, e in entries:
-            if e.get("role") == "user":
-                c = e.get("content", {})
-                text = ""
-                if isinstance(c, dict):
-                    for sk in sorted((int(k2) for k2 in c if k2.isdigit()), key=int):
-                        v = c[str(sk)]
-                        if isinstance(v, dict):
-                            text = str(v.get("user") or v.get("text") or "")
-                            if text:
-                                break
-                    if not text:
-                        text = str(c.get("user") or c.get("text") or "")
-                elif isinstance(c, str):
-                    text = c
-                user_msgs.append(text)
-            elif e.get("role") == "assistant":
-                c = e.get("content", {})
-                if isinstance(c, dict):
-                    thinking_texts = []
-                    for sk in sorted((int(k2) for k2 in c if k2.isdigit()), key=int):
-                        v = c[str(sk)]
-                        if not isinstance(v, dict):
-                            continue
-                        if "text" in v:
-                            asst_msgs.append(str(v["text"]))
-                        elif "thinking" in v:
-                            thinking_texts.append(str(v["thinking"]))
-                    if not asst_msgs and thinking_texts:
-                        asst_msgs.append(thinking_texts[0])
-                    if not asst_msgs:
-                        first_sk = min((int(k2) for k2 in c if k2.isdigit()), default=None)
-                        if first_sk is not None:
-                            v = c[str(first_sk)]
-                            if isinstance(v, dict):
-                                asst_msgs.append(str(next(iter(v.values()), "")))
-                elif isinstance(c, str):
-                    asst_msgs.append(c)
-        if len(user_msgs) == 1 and len(asst_msgs) == 1:
-            return user_msgs[0], asst_msgs[0]
-        return None
+
+        # 第一条 chat user
+        first_user_idx = -1
+        first_user_text = ""
+        for i, (_, e) in enumerate(entries):
+            if e.get("role") != "user":
+                continue
+            text = _extract_user_text(e.get("content", {}))
+            if text.strip():
+                first_user_idx = i
+                first_user_text = text
+                break
+        if first_user_idx < 0:
+            return None
+
+        # 第一条 chat user 之后的 assistant chat 消息(跳过 tool_marker/terminal/notice 等)
+        for _, e in entries[first_user_idx + 1:]:
+            if e.get("role") != "assistant":
+                continue
+            text = _extract_assistant_text(e.get("content", {}))
+            if text.strip():
+                return first_user_text, text
+
+        # user-only fallback(还没等到 assistant 回复就触发标题生成)
+        return first_user_text, ""
 
     def compress_context(self, session_id: str, summary_text: str) -> dict[str, Any]:
         sid = _safe_session_id(session_id)

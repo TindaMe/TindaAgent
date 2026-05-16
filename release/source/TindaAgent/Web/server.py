@@ -5,11 +5,13 @@ import logging
 import os
 import re
 import ipaddress
+import calendar
+import shutil
 import threading
 import time
 import uuid
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from fastapi import Body
 from fastapi import FastAPI
@@ -40,7 +42,9 @@ from TindaAgent.Process.Architecture.paths import (
     get_legacy_log_root,
     get_log_root,
     get_legacy_sessions_root,
+    get_runtime_root,
     get_sessions_root,
+    get_system_root,
     get_users_file,
 )
 from TindaAgent.Process.Observability import audit_event
@@ -276,9 +280,122 @@ _HTML_USER_ADMIN = _load_html("user_admin.html")
 _HTML_LOG_VIEW = _load_html("logs.html")
 _HTML_MODEL_DIAGNOSTICS = _load_html("model_diagnostics.html")
 _JS_CHAT_RENDERER = _load_html("chat_renderer.js")
+_JS_MARKDOWN_RENDERER = _load_html("markdown_renderer.js")
 _LOG_ROOT = get_log_root()
 _CONTEXT_LOG_FILE = _LOG_ROOT / "llm_context.jsonl"
 _LOG_MAX_READ_BYTES = 2 * 1024 * 1024
+_SERVER_STARTED_AT = time.time()
+_HOME_USAGE_FILE = get_system_root() / "home_usage.jsonl"
+_CHANGELOG_FILE = Path(__file__).resolve().parents[1] / "docs" / "CHANGELOG.md"
+_usage_lock = threading.Lock()
+
+
+def _safe_percent(used: float, total: float) -> float:
+    if total <= 0:
+        return 0.0
+    return round(max(0.0, min(100.0, (used / total) * 100.0)), 1)
+
+
+def _read_proc_memory() -> dict[str, object]:
+    try:
+        meminfo: dict[str, int] = {}
+        for line in Path("/proc/meminfo").read_text(encoding="utf-8", errors="ignore").splitlines():
+            parts = line.split()
+            if len(parts) >= 2:
+                meminfo[parts[0].rstrip(":")] = int(parts[1]) * 1024
+        total = int(meminfo.get("MemTotal", 0))
+        available = int(meminfo.get("MemAvailable", 0))
+        used = max(0, total - available)
+        return {"total": total, "used": used, "available": available, "percent": _safe_percent(used, total)}
+    except Exception:
+        return {"total": 0, "used": 0, "available": 0, "percent": 0.0}
+
+
+def _usage_event_from_request(request: Request) -> dict[str, object] | None:
+    path = str(request.url.path or "")
+    method = str(request.method or "GET").upper()
+    if method not in {"GET", "POST"}:
+        return None
+    if path.startswith(("/static/", "/assets/")) or path in {
+        "/favicon.ico",
+        "/chat_renderer.js",
+        "/markdown_renderer.js",
+    }:
+        return None
+    if path.startswith(("/home/stats", "/home/changelog")):
+        return None
+    return {
+        "ts": _now_iso(),
+        "path": path,
+        "method": method,
+    }
+
+
+def _record_usage_event(request: Request) -> None:
+    event = _usage_event_from_request(request)
+    if not event:
+        return
+    try:
+        line = json.dumps(event, ensure_ascii=False)
+        with _usage_lock:
+            _HOME_USAGE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            with _HOME_USAGE_FILE.open("a", encoding="utf-8") as fp:
+                fp.write(line + "\n")
+    except Exception as e:
+        logger.debug("home usage record failed: %s", e)
+
+
+def _load_usage_events(days: int = 370) -> list[dict[str, object]]:
+    cutoff = datetime.now().astimezone() - timedelta(days=max(1, int(days)))
+    rows: list[dict[str, object]] = []
+    try:
+        if not _HOME_USAGE_FILE.exists():
+            return rows
+        with _HOME_USAGE_FILE.open("r", encoding="utf-8", errors="ignore") as fp:
+            for line in fp:
+                try:
+                    item = json.loads(line)
+                    ts = datetime.fromisoformat(str(item.get("ts", "")).strip())
+                    if ts >= cutoff:
+                        rows.append({"ts": ts, "path": str(item.get("path", "")), "method": str(item.get("method", ""))})
+                except Exception:
+                    continue
+    except Exception:
+        return rows
+    return rows
+
+
+def _build_month_days(year: int, month: int, events: list[dict[str, object]]) -> list[dict[str, object]]:
+    _, day_count = calendar.monthrange(year, month)
+    counts = {day: 0 for day in range(1, day_count + 1)}
+    for item in events:
+        ts = item.get("ts")
+        if isinstance(ts, datetime) and ts.year == year and ts.month == month:
+            counts[ts.day] = counts.get(ts.day, 0) + 1
+    max_count = max(counts.values() or [0])
+    out: list[dict[str, object]] = []
+    for day in range(1, day_count + 1):
+        count = int(counts.get(day, 0))
+        level = 0 if count <= 0 else max(1, min(4, int(round((count / max(max_count, 1)) * 4))))
+        out.append({"date": f"{year:04d}-{month:02d}-{day:02d}", "count": count, "level": level})
+    return out
+
+
+def _build_usage_24h(events: list[dict[str, object]]) -> list[dict[str, object]]:
+    now = datetime.now().astimezone()
+    start = now - timedelta(hours=24)
+    buckets = [{"label": f"{(start + timedelta(hours=i * 3)).hour:02d}:00", "count": 0} for i in range(8)]
+    for item in events:
+        ts = item.get("ts")
+        if not isinstance(ts, datetime) or ts < start or ts > now:
+            continue
+        idx = min(7, max(0, int((ts - start).total_seconds() // (3 * 3600))))
+        buckets[idx]["count"] = int(buckets[idx]["count"]) + 1
+    max_count = max([int(x["count"]) for x in buckets] or [0])
+    for bucket in buckets:
+        count = int(bucket["count"])
+        bucket["percent"] = 0 if max_count <= 0 else round((count / max_count) * 100, 1)
+    return buckets
 
 
 def _serialize_context_messages(messages: list[dict]) -> list[dict]:
@@ -314,6 +431,8 @@ def _write_context_log(session_id: str, messages: list[dict], *, model: str = ""
 _AUTH_OPEN_PATHS = {
     "/",
     "/home",
+    "/home/changelog",
+    "/home/stats",
     "/chat",
     "/app",
     "/settings",
@@ -327,6 +446,7 @@ _AUTH_OPEN_PATHS = {
     "/auth/local-users",
     "/auth/local-login",
     "/chat_renderer.js",
+    "/markdown_renderer.js",
 }
 
 
@@ -538,7 +658,9 @@ def _truncate_context_preview(text: str, max_chars: int = 300) -> str:
         return ""
     if len(raw) > int(max_chars):
         raw = raw[: int(max_chars)] + "..."
-    return raw
+    # v1.8.2: 上下文预览写入审计前必须脱敏
+    from TindaAgent.Process.Observability.audit import redact_sensitive_text
+    return redact_sensitive_text(raw)
 
 
 def _estimate_context_usage_length(rows: list[dict]) -> int:
@@ -1270,6 +1392,7 @@ async def audit_http_requests(request: Request, call_next):
             ctx_tokens = push_current_user(user)
 
         response = await call_next(request)
+        _record_usage_event(request)
         endpoint = request.scope.get("endpoint")
         if endpoint is not None:
             endpoint_name = str(getattr(endpoint, "__name__", "unknown"))
@@ -1961,34 +2084,81 @@ def _parse_event_id(raw: str | int | None) -> int | None:
 
 
 def _resolve_total_jsonl_candidates() -> list[Path]:
+    """
+    汇总所有可能含有审计事件的文件,顺序:
+      1. 当前 _LOG_ROOT / total.jsonl
+      2. legacy log_root / total.jsonl
+      3. HOME 默认 ~/.tinda/agent/log / total.jsonl
+      4. 每个 root 下的 total.*.jsonl.gz 归档(按文件名时间倒序,优先扫最新)
+    """
     rows: list[Path] = []
+    seen: set[Path] = set()
+
+    def _push(path: Path) -> None:
+        try:
+            r = path.resolve()
+        except Exception:
+            r = path
+        if r in seen:
+            return
+        seen.add(r)
+        rows.append(path)
+
     primary = _LOG_ROOT / "total.jsonl"
     if primary.exists() and primary.is_file():
-        rows.append(primary)
+        _push(primary)
     legacy = get_legacy_log_root() / "total.jsonl"
     if legacy.exists() and legacy.is_file():
-        try:
-            if legacy.resolve() != primary.resolve():
-                rows.append(legacy)
-        except Exception:
-            rows.append(legacy)
-    # TINDA_HOME 迁移前的旧数据目录（默认 HOME 下的 .tinda/agent/log）
+        _push(legacy)
     try:
         home_default = Path.home() / ".tinda" / "agent" / "log" / "total.jsonl"
         if home_default.exists() and home_default.is_file():
-            if home_default.resolve() != primary.resolve():
-                rows.append(home_default)
+            _push(home_default)
     except Exception:
         pass
+
+    # gzip 归档:每个 root 下的 total.*.jsonl.gz,按文件名时间倒序
+    roots: list[Path] = [_LOG_ROOT]
+    try:
+        roots.append(get_legacy_log_root())
+    except Exception:
+        pass
+    try:
+        roots.append(Path.home() / ".tinda" / "agent" / "log")
+    except Exception:
+        pass
+    seen_roots: set[Path] = set()
+    for root in roots:
+        try:
+            rroot = root.resolve()
+        except Exception:
+            rroot = root
+        if rroot in seen_roots:
+            continue
+        seen_roots.add(rroot)
+        if not root.is_dir():
+            continue
+        try:
+            archives = sorted(root.glob("total.*.jsonl.gz"), reverse=True)
+        except Exception:
+            archives = []
+        for arc in archives:
+            if arc.is_file():
+                _push(arc)
     return rows
 
 
 def _find_audit_event_by_id(event_id: int) -> dict | None:
-    """线性扫描 total.jsonl 及归档文件查找事件。"""
+    """线性扫描 total.jsonl 及 .jsonl.gz 归档文件查找事件。"""
     target = int(event_id)
     for path in _resolve_total_jsonl_candidates():
         try:
-            with path.open("r", encoding="utf-8") as fp:
+            if path.suffix == ".gz":
+                import gzip as _gzip
+                opener = lambda p: _gzip.open(p, "rt", encoding="utf-8", errors="ignore")
+            else:
+                opener = lambda p: p.open("r", encoding="utf-8")
+            with opener(path) as fp:
                 for line_no, line in enumerate(fp, start=1):
                     row_text = str(line).strip()
                     if not row_text:
@@ -2023,6 +2193,64 @@ async def home_alias():
     return RedirectResponse(url="/", status_code=307)
 
 
+@app.get("/home/changelog")
+async def home_changelog():
+    try:
+        text = _CHANGELOG_FILE.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        text = "# CHANGELOG\n\n暂无变更记录。"
+    return JSONResponse({"ok": True, "markdown": text[:120000]})
+
+
+@app.get("/home/stats")
+async def home_stats(month: str = Query(default="")):
+    now = datetime.now().astimezone()
+    month_text = str(month or "").strip()
+    try:
+        if re.fullmatch(r"\d{4}-\d{2}", month_text):
+            year, mon = [int(x) for x in month_text.split("-", 1)]
+            selected = datetime(year, mon, 1).astimezone()
+        else:
+            selected = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    except Exception:
+        selected = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+    events = _load_usage_events(days=370)
+    disk = shutil.disk_usage(get_runtime_root())
+    memory = _read_proc_memory()
+    months: list[str] = []
+    cursor = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    for _ in range(12):
+        months.append(f"{cursor.year:04d}-{cursor.month:02d}")
+        prev_month = cursor.month - 1 or 12
+        prev_year = cursor.year - 1 if cursor.month == 1 else cursor.year
+        cursor = cursor.replace(year=prev_year, month=prev_month)
+
+    return JSONResponse(
+        {
+            "ok": True,
+            "started_at": datetime.fromtimestamp(_SERVER_STARTED_AT).astimezone().isoformat(timespec="seconds"),
+            "uptime_seconds": max(0, int(time.time() - _SERVER_STARTED_AT)),
+            "system_time": now.isoformat(timespec="seconds"),
+            "memory": memory,
+            "storage": {
+                "root": str(get_runtime_root()),
+                "total": int(disk.total),
+                "used": int(disk.used),
+                "free": int(disk.free),
+                "percent": _safe_percent(float(disk.used), float(disk.total)),
+            },
+            "usage": {
+                "month": f"{selected.year:04d}-{selected.month:02d}",
+                "months": months,
+                "days": _build_month_days(selected.year, selected.month, events),
+                "last24h": _build_usage_24h(events),
+                "total_events": len(events),
+            },
+        }
+    )
+
+
 @app.get("/favicon.ico", include_in_schema=False)
 async def favicon():
     return Response(status_code=204)
@@ -2042,6 +2270,12 @@ async def chat_page():
 async def chat_renderer_js():
     from fastapi.responses import Response
     return Response(content=_JS_CHAT_RENDERER, media_type="application/javascript")
+
+
+@app.get("/markdown_renderer.js")
+async def markdown_renderer_js():
+    from fastapi.responses import Response
+    return Response(content=_JS_MARKDOWN_RENDERER, media_type="application/javascript")
 
 
 @app.get("/settings", response_class=HTMLResponse)

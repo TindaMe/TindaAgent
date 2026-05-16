@@ -27,7 +27,8 @@
       --gradient-lavender: #c084fc;
       --radius: 20px;
       --ease-smooth: cubic-bezier(0.22, 1, 0.36, 1);
-      --ease-spring: cubic-bezier(0.16, 1.18, 0.3, 1);
+      --ease-spring: cubic-bezier(0.18, 0.92, 0.24, 1);
+      --ease-glide: cubic-bezier(0.2, 0.86, 0.24, 1);
       --ease-out-terminal: cubic-bezier(0.4, 0, 0.2, 1);
     }
 
@@ -50,36 +51,36 @@
     }
     @keyframes headerLeftEnter {
       0% { opacity: 0; translate: -34px 0; scale: 0.97; }
-      62% { opacity: 1; translate: 4px 0; scale: 1.006; }
+      68% { opacity: 1; translate: 1px 0; scale: 1.002; }
       100% { opacity: 1; translate: 0 0; scale: 1; }
     }
     @keyframes brandPartEnter {
       0% { opacity: 0; translate: -16px 0; scale: 0.96; }
-      70% { opacity: 1; translate: 2px 0; scale: 1.01; }
+      70% { opacity: 1; translate: 0.75px 0; scale: 1.004; }
       100% { opacity: 1; translate: 0 0; scale: 1; }
     }
     @keyframes headerRightEnter {
       0% { opacity: 0; translate: 40px 0; scale: 0.97; }
-      66% { opacity: 1; translate: -3px 0; scale: 1.004; }
+      68% { opacity: 1; translate: -1px 0; scale: 1.002; }
       100% { opacity: 1; translate: 0 0; scale: 1; }
     }
     @keyframes quickButtonEnter {
       0% { opacity: 0; translate: 24px 0; scale: 0.94; }
-      68% { opacity: 1; translate: -2px 0; scale: 1.03; }
+      72% { opacity: 1; translate: -0.75px 0; scale: 1.008; }
       100% { opacity: 1; translate: 0 0; scale: 1; }
     }
     @keyframes statusPillDropExpand {
       0% {
         opacity: 0;
-        transform: translateY(-28px) scaleX(0.34) scaleY(0.82);
+        transform: translateY(-24px) scaleX(0.42) scaleY(0.88);
       }
-      48% {
+      56% {
         opacity: 1;
-        transform: translateY(5px) scaleX(0.64) scaleY(1.08);
+        transform: translateY(2px) scaleX(0.82) scaleY(1.03);
       }
-      76% {
+      82% {
         opacity: 1;
-        transform: translateY(-2px) scaleX(1.04) scaleY(0.98);
+        transform: translateY(-0.6px) scaleX(1.01) scaleY(0.995);
       }
       100% {
         opacity: 1;
@@ -97,9 +98,9 @@
       }
     }
     @keyframes statusDotBallDrop {
-      0% { opacity: 0; transform: translateY(-13px) scale(0.7); }
-      55% { opacity: 1; transform: translateY(4px) scale(1.16); }
-      78% { opacity: 1; transform: translateY(-2px) scale(0.94); }
+      0% { opacity: 0; transform: translateY(-11px) scale(0.78); }
+      62% { opacity: 1; transform: translateY(1.5px) scale(1.06); }
+      84% { opacity: 1; transform: translateY(-0.5px) scale(0.985); }
       100% { opacity: 1; transform: translateY(0) scale(1); }
     }
     @keyframes inputBoxRise {
@@ -108,10 +109,15 @@
         translate: 0 46px;
         scale: 0.96;
       }
-      62% {
+      58% {
         opacity: 1;
-        translate: 0 -6px;
-        scale: 1.012;
+        translate: 0 -1.5px;
+        scale: 1.004;
+      }
+      78% {
+        opacity: 1;
+        translate: 0 0.45px;
+        scale: 0.999;
       }
       100% {
         opacity: 1;
@@ -154,6 +160,42 @@
       position: relative;
       animation: pageIn 0.42s cubic-bezier(0.4, 0, 0.2, 1) both;
     }
+    body.chat-booting {
+      animation: none !important;
+      pointer-events: none;
+    }
+    body.chat-booting *,
+    body.chat-booting *::before,
+    body.chat-booting *::after {
+      animation-play-state: paused !important;
+      transition: none !important;
+    }
+    body.chat-booting > :not(.chat-loading) {
+      opacity: 0 !important;
+    }
+    .chat-loading {
+      position: fixed;
+      inset: 0;
+      z-index: 1000;
+      display: grid;
+      place-items: center;
+      background: #fff0f6;
+      color: rgba(190, 92, 130, 0.72);
+      font-size: 11.5px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      opacity: 0;
+      pointer-events: none;
+    }
+    body.chat-booting .chat-loading {
+      transition: opacity 0.5s ease !important;
+    }
+    body.chat-loading-visible .chat-loading {
+      opacity: 1;
+    }
+    body.chat-loading-leaving .chat-loading {
+      opacity: 0;
+    }
     body.chat-leaving {
       pointer-events: none;
     }
@@ -181,6 +223,9 @@
     }
     body.chat-leaving .input-box {
       animation: inputBoxLeave 0.46s var(--ease-out-terminal) 0.06s both;
+    }
+    body.chat-leaving .hint {
+      animation: inputBoxLeave 0.4s var(--ease-out-terminal) both;
     }
     body.chat-leaving #messages {
       animation: messagesLeave 0.34s var(--ease-out-terminal) both;
@@ -240,7 +285,7 @@
     }
     .brand > * {
       opacity: 0;
-      animation: brandPartEnter 0.42s cubic-bezier(0.16,1.12,0.3,1) both;
+      animation: brandPartEnter 0.42s var(--ease-glide) both;
       animation-delay: calc(0.22s + var(--brand-enter-index, 0) * 0.055s);
     }
     .brand-logo { --brand-enter-index: 0; }
@@ -267,7 +312,7 @@
       white-space: nowrap;
       overflow: hidden;
       transform-origin: center top;
-      animation: statusPillDropExpand 0.78s cubic-bezier(0.16, 1.08, 0.3, 1) 0.22s both;
+      animation: statusPillDropExpand 0.78s var(--ease-glide) 0.22s both;
       will-change: transform, opacity;
     }
     .status-sep {
@@ -285,7 +330,7 @@
     }
     .status-pill .status-dot {
       animation:
-        statusDotBallDrop 0.48s cubic-bezier(0.16,1.22,0.3,1) 0.44s both,
+        statusDotBallDrop 0.48s var(--ease-glide) 0.44s both,
         statusPulse 2.1s ease-in-out 1.02s infinite;
     }
     .status-text {
@@ -309,7 +354,7 @@
       justify-content: center;
       box-shadow: 0 4px 16px rgba(255,110,180,0.38);
       animation:
-        brandPartEnter 0.42s cubic-bezier(0.16,1.12,0.3,1) 0.22s both,
+        brandPartEnter 0.42s var(--ease-glide) 0.22s both,
         wiggle 3.5s ease-in-out 0.72s infinite;
       flex-shrink: 0;
     }
@@ -384,7 +429,7 @@
     .header-right > .icon-btn,
     .header-right > .btn-sep {
       opacity: 0;
-      animation: quickButtonEnter 0.44s cubic-bezier(0.16,1.12,0.3,1) both;
+      animation: quickButtonEnter 0.44s var(--ease-glide) both;
       animation-delay: calc(0.34s + var(--quick-enter-index, 0) * 0.045s);
     }
     #quickSep { --quick-enter-index: 2; }
@@ -627,7 +672,6 @@
 	      animation: messageInBot 0.48s var(--ease-spring) forwards;
 	      will-change: transform, opacity;
 	    }
-
 	    @keyframes popIn {
 	      to { opacity: 1; transform: translateY(0) scale(1); }
 	    }
@@ -655,6 +699,14 @@
 	      flex-direction: row-reverse;
 	      transform: translate3d(22px, 14px, 0) scale(0.96);
 	      animation-name: messageInUser;
+	    }
+	    .msg.history-msg,
+	    .msg.user.history-msg {
+	      opacity: 1;
+	      transform: none;
+	      animation: none;
+	      filter: none;
+	      will-change: auto;
 	    }
 
     .avatar {
@@ -721,6 +773,9 @@
 	    }
 	    .msg:not(.same-as-prev) .bubble {
 	      animation: softGlow 0.58s var(--ease-smooth) both;
+	    }
+	    .msg.history-msg .bubble {
+	      animation: none;
 	    }
 
     .msg.user .bubble.file-chip {
@@ -1024,7 +1079,7 @@
 	      transition: border-color 0.24s ease, box-shadow 0.24s ease, transform 0.24s var(--ease-smooth);
 	      box-shadow: 0 3px 20px rgba(255,110,180,0.09);
 	      transform-origin: bottom center;
-	      animation: inputBoxRise 0.74s cubic-bezier(0.16, 1.12, 0.3, 1) 0.42s both;
+	      animation: inputBoxRise 0.74s var(--ease-glide) 0.42s both;
 	      will-change: opacity, translate, scale;
 	    }
 	    .input-box:focus-within {
@@ -1468,6 +1523,9 @@
       font-size: 11.5px;
       color: var(--text-dim);
       font-weight: 600;
+      transform-origin: top center;
+      animation: inputBoxRise 0.68s var(--ease-glide) 0.52s both;
+      will-change: opacity, translate, scale;
     }
     .hint .hint-inner {
       display: inline-block;
@@ -2241,7 +2299,8 @@
 	    }
 	  </style>
 </head>
-<body>
+<body class="chat-booting">
+<div class="chat-loading" role="status" aria-live="polite">正在加载中...</div>
 
 <!-- 浮动装饰 -->
 <span class="deco" style="top:7%;left:4%;font-size:20px;animation-duration:4.4s;color:#f472b6;" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"></circle><path d="M12 2.8v4.2M12 17v4.2M2.8 12h4.2M17 12h4.2M5.3 5.3l3 3M15.7 15.7l3 3M18.7 5.3l-3 3M8.3 15.7l-3 3"></path></svg></span>
@@ -2416,6 +2475,7 @@
   <div id="recordsList" class="records-list"></div>
 </aside>
 
+<script src="/markdown_renderer.js"></script>
 <script src="/chat_renderer.js"></script>
 <script>
   const messagesEl   = document.getElementById("messages");
@@ -2596,6 +2656,8 @@
   const GATEWAY_HEARTBEAT_INTERVAL_MS = 12000;
   const TERM_MAX_LINES = 500;
   const TERM_FLUSH_BATCH = 120;
+  const CHAT_BOOT_MIN_MS = 1000;
+  const CHAT_LOADING_FADE_MS = 500;
   const INPUT_PLACEHOLDER_DEFAULT = "跟 Tinda 说说话吧 ...";
   const INPUT_PLACEHOLDER_CONFIRM_LOCK = "存在待确认终端命令，请先在弹窗中允许/拒绝";
   let termPersistBuffer = [];
@@ -2605,6 +2667,34 @@
 
   // --- Toast ---
   let toastTimer = 0;
+  const chatBootStartedAt = performance.now();
+  let initialChatRenderReleasing = false;
+  function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
+  }
+  function startInitialChatLoading() {
+    if (!document.body.classList.contains("chat-booting")) return;
+    requestAnimationFrame(() => {
+      document.body.classList.add("chat-loading-visible");
+    });
+  }
+  async function releaseInitialChatRender() {
+    if (!document.body.classList.contains("chat-booting")) return;
+    if (initialChatRenderReleasing) return;
+    initialChatRenderReleasing = true;
+    const elapsed = performance.now() - chatBootStartedAt;
+    await sleep(CHAT_BOOT_MIN_MS - elapsed);
+    document.body.classList.remove("chat-loading-visible");
+    document.body.classList.add("chat-loading-leaving");
+    await sleep(CHAT_LOADING_FADE_MS);
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        document.body.classList.remove("chat-booting", "chat-loading-leaving");
+        document.body.classList.add("chat-ready");
+      });
+    });
+  }
+
   function showToast(text, variant = "info") {
     if (!toastEl) return;
     toastEl.textContent = text;
@@ -3882,24 +3972,32 @@
     addTermLine("sep", "─".repeat(36), cls);
   }
 
-  async function loadCurrentSessionRecord() {
+  async function loadCurrentSessionRecord({ sessionId = "" } = {}) {
     try {
-      const sid = await ensureActiveSession();
+      let sid = String(sessionId || "").trim();
+      if (!sid) sid = await ensureActiveSession();
       const res = await apiFetch(`/sessions/${encodeURIComponent(sid)}/messages`);
-      if (!res.ok) return;
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       const entries = Array.isArray(data.entries) ? data.entries : [];
       renderSession(entries);
       await syncPendingConfirmationsFromServer(sid, { silent: true });
       await refreshContextUsageLength(sid);
+      return true;
     } catch (e) {
       reportErrorToTerminal(`读取当前会话记录失败：${String(e?.message || e)}`, { source: "session_record" });
+      if (messagesEl && messagesEl.childElementCount === 0) showEmptyState();
+      return false;
     }
   }
 
   // --- UI helpers ---
   function scrollToBottom() {
     messagesWrap.scrollTop = getMaxUsefulScroll();
+  }
+
+  function isHydratingMessages() {
+    return messagesEl?.dataset.hydrating === "1";
   }
 
   function getMaxUsefulScroll() {
@@ -3957,6 +4055,7 @@
     }
     const row = document.createElement("div");
     row.className = "msg " + role;
+    if (messagesEl?.dataset.hydrating === "1") row.classList.add("history-msg");
 
     const spacer = messagesEl.querySelector(".sys-pin-spacer");
     const prev = spacer ? spacer.previousElementSibling : messagesEl.lastElementChild;
@@ -3992,7 +4091,7 @@
     } else {
       messagesEl.appendChild(row);
     }
-    scrollToBottom();
+    if (!isHydratingMessages()) scrollToBottom();
     return { row, bubble };
   }
 
@@ -4000,6 +4099,7 @@
     const shortName = getDisplayFileName(fileName);
     const row = document.createElement("div");
     row.className = "msg user";
+    if (messagesEl?.dataset.hydrating === "1") row.classList.add("history-msg");
 
     const spacer = messagesEl.querySelector(".sys-pin-spacer");
     const prev = spacer ? spacer.previousElementSibling : messagesEl.lastElementChild;
@@ -4022,7 +4122,7 @@
     } else {
       messagesEl.appendChild(row);
     }
-    scrollToBottom();
+    if (!isHydratingMessages()) scrollToBottom();
     return { row, bubble };
   }
 
@@ -4107,7 +4207,7 @@
         existing.dataset.rawMd = text;
         existing.innerHTML = renderMarkdown(text);
       }
-      scrollToBottom();
+      if (!isHydratingMessages()) scrollToBottom();
       return { row: existing.closest(".msg"), bubble: existing };
     }
     return addBubble(text, "bot", { isCommand, turnId: tid });
@@ -4173,183 +4273,9 @@
     return true;
   }
 
-  function escapeHtml(text) {
-    return text
-      .replaceAll("&", "&amp;")
-      .replaceAll("<", "&lt;")
-      .replaceAll(">", "&gt;")
-      .replaceAll("\"", "&quot;")
-      .replaceAll("'", "&#39;");
-  }
-
-  function safeHref(rawUrl) {
-    const url = rawUrl.trim();
-    if (/^(https?:\/\/|mailto:)/i.test(url)) return url;
-    return "#";
-  }
-
-  function renderInlineMarkdown(line) {
-    const codeSpans = [];
-    let s = line.replace(/`([^`]+)`/g, (_, code) => {
-      const token = `@@INLINE_CODE_${codeSpans.length}@@`;
-      codeSpans.push(`<code>${escapeHtml(code)}</code>`);
-      return token;
-    });
-
-    s = escapeHtml(s);
-    s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, url) => {
-      const href = safeHref(url);
-      return `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${label}</a>`;
-    });
-    s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
-    s = s.replace(/\*([^*]+)\*/g, "<em>$1</em>");
-    s = s.replace(/~~([^~]+)~~/g, "<del>$1</del>");
-
-    codeSpans.forEach((html, i) => {
-      s = s.replaceAll(`@@INLINE_CODE_${i}@@`, html);
-    });
-    return s;
-  }
-
-  function parseTableCells(line) {
-    let s = String(line ?? "").trim();
-    if (s.startsWith("|")) s = s.slice(1);
-    if (s.endsWith("|")) s = s.slice(0, -1);
-    const token = "@@ESCAPED_PIPE@@";
-    s = s.replace(/\\\|/g, token);
-    return s.split("|").map((cell) => cell.replaceAll(token, "|").trim());
-  }
-
-  function isTableSeparatorLine(line) {
-    const s = String(line ?? "").trim();
-    if (!s || !s.includes("|")) return false;
-    const cells = parseTableCells(s);
-    if (!cells.length) return false;
-    // 兼容常见 markdown 变体：允许 :--: / --: / :--
-    // （标准多为 3 个以上横杠，但不少模型会产出 2 个横杠）
-    return cells.every((cell) => /^:?-{2,}:?$/.test(cell));
-  }
-
-  function parseTableAlign(cell) {
-    const s = String(cell ?? "").trim();
-    if (s.startsWith(":") && s.endsWith(":")) return "center";
-    if (s.endsWith(":")) return "right";
-    return "left";
-  }
-
-  function renderMarkdown(text) {
-    const source = (text ?? "").replace(/\r\n/g, "\n");
-    const codeBlocks = [];
-
-    let body = source.replace(/```([a-zA-Z0-9_-]+)?\n([\s\S]*?)```/g, (_, lang, code) => {
-      const langClass = lang ? ` class="language-${escapeHtml(lang)}"` : "";
-      const token = `@@CODE_BLOCK_${codeBlocks.length}@@`;
-      const html = `<pre><code${langClass}>${escapeHtml(code)}</code></pre>`;
-      codeBlocks.push(html);
-      return token;
-    });
-
-    const lines = body.split("\n");
-    const parts = [];
-    let inList = false;
-
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i].trimEnd();
-      const trim = line.trim();
-
-      if (!trim) {
-        if (inList) { parts.push("</ul>"); inList = false; }
-        continue;
-      }
-
-      const nextTrim = i + 1 < lines.length ? lines[i + 1].trim() : "";
-      if (trim.includes("|") && nextTrim && isTableSeparatorLine(nextTrim)) {
-        if (inList) { parts.push("</ul>"); inList = false; }
-
-        const headers = parseTableCells(trim);
-        const alignDefs = parseTableCells(nextTrim);
-        const aligns = headers.map((_, idx) => parseTableAlign(alignDefs[idx] || ""));
-        const rows = [];
-
-        i += 2;
-        for (; i < lines.length; i++) {
-          const rowTrim = lines[i].trim();
-          if (!rowTrim) {
-            i -= 1;
-            break;
-          }
-          if (!rowTrim.includes("|") || /^@@CODE_BLOCK_\d+@@$/.test(rowTrim)) {
-            i -= 1;
-            break;
-          }
-          rows.push(parseTableCells(rowTrim));
-        }
-
-        const thHtml = headers.map((h, idx) => `<th style="text-align:${aligns[idx]}">${renderInlineMarkdown(h)}</th>`).join("");
-        const trHtml = rows.map((cols) => {
-          const tds = headers.map((_, idx) => {
-            const cellText = cols[idx] ?? "";
-            return `<td style="text-align:${aligns[idx]}">${renderInlineMarkdown(cellText)}</td>`;
-          }).join("");
-          return `<tr>${tds}</tr>`;
-        }).join("");
-        const tbody = trHtml ? `<tbody>${trHtml}</tbody>` : "";
-        parts.push(`<div class="md-table-wrap"><table><thead><tr>${thHtml}</tr></thead>${tbody}</table></div>`);
-        continue;
-      }
-
-      if (/^(-{3,}|\*{3,}|_{3,})$/.test(trim)) {
-        if (inList) { parts.push("</ul>"); inList = false; }
-        parts.push("<hr/>");
-        continue;
-      }
-
-      const listMatch = /^[-*+]\s+(.+)$/.exec(trim);
-      if (listMatch) {
-        if (!inList) { parts.push("<ul>"); inList = true; }
-        parts.push(`<li>${renderInlineMarkdown(listMatch[1])}</li>`);
-        continue;
-      }
-
-      if (inList) { parts.push("</ul>"); inList = false; }
-
-      const headingMatch = /^(#{1,6})\s+(.+)$/.exec(trim);
-      if (headingMatch) {
-        const level = headingMatch[1].length;
-        parts.push(`<h${level}>${renderInlineMarkdown(headingMatch[2])}</h${level}>`);
-        continue;
-      }
-
-      if (trim.startsWith(">")) {
-        if (inList) { parts.push("</ul>"); inList = false; }
-        const quoteLines = [];
-        for (; i < lines.length; i++) {
-          const qTrim = lines[i].trim();
-          if (!qTrim.startsWith(">")) {
-            i -= 1;
-            break;
-          }
-          const m = /^>\s?(.*)$/.exec(qTrim);
-          quoteLines.push(m ? m[1] : "");
-        }
-        const quoteHtml = quoteLines
-          .map((line) => (line ? renderInlineMarkdown(line) : "<br/>"))
-          .join("<br/>");
-        parts.push(`<blockquote>${quoteHtml}</blockquote>`);
-        continue;
-      }
-
-      if (/^@@CODE_BLOCK_\d+@@$/.test(trim)) { parts.push(trim); continue; }
-
-      parts.push(`<p>${renderInlineMarkdown(trim)}</p>`);
-    }
-
-    if (inList) parts.push("</ul>");
-
-    let html = parts.join("");
-    codeBlocks.forEach((block, i) => { html = html.replaceAll(`@@CODE_BLOCK_${i}@@`, block); });
-    return html || "<p></p>";
-  }
+  // markdown 渲染函数（escapeHtml / safeHref / renderInlineMarkdown / parseTableCells /
+  // isTableSeparatorLine / parseTableAlign / renderMarkdown）已抽到 /markdown_renderer.js，
+  // 通过 window 全局向后兼容暴露，旧调用点 renderMarkdown(text) / escapeHtml(text) 等继续可用。
 
   function addTyping() {
     const row = document.createElement("div");
@@ -5710,6 +5636,7 @@
   if (!getAuthToken()) {
     location.href = "/";
   }
+  startInitialChatLoading();
   renderHeaderStatus();
   startGatewayHeartbeat();
   const savedWidth = Number(localStorage.getItem(TERM_WIDTH_KEY));
@@ -5721,8 +5648,6 @@
   const savedCustomTime = localStorage.getItem(TIME_CUSTOM_KEY);
   if (savedCustomTime) customTimeValue = savedCustomTime;
   setTimeMode(timeMode, { silent: true });
-  loadModelInfo();
-  syncAppVersion();
   streamEnabled = localStorage.getItem(STREAM_ENABLED_KEY) === "1";
   setStreamToggleUI();
   // 读取设置页配置
@@ -5740,8 +5665,8 @@
       }
     }
   } catch {}
-  showEmptyState();
   (async () => {
+    let shouldReleaseInitialRender = false;
     try {
       const authRes = await apiFetch("/auth/status");
       const authData = authRes.ok ? await authRes.json() : {};
@@ -5749,22 +5674,30 @@
         location.href = "/";
         return;
       }
-    } catch {
-      location.href = "/";
-      return;
+      shouldReleaseInitialRender = true;
+      await ensureUserMetaLoaded();
+      await loadAccountList();
+      renderQuickButtons();
+      await Promise.allSettled([loadModelInfo(), syncAppVersion()]);
+      const sid = await ensureActiveSession();
+      const sessionsRes = await apiFetch(`/sessions?limit=${RECORDS_PAGE_LIMIT}&offset=0`);
+      if (sessionsRes.ok) {
+        const payload = await sessionsRes.json();
+        const first = Array.isArray(payload.sessions) ? payload.sessions.find((x) => String(x?.id || "") === sid) : null;
+        if (first) setActiveSession(sid, { title: String(first.title || "新对话"), silent: true });
+      }
+      await loadCurrentSessionRecord({ sessionId: sid });
+      startToolPolling(sid);
+    } catch (e) {
+      if (!shouldReleaseInitialRender) {
+        location.href = "/";
+        return;
+      }
+      reportErrorToTerminal(`初始化聊天页失败：${String(e?.message || e)}`, { source: "chat_boot" });
+      if (messagesEl && messagesEl.childElementCount === 0) showEmptyState();
+    } finally {
+      if (shouldReleaseInitialRender) await releaseInitialChatRender();
     }
-    await ensureUserMetaLoaded();
-    await loadAccountList();
-    renderQuickButtons();
-    const sid = await ensureActiveSession();
-    const sessionsRes = await apiFetch(`/sessions?limit=${RECORDS_PAGE_LIMIT}&offset=0`);
-    if (sessionsRes.ok) {
-      const payload = await sessionsRes.json();
-      const first = Array.isArray(payload.sessions) ? payload.sessions.find((x) => String(x?.id || "") === sid) : null;
-      if (first) setActiveSession(sid, { title: String(first.title || "新对话"), silent: true });
-    }
-    await loadCurrentSessionRecord();
-    startToolPolling(sid);
   })();
   closeTerm();
   refreshComposerDisabledState();

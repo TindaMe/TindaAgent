@@ -886,24 +886,67 @@ def _parse_event_id(raw: str | int | None) -> int | None:
 
 
 def _iter_total_jsonl_candidates() -> list[Path]:
+    """
+    汇总所有可能含有审计事件的文件,顺序:
+      1. 当前 get_log_root() / total.jsonl
+      2. legacy log_root / total.jsonl
+      3. 每个 root 下的 total.*.jsonl.gz 归档(按文件名时间倒序,优先扫最新)
+    """
     paths: list[Path] = []
+    seen: set[Path] = set()
+
+    def _push(p: Path) -> None:
+        try:
+            r = p.resolve()
+        except Exception:
+            r = p
+        if r in seen:
+            return
+        seen.add(r)
+        paths.append(p)
+
     primary = get_log_root() / "total.jsonl"
     if primary.exists() and primary.is_file():
-        paths.append(primary)
+        _push(primary)
     legacy = get_legacy_log_root() / "total.jsonl"
     if legacy.exists() and legacy.is_file():
+        _push(legacy)
+
+    # gzip 归档:每个 root 下的 total.*.jsonl.gz,按文件名时间倒序
+    roots: list[Path] = []
+    try:
+        roots.append(get_log_root())
+    except Exception:
+        pass
+    try:
+        roots.append(get_legacy_log_root())
+    except Exception:
+        pass
+    seen_roots: set[Path] = set()
+    for root in roots:
         try:
-            if legacy.resolve() != primary.resolve():
-                paths.append(legacy)
+            rroot = root.resolve()
         except Exception:
-            paths.append(legacy)
+            rroot = root
+        if rroot in seen_roots:
+            continue
+        seen_roots.add(rroot)
+        if not root.is_dir():
+            continue
+        try:
+            archives = sorted(root.glob("total.*.jsonl.gz"), reverse=True)
+        except Exception:
+            archives = []
+        for arc in archives:
+            if arc.is_file():
+                _push(arc)
     return paths
 
 
 @tool(perm.PUBLIC_READ, "Look up audit log event by ID (numeric or tc_ prefix)", must=True)
 def get_log_event_by_id(id: str) -> dict[str, Any]:
     """
-    根据审计事件 ID 查询 total.jsonl 中的原始事件。
+    根据审计事件 ID 查询 total.jsonl 及 .jsonl.gz 归档中的原始事件。
     """
     parsed_id = _parse_event_id(id)
     if parsed_id is None:
@@ -911,7 +954,11 @@ def get_log_event_by_id(id: str) -> dict[str, Any]:
 
     for path in _iter_total_jsonl_candidates():
         try:
-            with path.open("r", encoding="utf-8") as fp:
+            if path.suffix == ".gz":
+                opener = lambda p: gzip.open(p, "rt", encoding="utf-8", errors="ignore")
+            else:
+                opener = lambda p: p.open("r", encoding="utf-8")
+            with opener(path) as fp:
                 for line_no, line in enumerate(fp, start=1):
                     row_text = str(line).strip()
                     if not row_text:

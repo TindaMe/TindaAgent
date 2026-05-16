@@ -13,13 +13,20 @@
     if (typeof clearEmptyState === "function") clearEmptyState();
     if (typeof messagesEl !== "undefined" && messagesEl) {
       messagesEl.innerHTML = "";
+      messagesEl.dataset.hydrating = "1";
     }
-    entries.forEach(function (entry) {
-      var role = (entry.role || "").trim();
-      if (role === "user") renderUserBubble(entry);
-      else if (role === "assistant") renderAssistantBubble(entry);
-      else if (role === "system") renderSystemNotice(entry);
-    });
+    try {
+      entries.forEach(function (entry) {
+        var role = (entry.role || "").trim();
+        if (role === "user") renderUserBubble(entry);
+        else if (role === "assistant") renderAssistantBubble(entry);
+        else if (role === "system") renderSystemNotice(entry);
+      });
+    } finally {
+      if (typeof messagesEl !== "undefined" && messagesEl) {
+        delete messagesEl.dataset.hydrating;
+      }
+    }
     if (typeof scrollToBottom === "function") scrollToBottom();
   }
 
@@ -120,7 +127,8 @@
     el.textContent = text;
     if (typeof messagesEl !== "undefined" && messagesEl) {
       messagesEl.appendChild(el);
-      if (typeof scrollToBottom === "function") scrollToBottom();
+      var hydrating = typeof isHydratingMessages === "function" && isHydratingMessages();
+      if (!hydrating && typeof scrollToBottom === "function") scrollToBottom();
     }
   }
 
