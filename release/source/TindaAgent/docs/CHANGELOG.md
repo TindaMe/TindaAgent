@@ -6,20 +6,29 @@
 
 ## v1.8.2 - 2026-05-13
 
+> 2026-05-16 补录同版本维护项：本次未提升 `pyproject.toml` 版本号，仍归入 v1.8.2。
+
 ### Added
 
 - **多文件附件 UI** — 选多个文件后 file bar 显示"N 个文件"+ 展开箭头，点击向上弹出文件列表面板
 - **逐文件删除** — 列表每行最右侧红色半透明底红色文字"删除"按钮，支持单独移除
 - **一键清空恢复** — file bar 右侧 `×` 按钮，hover 变红，一键清除所有文件
+- **Web 页面动效补齐** — HOME、Chat、日志页、用户管理页和会话管理面板补充入场/退场动画；Chat 顶栏、状态栏、输入框和快捷按钮按方向错峰进入，页面跳转前延迟退场。
+- **本机账户选择入口** — `GET /auth/local-users` + `POST /auth/local-login` 支持从本机 JSON 用户列表选择账户并回传前端 token。
 
 ### Fixed
 
 - **文件列表面板高度自适应** — 基于 `scrollHeight` 实测渲染高度，不再硬编码估算；低于上限自适应无缝，超过上限才滚动
+- **WSL/Windows 本机登录误判** — 本机登录不再只认 loopback，新增 WSL host gateway 识别，修复 `172.19.80.1` 访问 `/auth/local-users`、`/auth/local-login` 返回 403 的问题，同时继续拒绝非本机 LAN IP。
+- **状态栏 token 计数口径** — 状态栏只统计实际写入 LLM 请求上下文的内容；终端输出、工具标记等不会发送给 LLM 的记录不再污染计数。
+- **上下文压缩重复触发** — 自动/手动压缩增加重复锚点保护，避免同一段上下文被连续压缩。
 
 ### Changed
 
 - **文件存储架构** — server 不再正则解析文件前缀，`sendFile` 参数与消息文本分离传递
 - **文件附件结构化** — 文件作为独立 `file` sub-step 存入 assistant content，`stripFilePrefix` 统一流式渲染和重载恢复
+- **用户数据存储路径** — 用户账户改为运行态 JSON：`~/.tinda/agent/user/users.json`；旧 `~/.tinda/agent/Data/User/users.json` 仅作为迁移/兼容来源。
+- **DeepSeek token 计数器接入说明** — token 估算优先加载 `~/.tinda/agent/tokenizer/` 下的 DeepSeek tokenizer，缺失时降级为启发式估算。
 
 ### Removed
 
