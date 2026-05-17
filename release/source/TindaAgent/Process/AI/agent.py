@@ -128,14 +128,20 @@ class Agent:
             role = str(msg.get("role", "")).strip()
             if role not in {"user", "assistant", "tool"}:
                 continue
-            content = str(msg.get("content", ""))
-            if role in {"user", "assistant"} and not content.strip():
+            raw_content = msg.get("content", "")
+            content = "" if raw_content is None else str(raw_content)
+            has_tool_calls = isinstance(msg.get("tool_calls"), list) and bool(msg.get("tool_calls"))
+            if role == "user" and not content.strip():
+                continue
+            if role == "assistant" and not content.strip() and not has_tool_calls:
                 continue
             item = {"role": role, "content": content}
             if role == "assistant":
                 rc = msg.get("reasoning_content")
                 if rc is not None:
                     item["reasoning_content"] = rc
+                if has_tool_calls:
+                    item["tool_calls"] = [tc.copy() if isinstance(tc, dict) else tc for tc in msg.get("tool_calls", [])]
             if role == "tool":
                 tool_call_id = str(msg.get("tool_call_id", "")).strip()
                 if tool_call_id:

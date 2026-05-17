@@ -5,6 +5,7 @@ import json
 import os
 import re
 import subprocess
+import shutil
 import gzip
 from collections import Counter
 from datetime import datetime
@@ -763,7 +764,7 @@ def _safe_env() -> dict[str, str]:
     }
 
 
-@tool(perm.TOOL_EXECUTE | perm.PUBLIC_EXECUTE, "Execute a shell command in terminal. Parameters: cmd=command string; note=purpose (max 80 chars); timeout=seconds (default 30); cwd=working dir (optional). System operations (rm/mv/chmod etc) require SYSTEM_EXECUTE permission.", must=True)
+@tool(perm.TOOL_EXECUTE | perm.PUBLIC_EXECUTE, "Execute a shell command in terminal. Parameters: cmd=command string, supports multiline bash/heredoc; note=purpose (max 80 chars); timeout=seconds (default 30); cwd=working dir (optional). System operations (rm/mv/chmod etc) require SYSTEM_EXECUTE permission.", must=True)
 def run_terminal(
     cmd: str = "",
     timeout: int = 30,
@@ -774,7 +775,7 @@ def run_terminal(
     _approval: bool | None = None,
     call_id: str = "",
 ) -> dict[str, Any]:
-    command = str(cmd or command or "").strip().replace("\r", "").replace("\n", "")
+    command = str(cmd or command or "").replace("\r\n", "\n").replace("\r", "\n").strip()
     note_text = str(note or "").strip()[:80]
     cwd_info = ""
 
@@ -825,9 +826,11 @@ def run_terminal(
             cwd_info = f" (cwd 不存在，已用当前目录)"
             work_dir = None
         exec_cwd = work_dir or os.getcwd()
+        shell_path = shutil.which("bash") or "/bin/sh"
         result = subprocess.run(
             command,
             shell=True,
+            executable=shell_path,
             capture_output=True,
             text=True,
             timeout=max(1, min(int(timeout), 120)),
@@ -843,11 +846,12 @@ def run_terminal(
         safe_stderr = redact_sensitive_text(stderr_raw)
         safe_output = redact_sensitive_text(out.strip() or "(no output)")
         ret = {
-            "ok": True,
+            "ok": result.returncode == 0,
             "success": result.returncode == 0,
             "cmd": command,
             "note": note_text,
             "cwd": exec_cwd,
+            "shell": shell_path,
             "stdout": safe_stdout,
             "stderr": safe_stderr,
             "returncode": result.returncode,
@@ -855,6 +859,8 @@ def run_terminal(
             "pending_confirmation": False,
             "approval": True if approval is True else approval,
         }
+        if result.returncode != 0:
+            ret["error"] = f"Command failed with exit code {result.returncode}"
         if cwd_info:
             ret["cwd_note"] = cwd_info
         return ret

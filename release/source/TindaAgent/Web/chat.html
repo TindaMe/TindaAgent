@@ -38,6 +38,11 @@
       --gradient: #ff6eb4;
       --gradient-lavender: #c084fc;
       --radius: 20px;
+      --ios-glass: rgba(255, 238, 246, 0.74);
+      --ios-glass-strong: rgba(255, 245, 250, 0.82);
+      --ios-border: rgba(255, 255, 255, 0.82);
+      --ios-shadow: 0 18px 44px rgba(120, 55, 82, 0.11), 0 2px 8px rgba(120, 55, 82, 0.05);
+      --ios-pressed: inset 7px 7px 16px rgba(182, 104, 136, 0.12), inset -7px -7px 16px rgba(255, 255, 255, 0.82);
       --ease-smooth: cubic-bezier(0.22, 1, 0.36, 1);
       --ease-spring: cubic-bezier(0.18, 0.92, 0.24, 1);
       --ease-glide: cubic-bezier(0.2, 0.86, 0.24, 1);
@@ -64,6 +69,11 @@
       --lavender-2: #c6bbff;
       --gradient: #d85c95;
       --gradient-lavender: #8e93df;
+      --ios-glass: rgba(18, 14, 20, 0.76);
+      --ios-glass-strong: rgba(25, 19, 27, 0.84);
+      --ios-border: rgba(255, 176, 211, 0.12);
+      --ios-shadow: 0 24px 58px rgba(0, 0, 0, 0.38), -10px -12px 28px rgba(119, 141, 229, 0.020), 12px 15px 32px rgba(255, 106, 165, 0.018);
+      --ios-pressed: inset 7px 7px 16px rgba(0, 0, 0, 0.34), inset -5px -6px 14px rgba(118, 139, 226, 0.018);
     }
 
     /* 深色模式硬编码颜色覆盖 — chrome / 状态栏 / 输入区 */
@@ -79,12 +89,16 @@
     [data-theme="dark"] .composer,
     [data-theme="dark"] .input-row,
     [data-theme="dark"] .input-box {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      box-shadow: 0 16px 44px rgba(0, 0, 0, 0.24), inset 0 1px 0 rgba(244, 224, 234, 0.050);
+      background: var(--ios-glass);
+      border: 1px solid var(--ios-border);
+      box-shadow:
+        var(--ios-shadow),
+        inset 1px 1px 0 rgba(130, 153, 238, 0.030),
+        inset -1px -1px 0 rgba(255, 120, 183, 0.014);
     }
     [data-theme="dark"] .input-dock {
-      background: linear-gradient(180deg, rgba(9, 7, 11, 0) 0%, rgba(10, 8, 12, 0.86) 38%, rgba(9, 7, 11, 0.94) 100%);
+      background:
+        linear-gradient(180deg, rgba(9, 7, 11, 0) 0%, rgba(10, 8, 12, 0.52) 38%, rgba(9, 7, 11, 0.72) 100%);
     }
     [data-theme="dark"] #input {
       color: var(--text);
@@ -94,14 +108,14 @@
     [data-theme="dark"] .time-panel,
     [data-theme="dark"] .file-bar,
     [data-theme="dark"] .file-list-panel {
-      background: rgba(24, 18, 24, 0.92);
+      background: rgba(24, 18, 24, 0.62);
       border-color: var(--border);
       box-shadow: 0 14px 34px rgba(0, 0, 0, 0.26), inset 0 1px 0 rgba(168, 189, 255, 0.022);
     }
     [data-theme="dark"] .time-btn,
     [data-theme="dark"] .file-btn,
     [data-theme="dark"] .time-custom input {
-      background: var(--surface-2);
+      background: var(--ios-glass-strong);
       border-color: var(--border);
       color: var(--text-dim);
     }
@@ -111,7 +125,7 @@
     [data-theme="dark"] .time-btn.on,
     [data-theme="dark"] .time-btn:hover,
     [data-theme="dark"] .file-btn:hover {
-      background: rgba(213, 138, 171, 0.085);
+      background: rgba(216, 92, 149, 0.12);
       border-color: var(--border-strong);
       color: var(--accent-2);
     }
@@ -318,12 +332,32 @@
     [data-theme="dark"] .records-search input:focus,
     [data-theme="dark"] .config-dialog input:focus {
       border-color: rgba(255, 137, 190, 0.24);
-      box-shadow: 0 0 0 4px rgba(255, 120, 183, 0.080), 0 14px 36px rgba(0, 0, 0, 0.24);
+      box-shadow:
+        0 0 0 4px rgba(255, 120, 183, 0.080),
+        var(--ios-shadow),
+        inset 1px 1px 0 rgba(130, 153, 238, 0.036),
+        inset -1px -1px 0 rgba(255, 120, 183, 0.020);
+    }
+    [data-theme="dark"] #sendBtn {
+      background:
+        linear-gradient(145deg, rgba(255, 173, 201, 0.20), rgba(216, 92, 149, 0.34)),
+        rgba(33, 24, 35, 0.70);
+      border: 1px solid rgba(255, 137, 190, 0.24);
+      color: #ffe7f0;
+      box-shadow:
+        0 12px 26px rgba(0, 0, 0, 0.24),
+        inset 1px 1px 0 rgba(255, 196, 220, 0.12),
+        inset -1px -1px 0 rgba(255, 120, 183, 0.040);
+      backdrop-filter: blur(18px) saturate(150%);
+      -webkit-backdrop-filter: blur(18px) saturate(150%);
     }
     [data-theme="dark"] #sendBtn:hover:not(:disabled),
     [data-theme="dark"] .file-btn:hover,
     [data-theme="dark"] .time-btn:hover {
-      box-shadow: 0 10px 24px rgba(0, 0, 0, 0.22);
+      box-shadow:
+        0 12px 28px rgba(0, 0, 0, 0.26),
+        inset 1px 1px 0 rgba(255, 196, 220, 0.14),
+        inset -1px -1px 0 rgba(255, 120, 183, 0.045);
     }
     [data-theme="dark"] .hint kbd {
       background: rgba(39, 31, 49, 0.72);
@@ -380,10 +414,12 @@
       border-color: rgba(255, 176, 211, 0.10);
       box-shadow: none;
     }
-    [data-theme="dark"] .term-prompt,
-    [data-theme="dark"] .term-sep,
-    [data-theme="dark"] .term-call-row.sep {
+    [data-theme="dark"] .term-prompt {
       color: rgba(213, 138, 171, 0.54);
+    }
+    [data-theme="dark"] .term-sep::before,
+    [data-theme="dark"] .term-call-row.sep::before {
+      background: linear-gradient(90deg, transparent, rgba(213, 138, 171, 0.24), transparent);
     }
     [data-theme="dark"] .term-exec-bubble {
       background: linear-gradient(180deg, rgba(25, 19, 27, 0.84), rgba(14, 10, 16, 0.82));
@@ -837,8 +873,60 @@
     #settingsNavBtn { --quick-enter-index: 1; }
     #homeNavBtn { --quick-enter-index: 0; }
     .account-btn {
-      width: 30px;
-      height: 30px;
+      width: 32px;
+      height: 32px;
+      color: var(--accent-deep);
+      background:
+        linear-gradient(145deg, rgba(255, 255, 255, 0.78), rgba(255, 238, 247, 0.46)),
+        rgba(255, 245, 250, 0.58);
+      border-color: rgba(255, 196, 220, 0.72);
+      box-shadow:
+        0 10px 24px rgba(120, 55, 82, 0.10),
+        inset 1px 1px 0 rgba(255, 255, 255, 0.78),
+        inset -1px -1px 0 rgba(255, 110, 180, 0.10);
+      backdrop-filter: blur(18px) saturate(150%);
+      -webkit-backdrop-filter: blur(18px) saturate(150%);
+    }
+    .account-btn:hover {
+      color: var(--accent);
+      background:
+        linear-gradient(145deg, rgba(255, 255, 255, 0.88), rgba(255, 229, 242, 0.58)),
+        rgba(255, 245, 250, 0.68);
+      border-color: rgba(255, 255, 255, 0.92);
+      transform: translateY(-2px) scale(1.06);
+      box-shadow:
+        0 16px 34px rgba(120, 55, 82, 0.14),
+        inset 1px 1px 0 rgba(255, 255, 255, 0.86),
+        inset -1px -1px 0 rgba(255, 110, 180, 0.12);
+    }
+    .account-btn:active {
+      transform: translateY(0) scale(0.96);
+      box-shadow:
+        inset 5px 5px 12px rgba(182, 104, 136, 0.12),
+        inset -5px -5px 12px rgba(255, 255, 255, 0.78);
+    }
+    [data-theme="dark"] .account-btn {
+      color: #ffadc9;
+      background:
+        linear-gradient(145deg, rgba(118, 139, 226, 0.035), rgba(28, 21, 30, 0.78) 52%, rgba(255, 111, 172, 0.020)),
+        rgba(20, 15, 22, 0.76);
+      border-color: rgba(255, 176, 211, 0.14);
+      box-shadow:
+        0 12px 28px rgba(0, 0, 0, 0.26),
+        inset 1px 1px 0 rgba(130, 153, 238, 0.032),
+        inset -1px -1px 0 rgba(255, 120, 183, 0.018);
+    }
+    [data-theme="dark"] .account-btn:hover {
+      color: #ffd4e4;
+      background:
+        linear-gradient(145deg, rgba(124, 145, 232, 0.050), rgba(36, 27, 38, 0.88) 52%, rgba(255, 111, 172, 0.030)),
+        rgba(28, 21, 30, 0.88);
+      border-color: rgba(255, 137, 190, 0.24);
+      box-shadow:
+        0 16px 36px rgba(0, 0, 0, 0.30),
+        -5px -6px 18px rgba(118, 139, 226, 0.018),
+        7px 9px 22px rgba(255, 107, 166, 0.020),
+        inset 1px 1px 0 rgba(130, 153, 238, 0.036);
     }
 
     .header-decos {
@@ -1478,7 +1566,10 @@
       left: 0; right: 0; bottom: 0;
       z-index: 5;
       padding: 14px 20px 22px;
-      background: rgba(255,245,249,0.95);
+      background:
+        linear-gradient(180deg, rgba(255, 245, 249, 0), rgba(255, 240, 247, 0.26) 44%, rgba(255, 238, 246, 0.38));
+      backdrop-filter: blur(14px) saturate(145%);
+      -webkit-backdrop-filter: blur(14px) saturate(145%);
       pointer-events: none;
     }
 
@@ -1486,22 +1577,31 @@
       max-width: 780px;
       margin: 0 auto;
       pointer-events: auto;
-      background: var(--surface);
-      border: 1.5px solid var(--border);
+      background: var(--ios-glass);
+      border: 1.5px solid var(--ios-border);
       border-radius: 999px;
       padding: 5px 5px 5px 20px;
       display: flex;
 	      align-items: center;
       gap: 8px;
-	      transition: border-color 0.24s ease, box-shadow 0.24s ease, transform 0.24s var(--ease-smooth);
-	      box-shadow: 0 3px 20px rgba(255,110,180,0.09);
+      transition: border-color 0.24s ease, box-shadow 0.24s ease, transform 0.24s var(--ease-smooth);
+      box-shadow:
+        var(--ios-shadow),
+        inset 1px 1px 0 rgba(255, 255, 255, 0.54),
+        inset -1px -1px 0 rgba(255, 110, 180, 0.060);
+      backdrop-filter: blur(26px) saturate(165%);
+      -webkit-backdrop-filter: blur(26px) saturate(165%);
 	      transform-origin: bottom center;
 	      animation: inputBoxRise 0.74s var(--ease-glide) 0.42s both;
 	      will-change: opacity, translate, scale;
 	    }
 	    .input-box:focus-within {
-	      border-color: var(--accent);
-	      box-shadow: 0 0 0 4px rgba(255,110,180,0.12), 0 3px 20px rgba(255,110,180,0.12);
+	      border-color: rgba(255, 110, 180, 0.42);
+	      box-shadow:
+	        0 0 0 4px rgba(255, 110, 180, 0.10),
+	        0 22px 52px rgba(120, 55, 82, 0.14),
+	        inset 1px 1px 0 rgba(255, 255, 255, 0.58),
+	        inset -1px -1px 0 rgba(255, 110, 180, 0.075);
 	      transform: translateY(-2px);
 	    }
 
@@ -1527,7 +1627,9 @@
     #input::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 
     #sendBtn {
-      background: var(--gradient);
+      background:
+        linear-gradient(145deg, rgba(255, 148, 199, 0.92), rgba(216, 92, 149, 0.86)),
+        rgba(255, 110, 180, 0.62);
       color: #fff;
       border: none;
       border-radius: 50%;
@@ -1543,7 +1645,9 @@
                   opacity 0.2s ease;
       flex-shrink: 0;
 	      align-self: center;
-      box-shadow: 0 2px 10px rgba(255,110,180,0.28);
+      box-shadow:
+        0 8px 20px rgba(255, 110, 180, 0.24),
+        inset 1px 1px 0 rgba(255, 255, 255, 0.34);
     }
     #sendBtn .icon {
       width: 18px;
@@ -1568,7 +1672,9 @@
 	    }
     #sendBtn:hover:not(:disabled) {
       transform: scale(1.08);
-      box-shadow: 0 4px 16px rgba(255,110,180,0.42);
+      box-shadow:
+        0 12px 26px rgba(255, 110, 180, 0.32),
+        inset 1px 1px 0 rgba(255, 255, 255, 0.42);
     }
     #sendBtn:active:not(:disabled) { transform: scale(0.94); }
     #sendBtn:disabled { opacity: 0.35; cursor: not-allowed; transform: none; box-shadow: none; }
@@ -1580,9 +1686,9 @@
       flex-shrink: 0;
     }
     .time-btn {
-      background: var(--surface-2);
+      background: var(--ios-glass-strong);
       color: var(--text-dim);
-      border: 1.5px solid var(--border);
+      border: 1.5px solid var(--ios-border);
       border-radius: 999px;
       min-width: 40px;
       height: 40px;
@@ -1602,16 +1708,26 @@
                   color 0.2s ease,
                   background 0.2s ease,
                   box-shadow 0.2s ease;
-      box-shadow: 0 2px 10px rgba(255, 110, 180, 0.12);
+      box-shadow:
+        0 8px 18px rgba(120, 55, 82, 0.06),
+        inset 1px 1px 0 rgba(255, 255, 255, 0.52),
+        inset -1px -1px 0 rgba(255, 110, 180, 0.055);
+      backdrop-filter: blur(18px) saturate(150%);
+      -webkit-backdrop-filter: blur(18px) saturate(150%);
     }
     .time-btn:hover {
       border-color: var(--accent-2);
       color: var(--accent-deep);
       transform: translateY(-1px);
+      background: rgba(255, 250, 253, 0.88);
+      box-shadow:
+        0 10px 22px rgba(120, 55, 82, 0.08),
+        inset 1px 1px 0 rgba(255, 255, 255, 0.62),
+        inset -1px -1px 0 rgba(255, 110, 180, 0.070);
     }
     .time-btn.on {
       background: rgba(255, 110, 180, 0.10);
-      border-color: var(--accent-2);
+      border-color: rgba(255, 110, 180, 0.36);
       color: var(--accent-deep);
     }
 	    .time-panel {
@@ -1928,9 +2044,9 @@
     }
 
     .file-btn {
-      background: var(--surface-2);
+      background: var(--ios-glass-strong);
       color: var(--text-dim);
-      border: 1.5px solid var(--border);
+      border: 1.5px solid var(--ios-border);
       border-radius: 999px;
       min-width: 40px;
       height: 40px;
@@ -1949,16 +2065,26 @@
                   color 0.2s ease,
                   background 0.2s ease,
                   box-shadow 0.2s ease;
-      box-shadow: 0 2px 10px rgba(255, 110, 180, 0.12);
+      box-shadow:
+        0 8px 18px rgba(120, 55, 82, 0.06),
+        inset 1px 1px 0 rgba(255, 255, 255, 0.52),
+        inset -1px -1px 0 rgba(255, 110, 180, 0.055);
+      backdrop-filter: blur(18px) saturate(150%);
+      -webkit-backdrop-filter: blur(18px) saturate(150%);
     }
     .file-btn:hover {
       border-color: var(--accent-2);
       color: var(--accent-deep);
       transform: translateY(-1px);
+      background: rgba(255, 250, 253, 0.88);
+      box-shadow:
+        0 10px 22px rgba(120, 55, 82, 0.08),
+        inset 1px 1px 0 rgba(255, 255, 255, 0.62),
+        inset -1px -1px 0 rgba(255, 110, 180, 0.070);
     }
     .file-btn.has-file {
       background: rgba(255,110,180,0.10);
-      border-color: var(--accent-2);
+      border-color: rgba(255, 110, 180, 0.36);
       color: var(--accent-deep);
     }
     .file-btn .icon { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; display: block; }
@@ -1977,10 +2103,15 @@
     .hint .hint-inner {
       display: inline-block;
       padding: 4px 12px;
-      background: rgba(255,255,255,0.72);
-      border: 1px solid var(--border);
+      background: var(--ios-glass);
+      border: 1px solid var(--ios-border);
       border-radius: 999px;
-      box-shadow: 0 1px 4px rgba(61,31,47,0.04);
+      box-shadow:
+        0 8px 18px rgba(120, 55, 82, 0.055),
+        inset 1px 1px 0 rgba(255, 255, 255, 0.50),
+        inset -1px -1px 0 rgba(255, 110, 180, 0.050);
+      backdrop-filter: blur(18px) saturate(155%);
+      -webkit-backdrop-filter: blur(18px) saturate(155%);
     }
     .hint kbd {
       display: inline-block;
@@ -2171,11 +2302,20 @@
     }
     .term-call-row { display: block; }
     .term-call-row.sep {
-      color: rgba(190, 24, 93, 0.45);
-      text-align: center;
+      display: flex;
+      align-items: center;
+      width: 100%;
       user-select: none;
-      letter-spacing: 0.5px;
       padding-top: 2px;
+      min-height: 8px;
+    }
+    .term-call-row.sep::before {
+      content: "";
+      display: block;
+      width: 100%;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, rgba(190, 24, 93, 0.28), transparent);
+      border-radius: 999px;
     }
     .term-out-row { display: block; }
     .term-out-row .term-out { display: block; }
@@ -2190,15 +2330,23 @@
     .term-out.info { color: #2563eb; font-weight: 600; }
     .term-out.dim { color: #94a3b8; }
     .term-sep {
-      color: rgba(190, 24, 93, 0.45);
-      text-align: center;
+      display: flex;
+      align-items: center;
       user-select: none;
-      letter-spacing: 0.5px;
       background: transparent;
       border: none;
       box-shadow: none;
       padding: 3px 0;
       margin: 2px 0 4px;
+      min-height: 8px;
+    }
+    .term-sep::before {
+      content: "";
+      display: block;
+      width: 100%;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, rgba(190, 24, 93, 0.28), transparent);
+      border-radius: 999px;
     }
 
 	    .records-mask {
@@ -2248,16 +2396,27 @@
       align-items: center;
       justify-content: space-between;
       gap: 8px;
+      min-width: 0;
     }
     .records-head h3 {
       font-size: 14px;
       font-weight: 700;
       color: var(--text);
+      flex: 0 0 auto;
+      white-space: nowrap;
     }
     .records-actions {
       display: flex;
       gap: 6px;
+      min-width: 0;
+      max-width: 100%;
+      overflow-x: auto;
+      overflow-y: hidden;
+      overscroll-behavior-x: contain;
+      scrollbar-width: none;
+      -webkit-overflow-scrolling: touch;
     }
+    .records-actions::-webkit-scrollbar { display: none; }
     .records-actions button {
       border: 1.5px solid var(--border);
       background: var(--surface);
@@ -2272,6 +2431,8 @@
       align-items: center;
       justify-content: center;
       line-height: 1;
+      white-space: nowrap;
+      flex: 0 0 auto;
     }
     .records-actions button:disabled {
       opacity: 0.55;
@@ -2403,7 +2564,9 @@
 	      position: fixed;
 	      inset: 0;
 	      z-index: 350;
-	      background: rgba(0,0,0,0.35);
+	      background:
+	        radial-gradient(circle at 48% 40%, rgba(255, 196, 220, 0.20), transparent 34%),
+	        rgba(61, 31, 47, 0.22);
 	      align-items: center;
 	      justify-content: center;
 	      opacity: 0;
@@ -2419,13 +2582,21 @@
 	      -webkit-backdrop-filter: blur(6px);
 	    }
 	    .account-card {
-	      background: var(--surface);
-	      border: 1.5px solid var(--border);
-	      border-radius: 16px;
-	      padding: 18px 20px;
-	      min-width: 240px;
-	      max-width: 320px;
-	      box-shadow: 0 12px 32px rgba(255,110,180,0.14);
+	      background:
+	        linear-gradient(145deg, rgba(255, 255, 255, 0.36), rgba(255, 238, 247, 0.18)),
+	        rgba(255, 238, 246, 0.42);
+	      border: 1.5px solid rgba(246, 201, 218, 0.54);
+	      border-radius: 24px;
+	      padding: 18px;
+	      min-width: 268px;
+	      max-width: 340px;
+	      box-shadow:
+	        0 20px 60px rgba(255, 110, 180, 0.14),
+	        0 4px 20px rgba(0, 0, 0, 0.05),
+	        inset 1px 1px 0 rgba(255, 255, 255, 0.46),
+	        inset -1px -1px 0 rgba(255, 110, 180, 0.075);
+	      backdrop-filter: blur(26px) saturate(160%);
+	      -webkit-backdrop-filter: blur(26px) saturate(160%);
 	      opacity: 0;
 	      transform: translateY(18px) scale(0.92);
 	      transition: transform 0.38s var(--ease-out-terminal), opacity 0.28s ease;
@@ -2440,32 +2611,47 @@
 	      transform: translateY(18px) scale(0.92);
 	    }
     .account-card h3 {
-      margin: 0 0 10px;
+      margin: 0 0 12px;
       font-size: 15px;
       font-weight: 800;
       color: var(--text);
+      letter-spacing: 0.2px;
     }
     .account-list {
       display: flex;
       flex-direction: column;
-      gap: 4px;
+      gap: 7px;
       max-height: 260px;
       overflow-y: auto;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(255, 110, 180, 0.32) transparent;
+    }
+    .account-list::-webkit-scrollbar { width: 6px; }
+    .account-list::-webkit-scrollbar-thumb {
+      background: rgba(255, 110, 180, 0.32);
+      border-radius: 999px;
     }
     .account-item {
       display: flex;
       align-items: center;
-      gap: 8px;
-      padding: 8px 10px;
-      border-radius: 10px;
+      gap: 9px;
+      padding: 9px 11px;
+      border-radius: 14px;
       cursor: pointer;
       font-size: 12px;
       font-weight: 700;
       color: var(--text);
-      border: 1.5px solid transparent;
+      background: rgba(255, 245, 250, 0.38);
+      border: 1.5px solid rgba(246, 201, 218, 0.46);
+      box-shadow: inset 1px 1px 0 rgba(255, 255, 255, 0.38);
+      min-height: 38px;
 	      opacity: 0;
 	      transform: translateY(10px) scale(0.96);
-	      transition: transform 0.18s ease, background 0.18s ease, border-color 0.18s ease, color 0.18s ease;
+	      transition: transform 0.18s ease,
+	                  background 0.18s ease,
+	                  border-color 0.18s ease,
+	                  color 0.18s ease,
+	                  box-shadow 0.18s ease;
 	    }
 	    .account-popup.show .account-item {
 	      animation: fadeScaleIn 0.26s var(--ease-spring) both;
@@ -2474,9 +2660,12 @@
 	      animation: accountItemOut 0.22s var(--ease-out-terminal) both;
 	    }
     .account-item:hover {
-      background: var(--surface-2);
-      border-color: var(--border);
-      transform: translateX(2px);
+      background: rgba(255, 255, 255, 0.50);
+      border-color: rgba(255, 150, 200, 0.42);
+      transform: translateX(2px) translateY(-1px);
+      box-shadow:
+        0 8px 18px rgba(120, 55, 82, 0.08),
+        inset 1px 1px 0 rgba(255, 255, 255, 0.50);
     }
 	    .account-popup.show .account-item:nth-child(1) { animation-delay: 0.05s; }
 	    .account-popup.show .account-item:nth-child(2) { animation-delay: 0.085s; }
@@ -2491,17 +2680,56 @@
 	      100% { opacity: 0; transform: translateY(8px) scale(0.96); filter: blur(3px); }
 	    }
     .account-item.active {
-      background: rgba(255,110,180,0.08);
-      border-color: var(--accent-2);
+      background: rgba(255, 110, 180, 0.10);
+      border-color: rgba(255, 110, 180, 0.36);
       color: var(--accent-deep);
     }
     .account-item .dot {
       width: 8px; height: 8px;
       border-radius: 50%;
       flex-shrink: 0;
+      box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.52);
     }
     .account-item .dot.on { background: #22c55e; }
     .account-item .dot.off { background: var(--text-faint); }
+    [data-theme="dark"] .account-popup {
+      background:
+        radial-gradient(circle at 48% 40%, rgba(216, 92, 149, 0.13), transparent 34%),
+        rgba(5, 4, 7, 0.62);
+    }
+    [data-theme="dark"] .account-card {
+      background:
+        linear-gradient(145deg, rgba(118, 139, 226, 0.024), rgba(18, 14, 20, 0.58) 48%, rgba(255, 111, 172, 0.012)),
+        rgba(18, 14, 20, 0.62);
+      border-color: rgba(255, 176, 211, 0.13);
+      box-shadow:
+        0 28px 64px rgba(0, 0, 0, 0.42),
+        -8px -10px 26px rgba(118, 139, 226, 0.018),
+        10px 13px 32px rgba(255, 107, 166, 0.016),
+        inset 1px 1px 0 rgba(130, 153, 238, 0.030),
+        inset -1px -1px 0 rgba(255, 120, 183, 0.014);
+    }
+    [data-theme="dark"] .account-item {
+      background: rgba(30, 23, 32, 0.40);
+      border-color: rgba(255, 176, 211, 0.09);
+      box-shadow: inset 1px 1px 0 rgba(130, 153, 238, 0.020);
+    }
+    [data-theme="dark"] .account-item:hover {
+      background: rgba(42, 32, 44, 0.58);
+      border-color: rgba(255, 137, 190, 0.18);
+      color: #ffd4e4;
+      box-shadow:
+        0 12px 28px rgba(0, 0, 0, 0.24),
+        inset 1px 1px 0 rgba(130, 153, 238, 0.026);
+    }
+    [data-theme="dark"] .account-item.active {
+      background: rgba(216, 92, 149, 0.14);
+      border-color: rgba(255, 137, 190, 0.24);
+      color: #ffadc9;
+    }
+    [data-theme="dark"] .account-item .dot {
+      box-shadow: 0 0 0 3px rgba(255, 176, 211, 0.08);
+    }
 
 	    .config-overlay {
 	      display: flex;
@@ -2997,6 +3225,7 @@
   let importedFiles = [];
   const FILE_LIST_MAX_HEIGHT = 200;
   const SESSION_KEY = "tinda_active_session_id";
+  const DRAFT_SESSION_PREFIX = "draft_";
   const TERM_WIDTH_KEY = "tinda_term_width";
   const STREAM_ENABLED_KEY = "tinda_stream_enabled";
   const TIME_MODE_KEY = "tinda_time_mode";
@@ -3075,6 +3304,31 @@
     return fetch(url, opts);
   }
 
+  function getSessionStorageKey() {
+    const uid = String(userMeta?.uid || "").trim();
+    return uid && uid !== "N/A" ? `${SESSION_KEY}:${uid}` : SESSION_KEY;
+  }
+
+  function getStoredSessionId() {
+    return String(localStorage.getItem(getSessionStorageKey()) || "").trim();
+  }
+
+  function setStoredSessionId(sessionId) {
+    const sid = String(sessionId || "").trim();
+    if (!sid) return;
+    localStorage.setItem(getSessionStorageKey(), sid);
+    localStorage.setItem(SESSION_KEY, sid);
+  }
+
+  function clearStoredSessionId() {
+    localStorage.removeItem(getSessionStorageKey());
+    localStorage.removeItem(SESSION_KEY);
+  }
+
+  function isDraftSessionId(sessionId) {
+    return String(sessionId || "").startsWith(DRAFT_SESSION_PREFIX);
+  }
+
   let termInitialized = false;
   let termOpen = false;
   let termWidth   = 320;
@@ -3134,6 +3388,7 @@
   const TERM_FLUSH_BATCH = 120;
   const CHAT_BOOT_MIN_MS = 1000;
   const CHAT_LOADING_FADE_MS = 500;
+  const CHAT_SESSION_LOADING_MIN_MS = 520;
   const INPUT_PLACEHOLDER_DEFAULT = "跟 Tinda 说说话吧 ...";
   const INPUT_PLACEHOLDER_CONFIRM_LOCK = "存在待确认终端命令，请先在弹窗中允许/拒绝";
   let termPersistBuffer = [];
@@ -3167,6 +3422,32 @@
       requestAnimationFrame(() => {
         document.body.classList.remove("chat-booting", "chat-loading-leaving");
         document.body.classList.add("chat-ready");
+      });
+    });
+  }
+
+  function startChatSessionLoading() {
+    document.body.classList.remove("chat-ready", "chat-loading-leaving");
+    document.body.classList.add("chat-booting");
+    requestAnimationFrame(() => {
+      document.body.classList.add("chat-loading-visible");
+    });
+  }
+
+  async function releaseChatSessionLoading(startedAt = performance.now()) {
+    if (!document.body.classList.contains("chat-booting")) return;
+    const elapsed = performance.now() - startedAt;
+    await sleep(CHAT_SESSION_LOADING_MIN_MS - elapsed);
+    document.body.classList.remove("chat-loading-visible");
+    document.body.classList.add("chat-loading-leaving");
+    await sleep(CHAT_LOADING_FADE_MS);
+    await new Promise((resolve) => {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          document.body.classList.remove("chat-booting", "chat-loading-leaving");
+          document.body.classList.add("chat-ready");
+          resolve();
+        });
       });
     });
   }
@@ -3293,7 +3574,7 @@
 
   async function refreshContextUsageLength(sessionId = getSessionId()) {
     const sid = String(sessionId || "").trim();
-    if (!sid) {
+    if (!sid || isDraftSessionId(sid)) {
       statusContextUsageLength = 0;
       renderHeaderStatus();
       return;
@@ -3940,92 +4221,139 @@
   function genSessionId() {
     return "s_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 10);
   }
+  function genDraftSessionId() {
+    return DRAFT_SESSION_PREFIX + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 8);
+  }
   function getSessionId() {
-    let sid = localStorage.getItem(SESSION_KEY);
-    if (!sid) { sid = genSessionId(); localStorage.setItem(SESSION_KEY, sid); }
-    return sid;
+    return getStoredSessionId();
   }
   function rotateSessionId() {
     const sid = genSessionId();
-    localStorage.setItem(SESSION_KEY, sid);
+    setStoredSessionId(sid);
     return sid;
   }
 
+  function enterDraftSession({ title = "新会话", clearTerminal = true } = {}) {
+    clearActiveSessionState({ title });
+    clearChatSessionView({ showEmpty: true, clearTerminal });
+    activeSessionTitle = title;
+    renderHeaderStatus();
+  }
+
+  function createDraftSessionId() {
+    const sid = genDraftSessionId();
+    setStoredSessionId(sid);
+    activeSessionTitle = "新会话";
+    statusContextUsageLength = 0;
+    renderHeaderStatus();
+    return sid;
+  }
+
+  function clearChatSessionView({ showEmpty = true, clearTerminal = true } = {}) {
+    stopToolPolling();
+    toolLastSeq = 0;
+    processedTerminalSeq.clear();
+    toolPollPausedByError = false;
+    toolPollInFlight = false;
+    resetStageActive = false;
+    clearPinnedSpacer();
+    resetAssistantTurnBubbleMap();
+    clearPendingConfirm();
+    if (messagesEl) {
+      delete messagesEl.dataset.hydrating;
+      messagesEl.innerHTML = "";
+    }
+    if (clearTerminal) clearTerm();
+    if (showEmpty) showEmptyState();
+    if (messagesWrap) messagesWrap.scrollTop = 0;
+  }
+
+  function clearActiveSessionState({ title = "无会话" } = {}) {
+    clearStoredSessionId();
+    apiFetch("/web-settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ last_session_id: "" }),
+    }).catch(() => {});
+    activeSessionTitle = title;
+    statusContextUsageLength = 0;
+    renderHeaderStatus();
+  }
+
+  async function withChatSessionLoading(action, { keepRecordsPanel = false } = {}) {
+    const shouldReopenRecords = !!keepRecordsPanel && !!recordsPanelOpen;
+    const startedAt = performance.now();
+    startChatSessionLoading();
+    await sleep(60);
+    try {
+      if (typeof action === "function") {
+        await action();
+      }
+    } finally {
+      await releaseChatSessionLoading(startedAt);
+      if (shouldReopenRecords) openRecordsPanel();
+    }
+  }
+
   async function ensureActiveSession() {
-    // Check web-settings for restore_last_session policy
+    let sid = getStoredSessionId();
+    if (!sid || isDraftSessionId(sid)) {
+      sid = createDraftSessionId();
+    }
+    return sid;
+  }
+
+  async function restoreExistingSessionForBoot() {
+    let sid = getStoredSessionId();
+    if (isDraftSessionId(sid)) {
+      clearStoredSessionId();
+      sid = "";
+    }
+
     let restoreEnabled = false;
     let serverLastSid = "";
     try {
       const wr = await apiFetch("/web-settings");
       if (wr.ok) {
         const ws = await wr.json();
-        if (ws?.restore_last_session && ws?.last_session_id) {
-          restoreEnabled = true;
-          serverLastSid = String(ws.last_session_id).trim();
-        }
+        restoreEnabled = !!ws?.restore_last_session;
+        serverLastSid = String(ws?.last_session_id || "").trim();
       }
     } catch {}
 
-    let sid = String(localStorage.getItem(SESSION_KEY) || "").trim();
+    const candidate = restoreEnabled && serverLastSid ? serverLastSid : sid;
+    if (!candidate) return "";
 
-    // If restore is enabled and server has a saved session, prefer it
-    if (restoreEnabled && serverLastSid) {
-      try {
-        const res = await apiFetch("/sessions?limit=500&offset=0");
-        if (res.ok) {
-          const data = await res.json();
-          const list = Array.isArray(data?.sessions) ? data.sessions : [];
-          const found = list.find((x) => String(x?.id || "") === serverLastSid);
-          if (found) {
-            sid = serverLastSid;
-          }
-        }
-      } catch {}
+    try {
+      const res = await apiFetch("/sessions?limit=500&offset=0");
+      if (!res.ok) return "";
+      const data = await res.json();
+      const list = Array.isArray(data?.sessions) ? data.sessions : [];
+      const found = list.find((x) => String(x?.id || "") === candidate);
+      if (!found) {
+        if (candidate === sid) clearStoredSessionId();
+        return "";
+      }
+      setActiveSession(candidate, { title: String(found.title || "新对话"), silent: true });
+      return candidate;
+    } catch {
+      return "";
     }
+  }
 
-    if (sid) {
-      try {
-        const res = await apiFetch("/sessions?limit=500&offset=0");
-        if (res.ok) {
-          const data = await res.json();
-          const list = Array.isArray(data?.sessions) ? data.sessions : [];
-          const found = list.find((x) => String(x?.id || "") === sid);
-          if (!found) {
-            localStorage.removeItem(SESSION_KEY);
-            sid = "";
-          }
-        }
-      } catch {
-        // 网络不通时保留本地 ID，不做清除
-      }
-    }
-    if (!sid) {
-      try {
-        const currentInStore = String(localStorage.getItem(SESSION_KEY) || "").trim();
-        const res = await apiFetch("/sessions", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            title: "新对话",
-            current_session_id: currentInStore || undefined,
-            reuse_if_current_empty: true,
-          }),
-        });
-        const data = await res.json();
-        sid = String(data?.session?.id || "").trim();
-      } catch {
-        sid = "";
-      }
-      if (!sid) sid = genSessionId();
-      localStorage.setItem(SESSION_KEY, sid);
-    }
+  async function ensureSessionForUserMessage() {
+    const existing = String(getStoredSessionId() || "").trim();
+    if (existing && !isDraftSessionId(existing)) return existing;
+
+    const sid = genSessionId();
+    setActiveSession(sid, { title: "新对话", silent: true });
     return sid;
   }
 
   function setActiveSession(sessionId, { title = "新对话", silent = false } = {}) {
     const sid = String(sessionId || "").trim();
     if (!sid) return;
-    localStorage.setItem(SESSION_KEY, sid);
+    setStoredSessionId(sid);
     // Notify server of last session for restore-later feature
     apiFetch("/web-settings", {
       method: "PUT",
@@ -4034,7 +4362,7 @@
     }).catch(() => {});
     activeSessionTitle = String(title || "新对话");
     renderHeaderStatus();
-    refreshContextUsageLength(sid).catch(() => {});
+    if (!isDraftSessionId(sid)) refreshContextUsageLength(sid).catch(() => {});
     if (!silent) showToast(`已切换会话：${activeSessionTitle}`);
     toolLastSeq = 0;
     processedTerminalSeq.clear();
@@ -4237,7 +4565,7 @@
       const messageCount = Number(item?.message_count || 0);
       const node = document.createElement("div");
       node.className = "record-item";
-      if (recordId === getSessionId()) node.classList.add("active");
+      if (recordId === getStoredSessionId()) node.classList.add("active");
       node.innerHTML = `
         <div class="record-item-title">${escapeHtml(String(item?.title || "新对话"))}</div>
         <div class="record-item-meta">
@@ -4251,13 +4579,33 @@
       btn.type = "button";
       btn.textContent = "切换";
       btn.addEventListener("click", async () => {
-        setActiveSession(recordId, { title: String(item?.title || "新对话") });
-        await loadCurrentSessionRecord();
-        closeRecordsPanel();
+        btn.disabled = true;
+        try {
+          await switchSessionFromPanel(recordId, String(item?.title || "新对话"));
+        } finally {
+          btn.disabled = false;
+        }
       });
       node.appendChild(btn);
       recordsListEl.appendChild(node);
     });
+  }
+
+  async function switchSessionFromPanel(sessionId, title = "新对话") {
+    const sid = String(sessionId || "").trim();
+    if (!sid) return;
+    try {
+      await withChatSessionLoading(async () => {
+        setActiveSession(sid, { title, silent: true });
+        clearChatSessionView({ showEmpty: false, clearTerminal: true });
+        await loadCurrentSessionRecord({ sessionId: sid });
+        startToolPolling(sid);
+        await refreshRecords();
+      }, { keepRecordsPanel: true });
+    } catch (e) {
+      reportErrorToTerminal(`切换会话失败：${String(e?.message || e)}`, { source: "session_switch", sessionId: sid });
+      addSystemNotice(`切换会话失败：${String(e?.message || e)}`, { persist: false });
+    }
   }
 
   async function createSessionFromPanel() {
@@ -4266,36 +4614,14 @@
     const createBtn = recordsPanelEl?.querySelector(".records-actions button");
     if (createBtn) createBtn.disabled = true;
     try {
-      const currentId = String(getSessionId() || "").trim();
-      const res = await apiFetch("/sessions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          title: "新对话",
-          current_session_id: currentId,
-          reuse_if_current_empty: true,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok || !data?.session?.id) {
-        throw new Error(String(data?.error || `http ${res.status}`));
-      }
-      const row = data.session;
-      if (data?.reused) {
-        addSystemNotice("当前已是空会话", { pinTop: true, sessionId: currentId || row.id, persist: false });
+      await withChatSessionLoading(async () => {
+        createDraftSessionId();
+        clearChatSessionView({ showEmpty: true, clearTerminal: true });
         await refreshRecords();
-        return;
-      }
-      setActiveSession(row.id, { title: row.title || "新对话", silent: true });
-      showEmptyState();
-      clearTerm();
-      clearPendingConfirm();
-      await refreshRecords();
-      addSystemNotice("已新建会话", { pinTop: true, sessionId: row.id, persist: false });
-      startToolPolling(row.id);
+      }, { keepRecordsPanel: true });
     } catch (e) {
       reportErrorToTerminal(`创建会话失败：${String(e?.message || e)}`, { source: "session_create" });
-      addSystemNotice(`创建会话失败：${String(e?.message || e)}`);
+      addSystemNotice(`创建会话失败：${String(e?.message || e)}`, { persist: false });
     } finally {
       creatingSessionFromPanel = false;
       if (createBtn) createBtn.disabled = false;
@@ -4303,48 +4629,38 @@
   }
 
   async function deleteCurrentSessionFromPanel() {
-    const sid = String(getSessionId() || "").trim();
-    if (!sid) return;
+    const sid = String(getStoredSessionId() || "").trim();
+    if (!sid) {
+      await withChatSessionLoading(async () => {
+        clearActiveSessionState();
+        clearChatSessionView({ showEmpty: true, clearTerminal: true });
+        await refreshRecords();
+      }, { keepRecordsPanel: true });
+      return;
+    }
     try {
-      const res = await apiFetch(`/sessions/${encodeURIComponent(sid)}`, { method: "DELETE" });
-      let data = {};
-      const bodyText = await res.text();
-      if (bodyText) {
-        try {
-          data = JSON.parse(bodyText);
-        } catch {
-          data = { ok: false, error: `HTTP ${res.status} ${bodyText.slice(0, 120)}` };
-        }
-      }
-      if (!res.ok || data?.ok === false) {
-        throw new Error(String(data?.error || `http ${res.status}`));
-      }
-      await refreshRecords();
-      const next = Array.isArray(sessionsCache) && sessionsCache.length > 0 ? sessionsCache[0] : null;
-      if (next && String(next?.id || "").trim()) {
-        const nextId = String(next.id || "").trim();
-        setActiveSession(nextId, { title: String(next?.title || "新对话"), silent: true });
-        showEmptyState();
-        clearTerm();
-        await loadCurrentSessionRecord();
-        startToolPolling(nextId);
-        addSystemNotice("当前会话已删除，已切换到其他会话", { pinTop: true, sessionId: nextId, persist: false });
-      } else {
-        localStorage.removeItem(SESSION_KEY);
-        activeSessionTitle = "无会话";
-        statusContextUsageLength = 0;
-        renderHeaderStatus();
-        toolLastSeq = 0;
-        processedTerminalSeq.clear();
+      await withChatSessionLoading(async () => {
         stopToolPolling();
-        showEmptyState();
-        clearTerm();
-        clearPendingConfirm();
-        addSystemNotice("当前会话已删除", { pinTop: true, sessionId: sid, persist: false });
-      }
+        const res = await apiFetch(`/sessions/${encodeURIComponent(sid)}`, { method: "DELETE" });
+        let data = {};
+        const bodyText = await res.text();
+        if (bodyText) {
+          try {
+            data = JSON.parse(bodyText);
+          } catch {
+            data = { ok: false, error: `HTTP ${res.status} ${bodyText.slice(0, 120)}` };
+          }
+        }
+        if (!res.ok || data?.ok === false) {
+          throw new Error(String(data?.error || `http ${res.status}`));
+        }
+        clearActiveSessionState();
+        clearChatSessionView({ showEmpty: true, clearTerminal: true });
+        await refreshRecords();
+      }, { keepRecordsPanel: true });
     } catch (e) {
       reportErrorToTerminal(`删除会话失败：${String(e?.message || e)}`, { source: "session_delete" });
-      addSystemNotice(`删除会话失败：${String(e?.message || e)}`);
+      addSystemNotice(`删除会话失败：${String(e?.message || e)}`, { persist: false });
     }
   }
 
@@ -4352,35 +4668,28 @@
     if (!confirm("确定要删除全部会话吗？此操作不可撤销。")) return;
 
     try {
-      const res = await apiFetch("/sessions", { method: "DELETE" });
-      let data = {};
-      const bodyText = await res.text();
-      if (bodyText) {
-        try {
-          data = JSON.parse(bodyText);
-        } catch {
-          data = { ok: false, error: `HTTP ${res.status} ${bodyText.slice(0, 120)}` };
+      await withChatSessionLoading(async () => {
+        stopToolPolling();
+        const res = await apiFetch("/sessions", { method: "DELETE" });
+        let data = {};
+        const bodyText = await res.text();
+        if (bodyText) {
+          try {
+            data = JSON.parse(bodyText);
+          } catch {
+            data = { ok: false, error: `HTTP ${res.status} ${bodyText.slice(0, 120)}` };
+          }
         }
-      }
-      if (!res.ok || data?.ok === false) {
-        throw new Error(String(data?.error || `http ${res.status}`));
-      }
-      const count = Number(data?.deleted || 0);
-      localStorage.removeItem(SESSION_KEY);
-      activeSessionTitle = "无会话";
-      statusContextUsageLength = 0;
-      renderHeaderStatus();
-      toolLastSeq = 0;
-      processedTerminalSeq.clear();
-      stopToolPolling();
-      showEmptyState();
-      clearTerm();
-      clearPendingConfirm();
-      await refreshRecords();
-      addSystemNotice(`已删除 ${count} 个会话`, { pinTop: true, persist: false });
+        if (!res.ok || data?.ok === false) {
+          throw new Error(String(data?.error || `http ${res.status}`));
+        }
+        clearActiveSessionState();
+        clearChatSessionView({ showEmpty: true, clearTerminal: true });
+        await refreshRecords();
+      }, { keepRecordsPanel: true });
     } catch (e) {
       reportErrorToTerminal(`删除全部会话失败：${String(e?.message || e)}`, { source: "session_delete_all" });
-      addSystemNotice(`删除全部会话失败：${String(e?.message || e)}`);
+      addSystemNotice(`删除全部会话失败：${String(e?.message || e)}`, { persist: false });
     }
   }
 
@@ -4468,7 +4777,10 @@
   async function loadCurrentSessionRecord({ sessionId = "" } = {}) {
     try {
       let sid = String(sessionId || "").trim();
-      if (!sid) sid = await ensureActiveSession();
+      if (!sid || isDraftSessionId(sid)) {
+        showEmptyState();
+        return false;
+      }
       const res = await apiFetch(`/sessions/${encodeURIComponent(sid)}/messages`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
@@ -5452,6 +5764,8 @@
   async function switchToAccount(uid) {
     if (!uid || uid === String(userMeta.uid || "")) { hideAccountPopup(); return; }
     try {
+      stopToolPolling();
+      clearPendingConfirm();
       const res = await fetch("/auth/local-login", {
         method: "POST",
         headers: {"Content-Type":"application/json"},
@@ -5463,7 +5777,13 @@
       if (!token) throw new Error("本机登录未返回 token");
       setAuthToken(token);
       applyUserMeta(data?.user || {});
-      addSystemNotice(`已切换账户：${userMeta.name} (${userMeta.uid})`, {persist:false});
+      const sid = await restoreExistingSessionForBoot();
+      if (sid) {
+        await loadCurrentSessionRecord({ sessionId: sid });
+        startToolPolling(sid);
+      } else {
+        enterDraftSession({ title: "新会话", clearTerminal: true });
+      }
       showToast("账户已切换");
       hideAccountPopup();
       await loadAccountList();
@@ -5494,6 +5814,19 @@
       const params = new URLSearchParams({ after_seq: String(toolLastSeq), limit: "200" });
       const res = await apiFetch(`/sessions/${encodeURIComponent(sid)}/tool-events?${params.toString()}`);
       if (!res.ok) {
+        if (res.status === 401 || res.status === 403 || res.status === 404) {
+          stopToolPolling();
+          if (sid === getStoredSessionId()) {
+            clearStoredSessionId();
+            activeSessionTitle = "无会话";
+            statusContextUsageLength = 0;
+            renderHeaderStatus();
+          }
+          if (res.status === 403 || res.status === 404) {
+            showToast("当前会话不可访问，已停止工具事件轮询", "warn");
+          }
+          return;
+        }
         throw new Error(`HTTP ${res.status}`);
       }
       const data = await res.json();
@@ -5621,7 +5954,7 @@
     stopToolPolling();
     toolPollPausedByError = false;
     const sid = String(sessionId || getSessionId()).trim();
-    if (!sid) return;
+    if (!sid || isDraftSessionId(sid)) return;
     pollToolEventsOnce(sid);
     toolPollTimer = setInterval(() => {
       pollToolEventsOnce(sid);
@@ -5629,7 +5962,11 @@
   }
 
   async function compressCurrentContext() {
-    const sid = await ensureActiveSession();
+    const sid = String(getSessionId() || "").trim();
+    if (!sid || isDraftSessionId(sid)) {
+      showToast("当前是草稿会话，发送消息后再压缩上下文", "warn");
+      return;
+    }
     try {
       const res = await apiFetch(`/sessions/${encodeURIComponent(sid)}/compress`, { method: "POST" });
       const data = await res.json();
@@ -5669,7 +6006,7 @@
       localStorage.setItem("tinda_settings", JSON.stringify(gs));
     } catch (_) {}
     const sid = getSessionId();
-    if (sid) {
+    if (sid && !isDraftSessionId(sid)) {
       try {
         const res = await apiFetch(`/sessions/${encodeURIComponent(sid)}/config`, {
           method: "PATCH",
@@ -5704,7 +6041,9 @@
     const fileBackup = hasFile ? importedFiles.slice() : null;
     const file_names = hasFile ? importedFiles.map(function(f) { return f.name; }) : [];
     const file_contents = hasFile ? importedFiles.map(function(f) { return f.content; }) : [];
-    const sid = await ensureActiveSession();
+    const previousSid = String(getStoredSessionId() || "").trim();
+    const sid = await ensureSessionForUserMessage();
+    const createdForThisMessage = !previousSid || isDraftSessionId(previousSid);
 
     await ensureUserMetaLoaded();
 
@@ -5763,8 +6102,11 @@
         const decoder = new TextDecoder("utf-8");
         let buffer = "";
         let streamText = "";
+        let streamSegmentStart = 0;
         let streamReasoning = "";
         let donePayload = null;
+        const startedToolCallIds = new Set();
+        const completedToolCallIds = new Set();
 
         while (true) {
           const { value, done } = await reader.read();
@@ -5794,6 +6136,7 @@
                 if (streamText && !streamText.endsWith("\n\n")) streamText += "\n";
                 streamText += "> " + streamReasoning.split("\n").join("\n> ") + "\n\n";
                 streamReasoning = "";
+                streamSegmentStart = streamText.length;
               }
               streamText += String(payload.content || "");
               if (renderDelta && streamBot) {
@@ -5810,14 +6153,45 @@
                 streamBot.bubble.innerHTML = renderMarkdown(cur);
                 scrollToBottom();
               }
-            } else if (eventName === "reset") {
+            } else if (eventName === "replace_segment") {
+              const replaceStart = streamSegmentStart;
               if (streamReasoning) {
                 if (streamText && !streamText.endsWith("\n\n")) streamText += "\n";
                 streamText += "> " + streamReasoning.split("\n").join("\n> ") + "\n\n";
                 streamReasoning = "";
               }
-              const marker = `> >_<\n> --调用工具中--\n`;
-              streamText += "\n\n" + marker;
+              const cleanSegment = String(payload.content || "");
+              streamText = streamText.slice(0, replaceStart) + cleanSegment;
+              streamSegmentStart = streamText.length;
+              if (renderDelta && streamBot) {
+                streamBot.bubble.dataset.rawMd = streamText;
+                streamBot.bubble.innerHTML = renderMarkdown(streamText);
+                scrollToBottom();
+              }
+            } else if (eventName === "tool_call_start") {
+              if (streamReasoning) {
+                if (streamText && !streamText.endsWith("\n\n")) streamText += "\n";
+                streamText += "> " + streamReasoning.split("\n").join("\n> ") + "\n\n";
+                streamReasoning = "";
+              }
+              const calls = Array.isArray(payload.calls) ? payload.calls : [];
+              const lines = [];
+              calls.forEach(function(call) {
+                if (!call || typeof call !== "object") return;
+                const name = call.agent_tool || "unknown";
+                const cid = String(call.tool_call_id || "").replace("tc_", "");
+                const dedupeKey = String(call.tool_call_id || name || "").trim();
+                if (dedupeKey && startedToolCallIds.has(dedupeKey)) return;
+                if (dedupeKey) startedToolCallIds.add(dedupeKey);
+                const line = "> **准备调用工具**: " + name + (cid ? " #" + cid : "") + "\n";
+                lines.push(line);
+              });
+              if (lines.length > 0) {
+                if (streamText && !streamText.endsWith("\n\n")) streamText += "\n\n";
+                streamText += `> >_<\n> --调用工具中--\n`;
+                streamText += lines.join("");
+              }
+              streamSegmentStart = streamText.length;
               if (renderDelta && streamBot) {
                 streamBot.bubble.dataset.rawMd = streamText;
                 streamBot.bubble.innerHTML = renderMarkdown(streamText);
@@ -5831,8 +6205,12 @@
                   if (!step || typeof step !== "object") return;
                   var name = step.agent_tool || "unknown";
                   var cid = (step.call_id || "").replace("tc_", "");
+                  var doneKey = String(step.call_id || step.tool_call_id || name || "").trim();
+                  if (doneKey && completedToolCallIds.has(doneKey)) return;
+                  if (doneKey) completedToolCallIds.add(doneKey);
                   streamText += "> **已调用工具**: " + name + (cid ? " #" + cid : "") + "\n";
                 });
+                streamSegmentStart = streamText.length;
                 if (renderDelta && streamBot) {
                   streamBot.bubble.dataset.rawMd = streamText;
                   streamBot.bubble.innerHTML = renderMarkdown(streamText);
@@ -5859,6 +6237,7 @@
               if (streamText && !streamText.endsWith("\n\n")) streamText += "\n";
               streamText += "> " + streamReasoning.split("\n").join("\n> ") + "\n\n";
               streamReasoning = "";
+              streamSegmentStart = streamText.length;
             }
             // Backfill reasoning from done payload (only if no streaming reasoning happened)
             if (!streamText.trim() && donePayload.reasoning_content) {
@@ -5906,11 +6285,14 @@
           }
           if (donePayload.tool_async) {
             startToolPolling(sid);
-          } else if (!renderDelta) {
-            const traced = renderToolTraceToTerminal(donePayload.tool_trace, { sessionId: sid, persist: false });
-            if ((donePayload.tool_steps || 0) > 0 && !traced) {
-              showToast("本轮工具调用没有终端输出", "warn");
+          } else {
+            if (!renderDelta) {
+              const traced = renderToolTraceToTerminal(donePayload.tool_trace, { sessionId: sid, persist: false });
+              if ((donePayload.tool_steps || 0) > 0 && !traced) {
+                showToast("本轮工具调用没有终端输出", "warn");
+              }
             }
+            stopToolPolling();
           }
           const donePendingCount = Math.max(0, Number(donePayload?.pending_confirm_count || 0));
           if (donePendingCount > 0 || donePayload?.pending_confirmation === true) {
@@ -5990,10 +6372,16 @@
       } else {
         reportErrorToTerminal(`请求失败：${errText}`, { source: "chat", sessionId: sid });
         if (!echo) addBubble("请求失败，请确认服务已启动。", "bot");
+        if (createdForThisMessage && String(getStoredSessionId() || "") === sid) {
+          clearActiveSessionState({ title: "新会话" });
+        }
       }
     } finally {
       setMessageSendInFlight(false);
-      refreshContextUsageLength(sid).catch(() => {});
+      if (String(getStoredSessionId() || "") === sid) {
+        refreshContextUsageLength(sid).catch(() => {});
+        refreshRecords().catch(() => {});
+      }
       inputEl.focus();
       removeFile();
     }
@@ -6001,7 +6389,10 @@
 
   async function resetChat() {
     const sid = String(getSessionId() || "").trim();
-    if (!sid) return;
+    if (!sid || isDraftSessionId(sid)) {
+      enterDraftSession({ title: "新会话", clearTerminal: true });
+      return;
+    }
     try {
       const res = await apiFetch("/reset", {
         method: "POST",
@@ -6149,7 +6540,7 @@
     if (s.terminal_open === true) openTerm();
     if (typeof s.token_limit === "number" && s.token_limit >= 100) {
       const sid = getSessionId();
-      if (sid) {
+      if (sid && !isDraftSessionId(sid)) {
         apiFetch(`/sessions/${encodeURIComponent(sid)}/config`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
@@ -6172,15 +6563,13 @@
       await loadAccountList();
       renderQuickButtons();
       await Promise.allSettled([loadModelInfo(), syncAppVersion()]);
-      const sid = await ensureActiveSession();
-      const sessionsRes = await apiFetch(`/sessions?limit=${RECORDS_PAGE_LIMIT}&offset=0`);
-      if (sessionsRes.ok) {
-        const payload = await sessionsRes.json();
-        const first = Array.isArray(payload.sessions) ? payload.sessions.find((x) => String(x?.id || "") === sid) : null;
-        if (first) setActiveSession(sid, { title: String(first.title || "新对话"), silent: true });
+      const sid = await restoreExistingSessionForBoot();
+      if (sid) {
+        await loadCurrentSessionRecord({ sessionId: sid });
+        startToolPolling(sid);
+      } else {
+        enterDraftSession({ title: "新会话", clearTerminal: true });
       }
-      await loadCurrentSessionRecord({ sessionId: sid });
-      startToolPolling(sid);
     } catch (e) {
       if (!shouldReleaseInitialRender) {
         location.href = "/";

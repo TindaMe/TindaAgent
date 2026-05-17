@@ -1,5 +1,6 @@
 import os
 import json
+import html
 import re
 from pathlib import Path
 from typing import Any, Iterator
@@ -94,6 +95,20 @@ def _normalize_tool_call(*, call_id, call_type, function_name, function_argument
     }
 
 
+def _tool_call_preview(call: dict, *, fallback_id: str) -> dict:
+    if not isinstance(call, dict):
+        call = {}
+    fn = call.get("function", {}) if isinstance(call.get("function"), dict) else {}
+    name = str(fn.get("name", "") or "")
+    args = _parse_args(fn.get("arguments", ""))
+    model_id = str(call.get("id", "") or fallback_id)
+    return {
+        "agent_tool": name,
+        "tool_call_id": model_id,
+        "arguments": args,
+    }
+
+
 def _attach_reasoning(msg: dict, text: str) -> dict:
     if text:
         msg["reasoning_content"] = text
@@ -109,15 +124,119 @@ def _build_done(reply, working_msgs, base_len, steps, tool_trace) -> dict:
     }
 
 
+_DSML_TOOL_CALLS_BLOCK_RE = re.compile(
+    r"\s*<[^>]*(?:tool[_\-\u2581]?calls|toolcalls)[^>]*>.*?</[^>]*(?:tool[_\-\u2581]?calls|toolcalls)[^>]*>\s*",
+    flags=re.DOTALL | re.IGNORECASE,
+)
+_DSML_INVOKE_BLOCK_RE = re.compile(
+    r"\s*<[^>]*invoke[^>]*name\s*=\s*(['\"])(.*?)\1[^>]*>.*?</[^>]*invoke[^>]*>\s*",
+    flags=re.DOTALL | re.IGNORECASE,
+)
+_DSML_TOOL_CALLS_TAG_RE = re.compile(
+    r"\s*</?[^>]*(?:tool[_\-\u2581]?calls|toolcalls)[^>]*>\s*",
+    flags=re.IGNORECASE,
+)
+_TOOL_PROTOCOL_START_RE = re.compile(
+    r"<[^>\n]{0,240}(?:dsml|tool[_\-\u2581]?calls|toolcalls|invoke\b)[^>]*>",
+    flags=re.IGNORECASE,
+)
+
+
+def _find_tool_protocol_start(content: str) -> int:
+    text = str(content or "")
+    if not text:
+        return -1
+    match = _TOOL_PROTOCOL_START_RE.search(text)
+    if match:
+        return match.start()
+    lower = text.lower()
+    for marker in ("dsml", "tool_calls", "tool-calls", "toolcalls", "tool▁calls", "invoke"):
+        idx = lower.find(marker)
+        if idx < 0:
+            continue
+        tag_start = text.rfind("<", 0, idx + 1)
+        if tag_start >= 0 and idx - tag_start <= 240:
+            return tag_start
+    return -1
+
+
+def _safe_stream_emit_end(content: str) -> int:
+    """Hold a short partial tag tail so split DSML tags never leak as deltas."""
+    text = str(content or "")
+    if not text:
+        return 0
+    start = _find_tool_protocol_start(text)
+    if start >= 0:
+        return start
+    last_lt = text.rfind("<")
+    last_gt = text.rfind(">")
+    if last_lt > last_gt and len(text) - last_lt <= 240:
+        return last_lt
+    return len(text)
+
+
+def _has_tool_protocol_marker(content: str) -> bool:
+    lower = str(content or "").lower()
+    return (
+        "dsml" in lower
+        or "tool_calls" in lower
+        or "tool-calls" in lower
+        or "toolcalls" in lower
+        or "tool▁calls" in lower
+    )
+
+
+def has_tool_protocol_artifacts(content: str) -> bool:
+    """Return True when assistant text contains known tool-call protocol residue."""
+    text = str(content or "")
+    if not text:
+        return False
+    if not _has_tool_protocol_marker(text):
+        return False
+    if _DSML_TOOL_CALLS_BLOCK_RE.search(text) or _DSML_INVOKE_BLOCK_RE.search(text):
+        return True
+    return "invoke" in text.lower()
+
+
+def _truncate_from_protocol_start(content: str) -> str:
+    text = str(content or "")
+    start = _find_tool_protocol_start(text)
+    if start >= 0:
+        return text[:start]
+    return text
+
+
+def strip_tool_protocol_artifacts(content: str) -> str:
+    """
+    Remove known DeepSeek/DSML tool-call protocol blocks from user-visible text.
+
+    Native tool_calls stay authoritative. This function only prevents fallback
+    protocol text from leaking into chat bubbles, logs and session records.
+    """
+    text = str(content or "")
+    if not text:
+        return ""
+    if not _has_tool_protocol_marker(text):
+        return text
+    cleaned = _DSML_TOOL_CALLS_BLOCK_RE.sub("\n", text)
+    cleaned = _DSML_INVOKE_BLOCK_RE.sub("\n", cleaned)
+    cleaned = _DSML_TOOL_CALLS_TAG_RE.sub("\n", cleaned)
+    if _find_tool_protocol_start(cleaned) >= 0:
+        cleaned = _truncate_from_protocol_start(cleaned)
+    cleaned = re.sub(r"[ \t]+\n", "\n", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
+
+
 def _detect_dsml_tool_calls(content: str, *, prefix: str) -> list[dict]:
     """从文本中提取 DSML 格式的工具调用（DeepSeek 偶发行为兼容）"""
     text = content or ""
     lower = text.lower()
-    if "invoke" not in lower:
+    if "invoke" not in lower or not _has_tool_protocol_marker(text):
         return []
 
     blocks = re.findall(
-        r'<[^>]*invoke[^>]*name="([^"]+)"[^>]*>(.*?)</[^>]*invoke>',
+        r"<[^>]*invoke[^>]*name\s*=\s*(['\"])(.*?)\1[^>]*>(.*?)</[^>]*invoke[^>]*>",
         text,
         flags=re.DOTALL | re.IGNORECASE,
     )
@@ -125,23 +244,31 @@ def _detect_dsml_tool_calls(content: str, *, prefix: str) -> list[dict]:
         return []
 
     result = []
-    for idx, (name, body) in enumerate(blocks):
+    for idx, (_quote, name, body) in enumerate(blocks):
         params = {}
-        for p_name, p_value in re.findall(
-            r'<[^>]*parameter[^>]*name="([^"]+)"[^>]*>(.*?)</[^>]*parameter>',
+        for _p_quote, p_name, p_value in re.findall(
+            r"<[^>]*parameter[^>]*name\s*=\s*(['\"])(.*?)\1[^>]*>(.*?)</[^>]*parameter[^>]*>",
             body,
             flags=re.DOTALL | re.IGNORECASE,
         ):
             params[p_name.strip()] = p_value.strip()
 
-        fn = name.strip()
+        fn = html.unescape(name).strip()
         if not fn:
+            continue
+        if tool_registry.find_tool(fn) is None:
             continue
 
         result.append({
             "id": f"{prefix}_{idx}",
             "type": "function",
-            "function": {"name": fn, "arguments": json.dumps(params, ensure_ascii=False)},
+            "function": {
+                "name": fn,
+                "arguments": json.dumps(
+                    {html.unescape(str(k)): html.unescape(str(v)) for k, v in params.items()},
+                    ensure_ascii=False,
+                ),
+            },
         })
     return result
 
@@ -324,16 +451,20 @@ class LLMClient:
                 function_arguments=getattr(c.function, "arguments", None),
                 fallback_id=f"call_{steps}_{i}")
                 for i, c in enumerate(msg.tool_calls or [])]
+            content_for_history = strip_tool_protocol_artifacts(content)
             if not calls:
                 calls = _detect_dsml_tool_calls(content, prefix=f"dsml_{steps}")
+                if calls:
+                    content_for_history = strip_tool_protocol_artifacts(content)
 
             if not calls:
-                msg_out = _attach_reasoning({"role": "assistant", "content": content}, rc)
+                clean_content = strip_tool_protocol_artifacts(content)
+                msg_out = _attach_reasoning({"role": "assistant", "content": clean_content}, rc)
                 msgs.append(msg_out)
-                return content, msgs[base_len:], steps, trace
+                return clean_content, msgs[base_len:], steps, trace
 
             msg_out = _attach_reasoning(
-                {"role": "assistant", "content": content, "tool_calls": calls}, rc)
+                {"role": "assistant", "content": content_for_history, "tool_calls": calls}, rc)
             msgs.append(msg_out)
             step_trace, has_pending_confirmation = self._run_tools(calls, user_perm, msgs, trace, func)
 
@@ -342,7 +473,7 @@ class LLMClient:
             if step_trace and all(_tool_failed(s) for s in step_trace):
                 continue
             if has_pending_confirmation:
-                pending_reply = content if str(content or "").strip() else ""
+                pending_reply = content_for_history if str(content_for_history or "").strip() else ""
                 return pending_reply, msgs[base_len:], steps, trace
             if steps >= max_tool_steps:
                 fallback = _build_tool_limit_fallback(trace)
@@ -389,6 +520,8 @@ class LLMClient:
             content_parts = []
             reasoning_parts = []
             tool_calls_map = {}
+            stream_visible_sent = 0
+            stream_protocol_started = False
 
             for chunk in stream:
                 if not chunk.choices:
@@ -400,7 +533,14 @@ class LLMClient:
                 part = getattr(delta, "content", None)
                 if part:
                     content_parts.append(part)
-                    yield {"type": "delta", "content": part}
+                    content_so_far = "".join(content_parts)
+                    if not stream_protocol_started:
+                        emit_end = _safe_stream_emit_end(content_so_far)
+                        if emit_end > stream_visible_sent:
+                            yield {"type": "delta", "content": content_so_far[stream_visible_sent:emit_end]}
+                            stream_visible_sent = emit_end
+                        if _find_tool_protocol_start(content_so_far) >= 0:
+                            stream_protocol_started = True
                 rp = _concat_reasoning(getattr(delta, "reasoning_content", None))
                 if rp:
                     reasoning_parts.append(rp)
@@ -433,21 +573,39 @@ class LLMClient:
                         function_name=c.get("function", {}).get("name"),
                         function_arguments=c.get("function", {}).get("arguments"),
                         fallback_id=f"call_{steps}_{key}"))
+                content_for_history = strip_tool_protocol_artifacts(content)
                 if not calls:
                     calls = _detect_dsml_tool_calls(content, prefix=f"dsml_{steps}")
+                    if calls:
+                        content_for_history = strip_tool_protocol_artifacts(content)
+            else:
+                content_for_history = strip_tool_protocol_artifacts(content)
 
             if not calls:
-                msg_out = _attach_reasoning({"role": "assistant", "content": content}, rc)
+                clean_content = strip_tool_protocol_artifacts(content)
+                if stream_visible_sent < len(content):
+                    if has_tool_protocol_artifacts(content) or stream_protocol_started:
+                        yield {"type": "replace_segment", "content": clean_content}
+                    else:
+                        yield {"type": "delta", "content": content[stream_visible_sent:]}
+                msg_out = _attach_reasoning({"role": "assistant", "content": clean_content}, rc)
                 msgs.append(msg_out)
                 audit_event("SYSTEM_EXECUTE", "ai", "LLMClient.stream_chat_with_tools", _THIS_FILE,
                              "stream_done", extra={"model": self.model, "tool_steps": steps,
-                                                   "tool_trace_len": len(trace), "reply_len": len(content)})
-                yield {"type": "done", **(_build_done(content, msgs, base_len, steps, trace))}
+                                                   "tool_trace_len": len(trace), "reply_len": len(clean_content)})
+                yield {"type": "done", **(_build_done(clean_content, msgs, base_len, steps, trace))}
                 return
 
-            yield {"type": "reset"}
+            yield {"type": "replace_segment", "content": content_for_history}
+            yield {
+                "type": "tool_call_start",
+                "calls": [
+                    _tool_call_preview(call, fallback_id=f"call_{steps}_{idx}")
+                    for idx, call in enumerate(calls)
+                ],
+            }
             msg_out = _attach_reasoning(
-                {"role": "assistant", "content": content, "tool_calls": calls}, rc)
+                {"role": "assistant", "content": content_for_history, "tool_calls": calls}, rc)
             msgs.append(msg_out)
             step_trace, has_pending_confirmation = self._run_tools(
                 calls,
@@ -463,7 +621,7 @@ class LLMClient:
             if step_trace and all(_tool_failed(s) for s in step_trace):
                 continue
             if has_pending_confirmation:
-                pending_reply = content if str(content or "").strip() else ""
+                pending_reply = content_for_history if str(content_for_history or "").strip() else ""
                 yield {"type": "done", **(_build_done(pending_reply, msgs, base_len, steps, trace))}
                 audit_event(
                     "SYSTEM_EXECUTE",

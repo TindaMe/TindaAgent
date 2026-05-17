@@ -23,7 +23,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from pydantic import BaseModel, Field
 
 from TindaAgent.Process.AI.agent import Agent
-from TindaAgent.Process.AI.client import LLMClient
+from TindaAgent.Process.AI.client import LLMClient, has_tool_protocol_artifacts, strip_tool_protocol_artifacts
 from TindaAgent.Process.Versioning import get_version_manager
 from TindaAgent.Process.Security import (
     get_current_principal,
@@ -141,7 +141,9 @@ def _build_substeps_from_history(agent: Agent, tool_trace: list[dict] | None) ->
         # text content (non-tool-call part)
         text = m.get("content", "")
         if isinstance(text, str) and text.strip():
-            substeps.append({"kind": "text", "content": text.strip()})
+            clean_text = _sanitize_assistant_visible_text(text)
+            if clean_text.strip():
+                substeps.append({"kind": "text", "content": clean_text.strip()})
         # tool_calls → tool_marker substeps (matched by execution order)
         tool_calls = m.get("tool_calls")
         if isinstance(tool_calls, list):
@@ -153,6 +155,11 @@ def _build_substeps_from_history(agent: Agent, tool_trace: list[dict] | None) ->
                     fn = {}
                 name = str(fn.get("name", "unknown"))
                 cid = str(tc.get("id", "") or "").strip()
+                raw_args = fn.get("arguments", "{}")
+                try:
+                    parsed_args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+                except Exception:
+                    parsed_args = {}
                 # Match by execution order: consume trace steps in sequence
                 tinfo = {}
                 if trace_idx < len(ordered_trace):
@@ -161,32 +168,8 @@ def _build_substeps_from_history(agent: Agent, tool_trace: list[dict] | None) ->
                 trace_cid = str(tinfo.get("call_id", "") or "").strip() if isinstance(tinfo, dict) else ""
                 use_cid = trace_cid or cid
                 tresult = tinfo.get("result", {}) if isinstance(tinfo, dict) else {}
-                if isinstance(tresult, dict):
-                    inner = tresult.get("result", {}) if isinstance(tresult, dict) else {}
-                    if not isinstance(inner, dict):
-                        inner = {}
-                    # ok: explicit True/False, None=success, or infer from error/pending
-                    if "ok" in tresult:
-                        ok = tresult["ok"] if tresult["ok"] is not None else True
-                    elif tresult.get("error") or tresult.get("pending_confirmation"):
-                        ok = False
-                    else:
-                        ok = True
-                    # stdout: explicit field, or format result payload as JSON
-                    actual = tresult.get("result", {}) if isinstance(tresult.get("result"), dict) else {}
-                    stdout = str(tresult.get("stdout", "") or inner.get("stdout", "")
-                                or tresult.get("output", "") or inner.get("output", "")
-                                or actual.get("stdout", "") or actual.get("output", "") or "")
-                    if not stdout and actual:
-                        import json as _json
-                        stdout = _json.dumps(actual, ensure_ascii=False)
-                    elif not stdout and tresult:
-                        import json as _json
-                        stdout = _json.dumps(tresult, ensure_ascii=False)
-                else:
-                    ok = True
-                    stdout = ""
-                    inner = {}
+                ok = _tool_result_ok(tresult)
+                stdout = _tool_result_output(tresult)
                 stdin = str(fn.get("cmd", "") or fn.get("text", "") or fn.get("key", "") or "")
                 substeps.append({
                     "kind": "tool_marker",
@@ -195,6 +178,8 @@ def _build_substeps_from_history(agent: Agent, tool_trace: list[dict] | None) ->
                     "stdin": stdin[:500],
                     "stdout": stdout[:500],
                     "id": use_cid.lstrip("tc_"),
+                    "arguments": parsed_args if isinstance(parsed_args, dict) else {},
+                    "result": tresult if isinstance(tresult, dict) else {},
                 })
     return substeps
 
@@ -237,6 +222,9 @@ if _empties:
 _orphans = _store.cleanup_orphan_messages()
 if _orphans:
     logger.info("cleaned up %d orphan message files", _orphans)
+_normalized_sessions = _store.normalize_all_sessions()
+if _normalized_sessions:
+    logger.info("normalized %d session message files", _normalized_sessions)
 
 _sessions: dict[str, Agent] = {}
 _session_last_access: dict[str, float] = {}
@@ -554,6 +542,7 @@ class ModelSwitchRequest(BaseModel):
 
 class SessionCreateRequest(BaseModel):
     title: str | None = "新对话"
+    session_id: str | None = None
     current_session_id: str | None = None
     reuse_if_current_empty: bool = False
 
@@ -999,10 +988,16 @@ _TERMINAL_DUMP_PATTERNS: tuple[str, ...] = (
 )
 
 
+def _sanitize_assistant_visible_text(text: str) -> str:
+    return strip_tool_protocol_artifacts(str(text or ""))
+
+
 def _looks_like_terminal_dump(text: str) -> bool:
     raw = str(text or "")
     if not raw.strip():
         return False
+    if has_tool_protocol_artifacts(raw):
+        return True
     score = 0
     for pattern in _TERMINAL_DUMP_PATTERNS:
         if re.search(pattern, raw):
@@ -1047,6 +1042,13 @@ def _sanitize_terminal_dump_reply(
     raw = str(reply_text or "")
     if not raw.strip():
         return raw
+    if has_tool_protocol_artifacts(raw):
+        cleaned = strip_tool_protocol_artifacts(raw)
+        if cleaned.strip():
+            return cleaned
+        if int(tool_steps) > 0 or (isinstance(tool_trace, list) and tool_trace):
+            return _tool_execution_summary_reply(tool_steps, tool_trace)
+        return ""
     if not _looks_like_terminal_dump(raw):
         return raw
     return _tool_execution_summary_reply(tool_steps, tool_trace)
@@ -1075,6 +1077,55 @@ def _sanitize_tool_trace_for_user(trace: list[dict] | None) -> list[dict]:
                 row["result"] = safe
         out.append(row)
     return out
+
+
+def _tool_result_ok(result: Any) -> bool:
+    if not isinstance(result, dict):
+        return bool(result)
+    inner = result.get("result")
+    if isinstance(inner, dict):
+        if inner.get("pending_confirmation") is True:
+            return False
+        if "success" in inner:
+            return bool(inner.get("success"))
+        if "returncode" in inner and inner.get("returncode") is not None:
+            return int(inner.get("returncode") or 0) == 0
+        if "ok" in inner:
+            return bool(inner.get("ok"))
+        if inner.get("error"):
+            return False
+    if result.get("pending_confirmation") is True:
+        return False
+    if "success" in result:
+        return bool(result.get("success"))
+    if "returncode" in result and result.get("returncode") is not None:
+        return int(result.get("returncode") or 0) == 0
+    if "ok" in result:
+        return bool(result.get("ok"))
+    if result.get("error"):
+        return False
+    return True
+
+
+def _tool_result_output(result: Any) -> str:
+    if not isinstance(result, dict):
+        return str(result or "")
+    inner = result.get("result")
+    if not isinstance(inner, dict):
+        inner = {}
+    for source in (result, inner):
+        for key in ("stdout", "stderr", "output", "error"):
+            value = source.get(key)
+            if value:
+                return str(value)
+    actual = result.get("result", {}) if isinstance(result.get("result"), dict) else {}
+    if actual:
+        import json as _json
+        return _json.dumps(actual, ensure_ascii=False)
+    if result:
+        import json as _json
+        return _json.dumps(result, ensure_ascii=False)
+    return ""
 
 
 def _extract_pending_confirmation_items(tool_trace: list[dict] | None) -> list[dict]:
@@ -1807,15 +1858,11 @@ def _save_chat_messages(
             cid = str(step.get("call_id", "") or "").strip()
             args = step.get("arguments", {}) or {}
             result = step.get("result", {}) or {}
-            ok = result.get("ok", False) if isinstance(result, dict) else False
-            inner = result.get("result", {}) if isinstance(result, dict) else {}
+            ok = _tool_result_ok(result)
             stdin = ""
             if isinstance(args, dict):
                 stdin = str(args.get("cmd") or args.get("text") or args.get("key") or "")
-            stdout = ""
-            if isinstance(result, dict):
-                stdout = str(result.get("stdout") or inner.get("stdout")
-                            or result.get("output") or inner.get("output") or "")
+            stdout = _tool_result_output(result)
             substeps.append({
                 "kind": "tool_marker",
                 "name": name,
@@ -1823,6 +1870,8 @@ def _save_chat_messages(
                 "stdin": stdin[:500],
                 "stdout": stdout[:500],
                 "id": cid.lstrip("tc_"),
+                "arguments": args if isinstance(args, dict) else {},
+                "result": result if isinstance(result, dict) else {},
             })
     if assistant_text.strip():
         substeps.append({"kind": "text", "content": assistant_text.strip()})
@@ -1867,27 +1916,83 @@ def _append_assistant_continuation_messages(
             cid = str(step.get("call_id", "") or "").strip()
             args = step.get("arguments", {}) or {}
             result = step.get("result", {}) or {}
-            inner = result.get("result", {}) if isinstance(result, dict) else {}
-            ok = result.get("ok", False) if isinstance(result, dict) else False
+            ok = _tool_result_ok(result)
             stdin = str(args.get("cmd") or args.get("text") or "") if isinstance(args, dict) else ""
-            stdout = ""
-            if isinstance(result, dict):
-                stdout = str(result.get("stdout") or inner.get("stdout")
-                            or result.get("output") or inner.get("output") or "")
-            substeps.append({"tool_marker": {
+            stdout = _tool_result_output(result)
+            substeps.append({
+                "kind": "tool_marker",
                 "name": name, "ok": bool(ok),
                 "stdin": stdin[:500], "stdout": stdout[:500],
                 "id": cid.lstrip("tc_"),
-            }})
+                "arguments": args if isinstance(args, dict) else {},
+                "result": result if isinstance(result, dict) else {},
+            })
     if reply:
-        substeps.append({"text": reply})
+        substeps.append({"kind": "text", "content": reply})
     if substeps:
         _store.append_to_last_assistant(session_id, substeps)
     _audit_web("PUBLIC_WRITE", "_append_assistant_continuation_messages",
                f"assistant_continuation_appended session_id={session_id}",
                {"session_id": session_id, "substeps": len(substeps),
                 "tool_marker": bool(tool_marker)})
-    rows: list[dict] = []
+
+
+def _tool_trace_to_substeps(tool_trace: list[dict] | None) -> list[dict]:
+    substeps: list[dict] = []
+    if not isinstance(tool_trace, list):
+        return substeps
+    for step in tool_trace:
+        if not isinstance(step, dict):
+            continue
+        name = str(step.get("agent_tool", "unknown") or "unknown")
+        cid = str(step.get("call_id", "") or "").strip()
+        model_id = str(step.get("tool_call_id", "") or "").strip()
+        args = step.get("arguments", {}) or {}
+        result = step.get("result", {}) or {}
+        ok = _tool_result_ok(result)
+        stdin = str(args.get("cmd") or args.get("text") or args.get("key") or "") if isinstance(args, dict) else ""
+        stdout = _tool_result_output(result)
+        substeps.append({
+            "kind": "tool_marker",
+            "name": name,
+            "ok": bool(ok),
+            "stdin": stdin[:500],
+            "stdout": stdout[:500],
+            "id": cid.lstrip("tc_"),
+            "tool_call_id": model_id,
+            "status": "done",
+            "arguments": args if isinstance(args, dict) else {},
+            "result": result if isinstance(result, dict) else {},
+        })
+    return substeps
+
+
+def _tool_call_start_to_substeps(calls: list[dict] | None) -> list[dict]:
+    substeps: list[dict] = []
+    if not isinstance(calls, list):
+        return substeps
+    for call in calls:
+        if not isinstance(call, dict):
+            continue
+        name = str(call.get("agent_tool", "unknown") or "unknown")
+        model_id = str(call.get("tool_call_id", "") or "").strip()
+        args = call.get("arguments", {}) or {}
+        stdin = str(args.get("cmd") or args.get("text") or args.get("key") or "") if isinstance(args, dict) else ""
+        substeps.append({
+            "kind": "tool_marker",
+            "name": name,
+            "ok": False,
+            "stdin": stdin[:500],
+            "stdout": "工具调用已开始，等待执行结果...",
+            "id": model_id.lstrip("tc_"),
+            "tool_call_id": model_id,
+            "status": "running",
+            "arguments": args if isinstance(args, dict) else {},
+            "result": {"ok": False, "pending": True, "tool_call_id": model_id},
+        })
+    return substeps
+
+
 def _persist_terminal_events(session_id: str, events: list[dict]) -> None:
     rows: list[dict] = []
     for e in events:
@@ -2851,7 +2956,11 @@ async def create_session(req: SessionCreateRequest):
                 if not str(meta.get("owner_uid", "") or "").strip():
                     meta = _store.ensure_session(str(meta.get("id", "")), owner_uid=str(current.get_uid()))
                 return JSONResponse({"ok": True, "session": meta, "reused": True})
-    row = _store.create_session(title=str(req.title or "新对话"), owner_uid=str(current.get_uid()))
+    row = _store.create_session(
+        session_id=str(req.session_id or "").strip() or None,
+        title=str(req.title or "新对话"),
+        owner_uid=str(current.get_uid()),
+    )
     return JSONResponse({"ok": True, "session": row, "reused": False})
 
 
@@ -2957,7 +3066,7 @@ def _maybe_auto_compress(session_id: str, context_rows: list[dict]) -> dict:
 
 @app.get("/sessions/{session_id}/context-usage")
 async def get_session_context_usage(session_id: str):
-    sid, _meta = _require_session_access(session_id)
+    sid, _meta = _require_session_access(session_id, create=False)
     rows = _store.get_context_messages(sid)
     usage_length = _estimate_context_usage_length(rows)
     meta = _store.get_session(sid) or {}
@@ -3002,9 +3111,14 @@ async def delete_session(session_id: str):
 @app.delete("/sessions")
 async def delete_all_sessions():
     current = _require_login()
+    empty_deleted = 0
+    try:
+        empty_deleted = int(_store.cleanup_empty_sessions() or 0)
+    except Exception:
+        empty_deleted = 0
     payload = _store.list_sessions(limit=10000, offset=0, owner_uid=str(current.get_uid()))
     sessions_list = payload.get("sessions", [])
-    deleted = 0
+    deleted = empty_deleted
     for row in sessions_list:
         sid = str(row.get("id", "")).strip()
         if not sid:
@@ -3023,7 +3137,7 @@ async def delete_all_sessions():
 
 @app.get("/sessions/{session_id}/messages")
 async def get_session_messages(session_id: str):
-    sid, _meta = _require_session_access(session_id)
+    sid, _meta = _require_session_access(session_id, create=False)
     load_effective = getattr(_store, "load_effective_messages", None)
     data = load_effective(sid) if callable(load_effective) else _store.load_messages(sid)
     entries = sa.store_dict_to_frontend(data)
@@ -3348,7 +3462,7 @@ async def chat_stream(
         )
 
         chunks = [
-            _sse_event("reset", {}),
+            _sse_event("replace_segment", {"content": ""}),
             _sse_event("delta", {"content": "> >_<\n> --调用工具中--"}),
             _sse_event(
                 "done",
@@ -3381,9 +3495,34 @@ async def chat_stream(
 
     def event_iter():
         final_reply = ""
+        final_reply_segment_start = 0
         reasoning_text = ""
         done_payload: dict | None = None
+        user_clean = _strip_user_meta_block(str(message or "").strip())
+        draft_ready = False
+        final_saved = False
+
+        def ensure_stream_draft() -> None:
+            nonlocal draft_ready
+            if draft_ready:
+                return
+            _store.ensure_turn_draft(
+                sid,
+                user_message=sa.build_user_message(
+                    user_clean,
+                    file_names=file_names,
+                    file_contents=file_contents,
+                ),
+                assistant_message=sa.build_assistant_message([{
+                    "kind": "text",
+                    "content": "（正在生成，若页面刷新可稍后继续查看）",
+                }]),
+                turn_id=turn_id,
+            )
+            draft_ready = True
+
         try:
+            ensure_stream_draft()
             for event in agent.stream_chat_events(llm_message):
                 et = event.get("type", "")
                 if et == "delta":
@@ -3392,10 +3531,47 @@ async def chat_stream(
                 elif et == "reasoning_delta":
                     reasoning_text += str(event.get("content", ""))
                     yield _sse_event("reasoning_delta", {"content": event.get("content", "")})
-                elif et == "reset":
-                    yield _sse_event("reset", {})
+                elif et == "replace_segment":
+                    cleaned_segment = str(event.get("content", "") or "")
+                    final_reply = final_reply[:final_reply_segment_start] + cleaned_segment
+                    final_reply_segment_start = len(final_reply)
+                    yield _sse_event("replace_segment", {"content": cleaned_segment})
+                elif et == "tool_call_start":
+                    ensure_stream_draft()
+                    start_steps = _tool_call_start_to_substeps(event.get("calls", []))
+                    if start_steps:
+                        _store.append_to_assistant_by_turn(
+                            sid,
+                            turn_id=turn_id,
+                            substeps=start_steps,
+                            replace_tool_results=True,
+                        )
+                        _audit_web(
+                            "PUBLIC_WRITE",
+                            "chat_stream",
+                            f"tool_call_started_saved session_id={sid}",
+                            {"session_id": sid, "turn_id": turn_id, "tool_calls": len(start_steps)},
+                        )
+                    yield _sse_event("tool_call_start", {"calls": event.get("calls", []), "turn_id": turn_id})
                 elif et == "tool_step":
-                    yield _sse_event("tool_step", {"trace": event.get("trace", [])})
+                    ensure_stream_draft()
+                    raw_trace = event.get("trace", [])
+                    safe_trace = _sanitize_tool_trace_for_user(raw_trace if isinstance(raw_trace, list) else [])
+                    done_steps = _tool_trace_to_substeps(safe_trace)
+                    if done_steps:
+                        _store.append_to_assistant_by_turn(
+                            sid,
+                            turn_id=turn_id,
+                            substeps=done_steps,
+                            replace_tool_results=True,
+                        )
+                        _audit_web(
+                            "PUBLIC_WRITE",
+                            "chat_stream",
+                            f"tool_step_saved session_id={sid}",
+                            {"session_id": sid, "turn_id": turn_id, "tool_steps": len(done_steps)},
+                        )
+                    yield _sse_event("tool_step", {"trace": safe_trace})
                 elif et == "done":
                     done_payload = {
                         "reply": event.get("reply", ""),
@@ -3450,7 +3626,6 @@ async def chat_stream(
                 done_payload["reply"] = sanitized_reply
                 final_reply = sanitized_reply
 
-            yield _sse_event("done", done_payload)
             substeps = _build_substeps_from_history(
                 agent,
                 done_payload.get("tool_trace", []),
@@ -3459,25 +3634,33 @@ async def chat_stream(
                 # Don't save final text when there are pending confirmations;
                 # the text will be added after confirmation.
                 substeps = [s for s in substeps if s.get("kind") != "text"]
-            user_clean = _strip_user_meta_block(str(message or "").strip())
-            items = [sa.build_user_message(user_clean, file_names=file_names, file_contents=file_contents)]
-            if substeps:
-                items.append(sa.build_assistant_message(substeps))
-            else:
-                items.append(sa.build_assistant_message([{"kind": "text", "content": final_reply}]))
-            _store.append_messages(sid, items)
+            if not substeps:
+                substeps = [{"kind": "text", "content": final_reply}]
+            _store.replace_assistant_by_turn(sid, turn_id=turn_id, substeps=substeps)
+            final_saved = True
             _audit_web(
                 "PUBLIC_WRITE",
                 "chat_stream",
                 f"chat_messages_saved session_id={sid}",
-                {"session_id": sid, "items_count": len(items),
+                {"session_id": sid, "items_count": 2,
                  "tool_marker": bool(done_payload.get("tool_trace")),
                  "tool_trace_count": len(done_payload.get("tool_trace", []) or [])},
             )
             _generate_title_from_first_round(sid)
+            yield _sse_event("done", done_payload)
         except Exception as e:
             import traceback
             traceback.print_exc()
+            if draft_ready and not final_saved:
+                _store.append_to_assistant_by_turn(
+                    sid,
+                    turn_id=turn_id,
+                    substeps=[{
+                        "kind": "text",
+                        "content": f"[error/chat] 请求中断：{e}",
+                    }],
+                    replace_tool_results=False,
+                )
             yield _sse_event("error", {"message": f"{e}\n{traceback.format_exc()}"})
 
     from starlette.responses import StreamingResponse
@@ -3487,7 +3670,7 @@ async def chat_stream(
 
 @app.get("/terminal/pending")
 async def terminal_pending(session_id: str = Query(default="")):
-    sid, _meta = _require_session_access(session_id)
+    sid, _meta = _require_session_access(session_id, create=False)
     pending = _get_terminal_pending(sid)
     agent = _sessions.get(sid)
     if pending and (agent is None or not bool(getattr(agent, "has_pending_confirmation", lambda: False)())):
@@ -3625,10 +3808,12 @@ async def terminal_confirm(req: TerminalConfirmRequest):
             continue
         rc = m.get("reasoning_content")
         if rc and str(rc).strip():
-            new_substeps.append({"thinking": str(rc).strip()})
+            new_substeps.append({"kind": "thinking", "content": str(rc).strip()})
         text = m.get("content", "")
         if isinstance(text, str) and text.strip():
-            new_substeps.append({"text": text.strip()})
+            clean_text = _sanitize_assistant_visible_text(text)
+            if clean_text.strip():
+                new_substeps.append({"kind": "text", "content": clean_text.strip()})
         tool_calls = m.get("tool_calls")
         if isinstance(tool_calls, list):
             for tc in tool_calls:
@@ -3637,27 +3822,33 @@ async def terminal_confirm(req: TerminalConfirmRequest):
                 fn = tc.get("function", {}) if isinstance(tc, dict) else {}
                 name = str(fn.get("name", "unknown")) if isinstance(fn, dict) else "unknown"
                 cid = str(tc.get("id", "") or "").strip()
-                new_substeps.append({"tool_marker": {
+                raw_args = fn.get("arguments", "{}") if isinstance(fn, dict) else "{}"
+                try:
+                    parsed_args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+                except Exception:
+                    parsed_args = {}
+                new_substeps.append({
+                    "kind": "tool_marker",
                     "name": name, "ok": True,
                     "stdin": "", "stdout": "",
                     "id": cid.lstrip("tc_"),
-                }})
+                    "arguments": parsed_args if isinstance(parsed_args, dict) else {},
+                    "result": {},
+                })
     # Also inject tool results from tool_trace for new tool calls
     for step in tool_trace or []:
         if not isinstance(step, dict):
             continue
         cid = str(step.get("call_id", "") or "").strip()
         result = step.get("result", {}) if isinstance(step, dict) else {}
-        inner = result.get("result", {}) if isinstance(result, dict) else {}
-        ok = bool(result.get("ok", True)) if isinstance(result, dict) else True
-        stdout = ""
-        if isinstance(result, dict):
-            stdout = str(result.get("stdout") or inner.get("stdout") or result.get("output") or inner.get("output") or "")
+        ok = _tool_result_ok(result)
+        stdout = _tool_result_output(result)
         # Find matching tool_marker and update with real data
         for s in new_substeps:
-            if isinstance(s.get("tool_marker"), dict) and s["tool_marker"].get("id") == cid.lstrip("tc_"):
-                s["tool_marker"]["ok"] = ok
-                s["tool_marker"]["stdout"] = stdout[:500]
+            if s.get("kind") == "tool_marker" and s.get("id") == cid.lstrip("tc_"):
+                s["ok"] = ok
+                s["stdout"] = stdout[:500]
+                s["result"] = result if isinstance(result, dict) else {}
                 break
     if new_substeps:
         _store.append_to_last_assistant(sid, new_substeps)
@@ -3783,7 +3974,7 @@ async def session_events(req: SessionEventsRequest):
 
 @app.get("/sessions/{session_id}/terminal")
 async def get_session_terminal(session_id: str):
-    sid, _meta = _require_session_access(session_id)
+    sid, _meta = _require_session_access(session_id, create=False)
     entries = _store.load_terminal(sid)
     return JSONResponse({"ok": True, "session_id": sid, "entries": entries})
 
@@ -3803,7 +3994,7 @@ async def create_tool_job(session_id: str, req: ToolJobCreateRequest):
 
 @app.get("/sessions/{session_id}/tool-events")
 async def get_tool_events(session_id: str, after_seq: int = 0, limit: int = 200):
-    sid, _meta = _require_session_access(session_id)
+    sid, _meta = _require_session_access(session_id, create=False)
     payload = _tool_runtime.get_events(sid, after_seq=after_seq, limit=limit)
     events = payload.get("events", [])
     if events:
@@ -3813,7 +4004,7 @@ async def get_tool_events(session_id: str, after_seq: int = 0, limit: int = 200)
 
 @app.get("/sessions/{session_id}/tool-jobs/{job_id}")
 async def get_tool_job(session_id: str, job_id: str):
-    sid, _meta = _require_session_access(session_id)
+    sid, _meta = _require_session_access(session_id, create=False)
     row = _tool_runtime.get_job(sid, job_id)
     if row is None:
         return JSONResponse({"ok": False, "error": "job not found"}, status_code=404)

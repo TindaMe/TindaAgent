@@ -104,7 +104,7 @@ class SessionStore:
         self.messages_dir.mkdir(parents=True, exist_ok=True)
         self.exports_dir.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
-        self._session_locks: dict[str, threading.Lock] = {}
+        self._session_locks: dict[str, threading.RLock] = {}
         if not self.sessions_file.exists():
             self._write_sessions({"sessions": []})
 
@@ -131,11 +131,11 @@ class SessionStore:
         temp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         temp.replace(self.sessions_file)
 
-    def _get_session_lock(self, session_id: str) -> threading.Lock:
+    def _get_session_lock(self, session_id: str) -> threading.RLock:
         with self._lock:
             lock = self._session_locks.get(session_id)
             if lock is None:
-                lock = threading.Lock()
+                lock = threading.RLock()
                 self._session_locks[session_id] = lock
             return lock
 
@@ -174,7 +174,21 @@ class SessionStore:
 
     def load_messages(self, session_id: str) -> dict[str, Any]:
         """Return full session dict: {"1": {...}, "2": {...}}"""
-        return self._load_messages_raw(session_id)
+        sid = _safe_session_id(session_id)
+        if not sid:
+            return {}
+        data = self._load_messages_raw(sid)
+        normalized, changed = sa.normalize_store_dict(data)
+        if changed:
+            lock = self._get_session_lock(sid)
+            with lock:
+                latest = self._load_messages_raw(sid)
+                normalized, changed = sa.normalize_store_dict(latest)
+                if changed:
+                    self._write_messages(sid, normalized)
+                    self._touch_session_meta(sid, message_count=len(normalized))
+                    self._render_exports_for_session(sid)
+        return normalized
 
     def append_to_last_assistant(self, session_id: str,
                                   substeps: list[dict[str, Any]]) -> bool:
@@ -195,16 +209,252 @@ class SessionStore:
                     if not isinstance(content, dict):
                         content = {}
                     max_sub = max((int(sk) for sk in content if sk.isdigit()), default=0)
-                    for ss in substeps:
-                        max_sub += 1
-                        content[str(max_sub)] = ss
-                    entry["content"] = content
+                    for idx, ss in enumerate(substeps):
+                        storage_steps = sa._storage_steps_from_substep(
+                            ss,
+                            id_prefix=f"{sid}:{entry.get('id', 'assistant')}:{max_sub + idx + 1}",
+                        )
+                        if not storage_steps:
+                            continue
+                        for storage_step in storage_steps:
+                            max_sub += 1
+                            content[str(max_sub)] = storage_step
+                    normalized_entry, _changed = sa.normalize_store_entry({
+                        **entry,
+                        "content": content,
+                    })
+                    entry["content"] = normalized_entry.get("content", content)
                     data[str(k)] = entry
+                    data, _changed = sa.normalize_store_dict(data)
                     self._write_messages(sid, data)
                     self._touch_session_meta(sid, message_count=len(data))
                     self._render_exports_for_session(sid)
                     return True
             return False
+
+    def ensure_turn_draft(
+        self,
+        session_id: str,
+        *,
+        user_message: dict[str, Any],
+        assistant_message: dict[str, Any],
+        turn_id: str,
+    ) -> dict[str, Any]:
+        """Ensure the current streaming turn has user + assistant rows on disk."""
+        sid = _safe_session_id(session_id)
+        if not sid:
+            raise SessionStoreError("session_id invalid")
+        clean_turn = str(turn_id or "").strip()
+        lock = self._get_session_lock(sid)
+        with lock:
+            self.ensure_session(sid)
+            data = self._load_messages_raw(sid)
+            data, _changed = sa.normalize_store_dict(data)
+
+            user_norm = _normalize_entry(user_message)
+            assistant_norm = _normalize_entry(assistant_message)
+            if user_norm is None or assistant_norm is None:
+                raise SessionStoreError("turn draft message invalid")
+            user_norm, _ = sa.normalize_store_entry(user_norm)
+            assistant_norm, _ = sa.normalize_store_entry(assistant_norm)
+            if clean_turn:
+                user_norm["turn_id"] = clean_turn
+                assistant_norm["turn_id"] = clean_turn
+
+            existing_user_key = ""
+            existing_assistant_key = ""
+            keys = sorted((int(k) for k in data if k.isdigit()))
+            for k in keys:
+                row = data.get(str(k))
+                if not isinstance(row, dict) or str(row.get("turn_id", "") or "") != clean_turn:
+                    continue
+                if row.get("role") == "user" and not existing_user_key:
+                    existing_user_key = str(k)
+                elif row.get("role") == "assistant" and not existing_assistant_key:
+                    existing_assistant_key = str(k)
+
+            max_key = max(keys, default=0)
+            if existing_user_key:
+                data[existing_user_key] = {**data[existing_user_key], **user_norm}
+            else:
+                max_key += 1
+                existing_user_key = str(max_key)
+                data[existing_user_key] = user_norm
+
+            if existing_assistant_key:
+                current = data[existing_assistant_key]
+                if not isinstance(current.get("content"), dict) or not any(
+                    str(k).isdigit() for k in current.get("content", {})
+                ):
+                    data[existing_assistant_key] = {**current, **assistant_norm}
+            else:
+                max_key += 1
+                existing_assistant_key = str(max_key)
+                data[existing_assistant_key] = assistant_norm
+
+            data, _changed = sa.normalize_store_dict(data)
+            self._write_messages(sid, data)
+            self._touch_session_meta(sid, message_count=len(data))
+            self._render_exports_for_session(sid)
+            return {
+                "session_id": sid,
+                "user_key": existing_user_key,
+                "assistant_key": existing_assistant_key,
+                "message_count": len(data),
+            }
+
+    def append_to_assistant_by_turn(
+        self,
+        session_id: str,
+        *,
+        turn_id: str,
+        substeps: list[dict[str, Any]],
+        replace_tool_results: bool = True,
+    ) -> bool:
+        """Append substeps to this turn's assistant, updating matching tool markers when possible."""
+        sid = _safe_session_id(session_id)
+        clean_turn = str(turn_id or "").strip()
+        if not sid or not clean_turn:
+            return False
+        lock = self._get_session_lock(sid)
+        with lock:
+            data = self._load_messages_raw(sid)
+            target_key = ""
+            for k in sorted((int(k) for k in data if k.isdigit()), reverse=True):
+                entry = data.get(str(k))
+                if (
+                    isinstance(entry, dict)
+                    and entry.get("role") == "assistant"
+                    and str(entry.get("turn_id", "") or "") == clean_turn
+                ):
+                    target_key = str(k)
+                    break
+            if not target_key:
+                return False
+
+            entry = data[target_key]
+            content = entry.get("content", {})
+            if not isinstance(content, dict):
+                content = {}
+            max_sub = max((int(sk) for sk in content if sk.isdigit()), default=0)
+
+            def _marker_match(existing: dict[str, Any], incoming: dict[str, Any]) -> bool:
+                if not isinstance(existing, dict) or not isinstance(incoming, dict):
+                    return False
+                marker = existing.get("tool_marker")
+                if not isinstance(marker, dict):
+                    return False
+                inc_id = str(incoming.get("id", "") or "").strip()
+                inc_model_id = str(incoming.get("tool_call_id", "") or "").strip()
+                cur_id = str(marker.get("id", "") or "").strip()
+                cur_model_id = str(marker.get("tool_call_id", "") or "").strip()
+                if inc_id and cur_id and inc_id == cur_id:
+                    return True
+                if inc_model_id and cur_model_id and inc_model_id == cur_model_id:
+                    return True
+                return False
+
+            changed = False
+            for idx, ss in enumerate(substeps):
+                storage_steps = sa._storage_steps_from_substep(
+                    ss,
+                    id_prefix=f"{sid}:{entry.get('id', 'assistant')}:{max_sub + idx + 1}",
+                )
+                for storage_step in storage_steps:
+                    incoming_marker = storage_step.get("tool_marker") if isinstance(storage_step, dict) else None
+                    if replace_tool_results and isinstance(incoming_marker, dict):
+                        replaced = False
+                        for sk in sorted((int(x) for x in content if str(x).isdigit())):
+                            existing = content.get(str(sk), {})
+                            if _marker_match(existing, incoming_marker):
+                                content[str(sk)] = storage_step
+                                replaced = True
+                                changed = True
+                                break
+                        if replaced:
+                            continue
+                    max_sub += 1
+                    content[str(max_sub)] = storage_step
+                    changed = True
+
+            if not changed:
+                return False
+            normalized_entry, _entry_changed = sa.normalize_store_entry({**entry, "content": content})
+            data[target_key] = {**entry, "content": normalized_entry.get("content", content)}
+            data, _changed = sa.normalize_store_dict(data)
+            self._write_messages(sid, data)
+            self._touch_session_meta(sid, message_count=len(data))
+            self._render_exports_for_session(sid)
+            return True
+
+    def replace_assistant_by_turn(
+        self,
+        session_id: str,
+        *,
+        turn_id: str,
+        substeps: list[dict[str, Any]],
+    ) -> bool:
+        """Replace this turn's assistant content with authoritative final substeps."""
+        sid = _safe_session_id(session_id)
+        clean_turn = str(turn_id or "").strip()
+        if not sid or not clean_turn:
+            return False
+        lock = self._get_session_lock(sid)
+        with lock:
+            data = self._load_messages_raw(sid)
+            target_key = ""
+            for k in sorted((int(k) for k in data if k.isdigit()), reverse=True):
+                entry = data.get(str(k))
+                if (
+                    isinstance(entry, dict)
+                    and entry.get("role") == "assistant"
+                    and str(entry.get("turn_id", "") or "") == clean_turn
+                ):
+                    target_key = str(k)
+                    break
+            if not target_key:
+                return False
+            entry = data[target_key]
+            replacement = sa.build_assistant_message(substeps)
+            normalized, _entry_changed = sa.normalize_store_entry({
+                **entry,
+                "content": replacement.get("content", {}),
+            })
+            data[target_key] = {
+                **entry,
+                "content": normalized.get("content", replacement.get("content", {})),
+                "turn_id": clean_turn,
+            }
+            data, _changed = sa.normalize_store_dict(data)
+            self._write_messages(sid, data)
+            self._touch_session_meta(sid, message_count=len(data))
+            self._render_exports_for_session(sid)
+            return True
+
+    def normalize_session_messages(self, session_id: str) -> bool:
+        sid = _safe_session_id(session_id)
+        if not sid:
+            return False
+        lock = self._get_session_lock(sid)
+        with lock:
+            data = self._load_messages_raw(sid)
+            normalized, changed = sa.normalize_store_dict(data)
+            if not changed:
+                return False
+            self._write_messages(sid, normalized)
+            self._touch_session_meta(sid, message_count=len(normalized))
+            self._render_exports_for_session(sid)
+            return True
+
+    def normalize_all_sessions(self) -> int:
+        changed_count = 0
+        for row in self._read_sessions().get("sessions", []):
+            if not isinstance(row, dict):
+                continue
+            sid = _safe_session_id(str(row.get("id", "") or ""))
+            if sid and self.normalize_session_messages(sid):
+                changed_count += 1
+        return changed_count
 
     def append_messages(self, session_id: str, messages: list[dict[str, Any]]) -> dict[str, Any]:
         sid = _safe_session_id(session_id)
@@ -214,24 +464,28 @@ class SessionStore:
         with lock:
             self.ensure_session(sid)
             data = self._load_messages_raw(sid)
+            data, _changed = sa.normalize_store_dict(data)
             max_key = max((int(k) for k in data if k.isdigit()), default=0)
+            added = 0
             for msg in messages:
                 normalized = _normalize_entry(msg)
                 if normalized is None:
                     continue
+                normalized, _entry_changed = sa.normalize_store_entry(normalized)
                 max_key += 1
                 data[str(max_key)] = normalized
+                added += 1
             self._write_messages(sid, data)
             self._touch_session_meta(sid, message_count=len(data))
             self._render_exports_for_session(sid)
-            return {"session_id": sid, "added": len(messages), "message_count": len(data)}
+            return {"session_id": sid, "added": added, "message_count": len(data)}
 
     def get_context_messages(self, session_id: str) -> list[dict[str, Any]]:
         """Return LLM-ready message rows (delegates to session_adapter)."""
         sid = _safe_session_id(session_id)
         if not sid:
             return []
-        data = self._load_messages_raw(sid)
+        data = self.load_messages(sid)
         meta = self.get_session(sid) or {}
         rows, _ = sa.store_dict_to_agent_messages(data, meta)
         return rows
@@ -241,7 +495,7 @@ class SessionStore:
         sid = _safe_session_id(session_id)
         if not sid:
             return {}
-        data = self._load_messages_raw(sid)
+        data = self.load_messages(sid)
         meta = self.get_session(sid) or {}
         return sa.effective_store_dict(data, meta)
 
@@ -339,6 +593,7 @@ class SessionStore:
         if owner_uid is not None:
             owner = str(owner_uid or "")
             rows = [x for x in rows if str(x.get("owner_uid", "") or "") in {"", owner}]
+        rows = [x for x in rows if int(x.get("message_count") or 0) > 0]
         total = len(rows)
         return {"sessions": rows[offset:offset + limit], "total": total, "limit": limit, "offset": offset}
 

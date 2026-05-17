@@ -267,6 +267,7 @@
       gap: 12px;
       font-weight: 800;
       font-size: 15.5px;
+      min-width: 0;
     }
 
     .brand-logo {
@@ -290,6 +291,9 @@
       -webkit-background-clip: text; background-clip: text;
       -webkit-text-fill-color: transparent;
       letter-spacing: 0.3px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
     .badge {
       font-size: 10.5px;
@@ -300,13 +304,22 @@
       background: var(--surface-2);
       font-weight: 800;
       letter-spacing: 0.6px;
+      flex-shrink: 0;
     }
 
     .actions {
       display: flex;
       align-items: center;
       gap: 8px;
+      flex-shrink: 0;
+      max-width: min(48vw, 360px);
+      overflow-x: auto;
+      overflow-y: hidden;
+      overscroll-behavior-x: contain;
+      scrollbar-width: none;
+      -webkit-overflow-scrolling: touch;
     }
+    .actions::-webkit-scrollbar { display: none; }
     .top-btn {
       display: inline-flex;
       align-items: center;
@@ -321,6 +334,8 @@
       font-weight: 700;
       font-size: 12px;
       line-height: 1;
+      white-space: nowrap;
+      flex: 0 0 auto;
       cursor: pointer;
       transition: transform 0.2s cubic-bezier(0.34,1.56,0.64,1),
                   border-color 0.2s ease,
@@ -435,7 +450,12 @@
       grid-template-columns: minmax(180px, 1fr) minmax(180px, auto) auto;
       gap: 10px;
       align-items: stretch;
+      overflow-x: auto;
+      overflow-y: hidden;
+      scrollbar-width: none;
+      -webkit-overflow-scrolling: touch;
     }
+    .create-grid::-webkit-scrollbar { display: none; }
     input {
       width: 100%;
       border: 1.5px solid var(--border);
@@ -487,6 +507,7 @@
       justify-content: center;
       gap: 6px;
       line-height: 1;
+      min-width: max-content;
     }
     .btn svg {
       display: block;
@@ -636,8 +657,13 @@
       display: flex;
       align-items: center;
       gap: 6px;
-      flex-wrap: wrap;
+      flex-wrap: nowrap;
+      overflow-x: auto;
+      overflow-y: hidden;
+      scrollbar-width: none;
+      -webkit-overflow-scrolling: touch;
     }
+    .ops::-webkit-scrollbar { display: none; }
     .ops .btn {
       padding: 7px 11px;
       font-size: 11.5px;
@@ -936,6 +962,7 @@
     @media (max-width: 900px) {
       .create-grid { grid-template-columns: 1fr; }
       header { padding: 10px 14px; }
+      .actions { max-width: 52vw; }
       main { padding: 0 12px 24px; margin-top: 14px; }
       .card { padding: 14px; border-radius: 16px; }
       .deco { display: none; }
