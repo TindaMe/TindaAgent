@@ -6113,17 +6113,18 @@
               calls.forEach(function(call) {
                 if (!call || typeof call !== "object") return;
                 const name = call.agent_tool || "unknown";
-                const cid = String(call.tool_call_id || "").replace("tc_", "");
                 const dedupeKey = String(call.tool_call_id || name || "").trim();
                 if (dedupeKey && startedToolCallIds.has(dedupeKey)) return;
                 if (dedupeKey) startedToolCallIds.add(dedupeKey);
-                const line = "> **准备调用工具**: " + name + (cid ? " #" + cid : "") + "\n";
+                const line = "> **准备调用工具**: " + name + "\n";
                 lines.push(line);
               });
               if (lines.length > 0) {
-                if (streamText && !streamText.endsWith("\n\n")) streamText += "\n\n";
-                streamText += `> >_<\n> --调用工具中--\n`;
-                streamText += lines.join("");
+                lines.forEach(function(line) {
+                  if (streamText && !streamText.endsWith("\n\n")) streamText += "\n\n";
+                  streamText += `> >_<\n> --调用工具中--\n`;
+                  streamText += line;
+                });
               }
               streamSegmentStart = streamText.length;
               if (renderDelta && streamBot) {
@@ -6142,6 +6143,8 @@
                   var doneKey = String(step.call_id || step.tool_call_id || name || "").trim();
                   if (doneKey && completedToolCallIds.has(doneKey)) return;
                   if (doneKey) completedToolCallIds.add(doneKey);
+                  if (streamText && !streamText.endsWith("\n\n")) streamText += "\n\n";
+                  streamText += "> >_<\n> --调用工具中--\n";
                   streamText += "> **已调用工具**: " + name + (cid ? " #" + cid : "") + "\n";
                 });
                 streamSegmentStart = streamText.length;
@@ -6185,7 +6188,9 @@
                 if (!step || typeof step !== "object") return;
                 var name = step.agent_tool || "unknown";
                 var cid = (step.call_id || "").replace("tc_", "");
-                streamText += "\n\n> **已调用工具**: " + name + (cid ? " #" + cid : "") + "\n";
+                if (streamText && !streamText.endsWith("\n\n")) streamText += "\n\n";
+                streamText += "> >_<\n> --调用工具中--\n";
+                streamText += "> **已调用工具**: " + name + (cid ? " #" + cid : "") + "\n";
               });
             }
             // delta 已完整构建 streamText，done 仅补 turn_id，不再追加文本

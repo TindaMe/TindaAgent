@@ -75,14 +75,13 @@
     var content = entry.content;
     var parts = [];
     if (Array.isArray(content)) {
-      var toolBatch = [];
       content.forEach(function (step) {
         if (!step) return;
         var kind = step.kind || "";
         if (kind === "tool_marker") {
-          toolBatch.push(step);
+          var toolText = _renderToolMarker(step);
+          if (toolText) parts.push(toolText);
         } else {
-          _flushToolBatch(toolBatch, parts);
           if (kind === "thinking") {
             parts.push("> " + String(step.data || "").split("\n").join("\n> "));
           } else if (kind === "text") {
@@ -92,7 +91,6 @@
           }
         }
       });
-      _flushToolBatch(toolBatch, parts);
     } else {
       parts.push(_extractText(content));
     }
@@ -100,23 +98,24 @@
     if (text.trim() && typeof addBubble === "function") addBubble(text, "bot");
   }
 
-  function _flushToolBatch(batch, parts) {
-    if (batch.length === 0) return;
+  function _renderToolMarker(step) {
+    if (!step) return "";
     var lines = ["> >_<", "> --调用工具中--"];
-    batch.forEach(function (step) {
-      var d = step.data || {};
-      if (typeof d !== "object") d = {};
-      var name = d.name || d.tool_name || "unknown";
-      var cid = d.id || d.call_id || "";
+    var d = step.data || {};
+    if (typeof d !== "object") d = {};
+    var name = d.name || d.tool_name || "unknown";
+    var cid = d.id || d.call_id || "";
+    var status = String(d.status || "").trim().toLowerCase();
+    if (status === "running") {
+      lines.push("> **准备调用工具**: " + name);
+    } else {
       lines.push("> **已调用工具**: " + name + (cid ? " #" + cid : ""));
-      // stdout → terminal panel
-      if (typeof renderToolOutputToTerminal === "function") {
-        var output = d.stdout || d.stderr || "";
-        if (output) renderToolOutputToTerminal(name, cid, output, d.ok);
-      }
-    });
-    parts.push(lines.join("\n"));
-    batch.length = 0;
+    }
+    if (typeof renderToolOutputToTerminal === "function") {
+      var output = d.stdout || d.stderr || "";
+      if (output) renderToolOutputToTerminal(name, cid, output, d.ok);
+    }
+    return lines.join("\n");
   }
 
   function renderSystemNotice(entry) {

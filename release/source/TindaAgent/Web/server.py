@@ -2075,7 +2075,6 @@ def _tool_call_start_to_substeps(calls: list[dict] | None) -> list[dict]:
             "ok": False,
             "stdin": stdin[:500],
             "stdout": "工具调用已开始，等待执行结果...",
-            "id": model_id.lstrip("tc_"),
             "tool_call_id": model_id,
             "status": "running",
             "arguments": args if isinstance(args, dict) else {},
