@@ -129,11 +129,147 @@
       color: var(--text);
       font-family: 'Nunito', -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
       background: var(--bg);
-      animation: pageIn 0.42s cubic-bezier(0.34,1.56,0.64,1);
+      overflow-x: hidden;
+      --settings-curve: cubic-bezier(0.18, 0.92, 0.18, 1);
+      --settings-exit-curve: cubic-bezier(0.44, 0, 0.72, 0.18);
     }
-    @keyframes pageIn {
-      from { opacity: 0; transform: translateY(10px) scale(0.985); }
-      to { opacity: 1; transform: translateY(0) scale(1); }
+
+    @keyframes settingsShellIn {
+      0% {
+        opacity: 0;
+        transform: translate3d(0, -18px, 0) scale(0.982);
+        filter: blur(3px);
+      }
+      62% {
+        opacity: 1;
+        transform: translate3d(0, 3px, 0) scale(1.002);
+        filter: blur(0);
+      }
+      100% {
+        opacity: 1;
+        transform: translate3d(0, 0, 0) scale(1);
+        filter: blur(0);
+      }
+    }
+
+    @keyframes settingsShellOut {
+      0% {
+        opacity: 1;
+        transform: translate3d(0, 0, 0) scale(1);
+      }
+      100% {
+        opacity: 0;
+        transform: translate3d(0, -14px, 0) scale(0.99);
+      }
+    }
+
+    @keyframes settingsRightIn {
+      0% {
+        opacity: 0;
+        transform: translate3d(26px, 0, 0) scale(0.98);
+        filter: blur(3px);
+      }
+      68% {
+        opacity: 1;
+        transform: translate3d(-2px, 0, 0) scale(1.01);
+        filter: blur(0);
+      }
+      100% {
+        opacity: 1;
+        transform: translate3d(0, 0, 0) scale(1);
+        filter: blur(0);
+      }
+    }
+
+    @keyframes settingsRightOut {
+      0% {
+        opacity: 1;
+        transform: translate3d(0, 0, 0) scale(1);
+      }
+      100% {
+        opacity: 0;
+        transform: translate3d(18px, 0, 0) scale(0.99);
+      }
+    }
+
+    @keyframes settingsTextIn {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+
+    @keyframes settingsTextOut {
+      from { opacity: 1; }
+      to { opacity: 0; }
+    }
+
+    body.settings-motion-pending .brand,
+    body.settings-motion-pending .wrap > .card {
+      opacity: 0;
+      transform: translate3d(0, -18px, 0) scale(0.982);
+    }
+
+    body.settings-motion-pending .header-actions > * {
+      opacity: 0;
+      transform: translate3d(26px, 0, 0) scale(0.98);
+    }
+
+    body.settings-motion-pending .brand-name,
+    body.settings-motion-pending .card h2,
+    body.settings-motion-pending .card .sub,
+    body.settings-motion-pending .toggle-row > div,
+    body.settings-motion-pending .toggle-row > .switch,
+    body.settings-motion-pending .input-row > label,
+    body.settings-motion-pending .input-row > input,
+    body.settings-motion-pending .input-row > select,
+    body.settings-motion-pending .input-row > .unit,
+    body.settings-motion-pending .wrap .card > .hint,
+    body.settings-motion-pending .quick-row .action-btn,
+    body.settings-motion-pending .quick-row > .switch,
+    body.settings-motion-pending .theme-toggle,
+    body.settings-motion-pending .version-row span {
+      opacity: 0;
+    }
+
+    body.settings-entering .motion-brand,
+    body.settings-entering .motion-card {
+      animation: settingsShellIn 520ms var(--settings-curve) backwards;
+      animation-delay: var(--motion-enter-delay, 0ms);
+      will-change: transform, opacity, filter;
+    }
+
+    body.settings-entering .motion-right {
+      animation: settingsRightIn 480ms var(--settings-curve) backwards;
+      animation-delay: var(--motion-enter-delay, 0ms);
+      will-change: transform, opacity, filter;
+    }
+
+    body.settings-entering .motion-text {
+      animation: settingsTextIn 360ms ease backwards;
+      animation-delay: var(--motion-text-delay, 900ms);
+      will-change: opacity;
+    }
+
+    body.settings-leaving {
+      pointer-events: none;
+    }
+
+    body.settings-leaving .motion-text {
+      animation: settingsTextOut 180ms ease both;
+      animation-delay: var(--motion-text-exit-delay, 0ms);
+      will-change: opacity;
+    }
+
+    body.settings-leaving .motion-brand,
+    body.settings-leaving .motion-card {
+      animation: settingsShellOut 320ms var(--settings-exit-curve) both;
+      animation-delay: var(--motion-exit-delay, 120ms);
+      will-change: transform, opacity;
+    }
+
+    body.settings-leaving .motion-right {
+      animation: settingsRightOut 260ms var(--settings-exit-curve) both;
+      animation-delay: var(--motion-exit-delay, 120ms);
+      will-change: transform, opacity;
     }
 
     .deco {
@@ -456,9 +592,44 @@
       .quick-grid { grid-template-columns: 1fr; }
       header { padding: 10px 14px; }
     }
+
+    @media (prefers-reduced-motion: reduce) {
+      body,
+      .deco,
+      .brand-logo,
+      .theme-icon,
+      .toast,
+      .motion-brand,
+      .motion-card,
+      .motion-right,
+      .motion-text,
+      body.settings-motion-pending .brand,
+      body.settings-motion-pending .wrap > .card,
+      body.settings-motion-pending .header-actions > *,
+      body.settings-motion-pending .brand-name,
+      body.settings-motion-pending .card h2,
+      body.settings-motion-pending .card .sub,
+      body.settings-motion-pending .toggle-row > div,
+      body.settings-motion-pending .toggle-row > .switch,
+      body.settings-motion-pending .input-row > label,
+      body.settings-motion-pending .input-row > input,
+      body.settings-motion-pending .input-row > select,
+      body.settings-motion-pending .input-row > .unit,
+      body.settings-motion-pending .wrap .card > .hint,
+      body.settings-motion-pending .quick-row .action-btn,
+      body.settings-motion-pending .quick-row > .switch,
+      body.settings-motion-pending .theme-toggle,
+      body.settings-motion-pending .version-row span {
+        animation: none !important;
+        transition-duration: 0.001ms !important;
+        transform: none !important;
+        filter: none !important;
+        opacity: 1 !important;
+      }
+    }
   </style>
 </head>
-<body>
+<body class="settings-motion-pending">
   <span class="deco" style="top:6%;left:4%;font-size:18px;animation-duration:4.8s;color:#f472b6;"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"></circle><path d="M12 2.8v4.2M12 17v4.2M2.8 12h4.2M17 12h4.2"></path></svg></span>
   <span class="deco" style="top:16%;right:5%;font-size:13px;animation-duration:5.6s;animation-delay:-1.4s;color:#fb7185;"><svg viewBox="0 0 24 24"><path d="M12 3.5l2.4 4.9 5.4.8-3.9 3.8.9 5.4L12 16l-4.8 2.4.9-5.4-3.9-3.8 5.4-.8z"></path></svg></span>
   <span class="deco" style="top:70%;left:3%;font-size:14px;animation-duration:4.9s;animation-delay:-2.0s;color:#ec4899;"><svg viewBox="0 0 24 24"><path d="M12 20c-4.5-3.1-7-5.6-7-8.8a4.2 4.2 0 0 1 7-3.1 4.2 4.2 0 0 1 7 3.1c0 3.2-2.5 5.7-7 8.8z"></path></svg></span>
@@ -607,6 +778,107 @@
     const AUTH_TOKEN_KEY = "ta_auth_token";
     const SETTINGS_KEY = "tinda_settings";
     const TOKEN_DEFAULT = 16000;
+    const SETTINGS_EXIT_MS = 460;
+    const prefersReducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches === true;
+    let settingsMotionStarted = false;
+
+    function setupSettingsMotion() {
+      if (settingsMotionStarted) return;
+      settingsMotionStarted = true;
+
+      const body = document.body;
+      const cards = Array.from(document.querySelectorAll(".wrap > .card"));
+      const rightItems = Array.from(document.querySelectorAll(".header-actions > *"));
+      const textItems = Array.from(document.querySelectorAll([
+        ".brand-name",
+        ".card h2",
+        ".card .sub",
+        ".toggle-row > div",
+        ".toggle-row > .switch",
+        ".input-row > label",
+        ".input-row > input",
+        ".input-row > select",
+        ".input-row > .unit",
+        ".wrap .card > .hint",
+        ".quick-row .action-btn",
+        ".quick-row > .switch",
+        ".theme-toggle",
+        ".version-row span",
+      ].join(",")));
+
+      const shellItems = [document.querySelector(".brand"), ...cards].filter(Boolean);
+      const shellDuration = 520;
+      const shellStep = 86;
+      const rightStep = 86;
+
+      shellItems.forEach((el, index) => {
+        el.classList.add(index === 0 ? "motion-brand" : "motion-card");
+        el.style.setProperty("--motion-order", String(index));
+        el.style.setProperty("--motion-enter-delay", `${index * shellStep}ms`);
+        el.style.setProperty("--motion-exit-delay", `${(shellItems.length - 1 - index) * 34 + 64}ms`);
+      });
+
+      rightItems.forEach((el, index) => {
+        const reverseIndex = rightItems.length - 1 - index;
+        el.classList.add("motion-right");
+        el.style.setProperty("--motion-enter-delay", `${reverseIndex * rightStep + 80}ms`);
+        el.style.setProperty("--motion-exit-delay", `${index * 40 + 48}ms`);
+      });
+
+      textItems.forEach((el, index) => {
+        el.classList.add("motion-text");
+        const motionParent = el.closest(".card") || el.closest(".brand") || el.closest(".header-actions > *");
+        const parentEnterDelay = motionParent?.style.getPropertyValue("--motion-enter-delay") || "0ms";
+        const parentExitDelay = motionParent?.style.getPropertyValue("--motion-exit-delay") || "48ms";
+        const innerOffset = motionParent?.classList.contains("motion-right") ? 40 : 90;
+        el.style.setProperty("--motion-text-delay", `calc(${parentEnterDelay} + ${innerOffset}ms)`);
+        el.style.setProperty("--motion-text-exit-delay", parentExitDelay);
+      });
+
+      if (prefersReducedMotion) {
+        body.classList.remove("settings-motion-pending");
+        return;
+      }
+
+      requestAnimationFrame(() => {
+        body.classList.remove("settings-motion-pending", "settings-leaving");
+        body.classList.add("settings-entering");
+      });
+    }
+
+    function navigateWithSettingsExit(url) {
+      if (!url || prefersReducedMotion) {
+        window.location.href = url;
+        return;
+      }
+      document.body.classList.remove("settings-entering");
+      document.body.classList.add("settings-leaving");
+      window.setTimeout(() => {
+        window.location.href = url;
+      }, SETTINGS_EXIT_MS);
+    }
+
+    function bindSettingsExitNavigation(root = document) {
+      root.querySelectorAll("a[href]").forEach(anchor => {
+        if (anchor.dataset.motionBound === "1") return;
+        const href = anchor.getAttribute("href") || "";
+        if (!href || href.startsWith("#") || href.startsWith("javascript:")) return;
+        anchor.dataset.motionBound = "1";
+        anchor.addEventListener("click", event => {
+          if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+          const target = anchor.getAttribute("target");
+          if (target && target !== "_self") return;
+          event.preventDefault();
+          navigateWithSettingsExit(anchor.href);
+        });
+      });
+    }
+
+    window.addEventListener("pageshow", () => {
+      document.body.classList.remove("settings-leaving");
+    });
+
+    window.setTimeout(setupSettingsMotion, 1400);
 
     function getAuthToken() {
       const current = String(sessionStorage.getItem(AUTH_TOKEN_KEY) || "").trim();
@@ -778,6 +1050,7 @@
       { key: "compress",   label: "压缩上下文", icon: '<svg viewBox="0 0 24 24"><path d="M4 6h16"/><path d="M4 12h10"/><path d="M4 18h7"/><path d="M18 10v8"/><path d="M14 14h8"/></svg>',   action: "function:noop" },
       { key: "sessions",   label: "会话管理",   icon: '<svg viewBox="0 0 24 24"><path d="M4 5h12a2 2 0 0 1 2 2v12H6a2 2 0 0 1-2-2z"/><path d="M8 9h6M8 13h6"/><path d="M18 7h2v12h-2"/></svg>',   action: "function:noop" },
       { key: "logs",       label: "日志查看",   icon: '<svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 9h8M8 13h8M8 17h6"/></svg>',   action: "nav:/logs" },
+      { key: "llm_request", label: "请求体查看", icon: '<svg viewBox="0 0 24 24"><path d="M8 4h8l4 4v12H4V4z"/><path d="M16 4v4h4"/><path d="M8 12h8M8 16h6"/></svg>',   action: "nav:/llm-request" },
       { key: "diagnostics",label: "模型检测",   icon: '<svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M7 15l3-3 2 2 4-4"/><path d="M7 10h3"/></svg>',   action: "nav:/model-diagnostics" },
       { key: "reset",      label: "清空上下文", icon: '<svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.3-5.7"/><path d="M20 4v5h-5"/></svg>',   action: "function:noop" },
     ];
@@ -832,6 +1105,9 @@
 
       quickGrid.appendChild(row);
     });
+
+    bindSettingsExitNavigation();
+    setupSettingsMotion();
 
     })(); // end initSettings async IIFE
 

@@ -21,6 +21,7 @@ from TindaAgent.Process.Observability.audit import get_audit_engine
 from TindaAgent.Tool import tool as tool_registry
 
 LOGGER = logging.getLogger("tinda.session_adapter")
+_ENTRY_META_KEYS = ("created_at", "turn_id", "is_summary")
 
 _DSML_TOOL_CALLS_BLOCK_RE = re.compile(
     r"\s*<[^>]*(?:tool[_\-\u2581]?calls|toolcalls)[^>]*>.*?</[^>]*(?:tool[_\-\u2581]?calls|toolcalls)[^>]*>\s*",
@@ -255,7 +256,7 @@ def normalize_store_entry(entry: dict[str, Any]) -> tuple[dict[str, Any], bool]:
 
     msg_id = str(entry.get("id", "") or "assistant")
     content = entry.get("content", {})
-    new_entry = dict(entry)
+    new_entry = _entry_with_meta(entry, role, msg_id, content)
     new_content: dict[str, Any] = {}
 
     if isinstance(content, str):
@@ -308,6 +309,19 @@ def normalize_store_dict(store_dict: dict[str, Any]) -> tuple[dict[str, Any], bo
 # ── ID helpers ──────────────────────────────────────────────────────────
 
 
+def _now_iso() -> str:
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def _entry_with_meta(entry: dict[str, Any], role: str, msg_id: str, content: Any) -> dict[str, Any]:
+    out = {"role": role, "id": str(msg_id), "content": content}
+    for key in _ENTRY_META_KEYS:
+        value = entry.get(key)
+        if value not in (None, ""):
+            out[key] = value
+    return out
+
+
 def make_message_id(audit_event_id: int | None = None) -> str:
     """Generate a new message ID: {year}-{month}-{day}-{audit_event_id}"""
     eid = int(audit_event_id) if audit_event_id is not None else get_audit_engine().next_id()
@@ -342,7 +356,8 @@ def build_user_message(text: str, *, raw: bool = False,
     if text.strip():
         n += 1
         content[str(n)] = {"user": text} if raw else {"text": text}
-    return {"role": "user", "id": make_message_id(audit_id), "content": content if content else {"text": ""}}
+    return {"role": "user", "id": make_message_id(audit_id), "created_at": _now_iso(),
+            "content": content if content else {"text": ""}}
 
 
 def build_assistant_message(substeps: list[dict],
@@ -356,7 +371,7 @@ def build_assistant_message(substeps: list[dict],
         for step in _storage_steps_from_substep(s, id_prefix=f"build:{audit_id or 'new'}:{idx}"):
             n += 1
             content[str(n)] = step
-    return {"role": "assistant", "id": make_message_id(audit_id),
+    return {"role": "assistant", "id": make_message_id(audit_id), "created_at": _now_iso(),
             "content": content if content else {"text": ""}}
 
 
@@ -365,19 +380,26 @@ def build_system_message(text: str, audit_id: int | None = None,
     content: dict = {"text": str(text)}
     if note_type:
         content["note_type"] = note_type
-    return {"role": "system", "id": make_message_id(audit_id),
+    return {"role": "system", "id": make_message_id(audit_id), "created_at": _now_iso(),
             "content": content}
 
 
 # ── Store → LLM ──────────────────────────────────────────────────────────
 
 
+def _entry_sort_key(seq: int, entry: dict[str, Any]) -> tuple[str, int]:
+    ts = str(entry.get("created_at", "") or "")
+    return ts, int(seq)
+
+
 def store_dict_to_agent_messages(store_dict: dict,
-                                  meta: dict | None = None) -> tuple[list[dict], dict]:
+                                  meta: dict | None = None,
+                                  terminal_entries: list[dict[str, Any]] | None = None) -> tuple[list[dict], dict]:
     """Convert new session dict to LLM-compatible message list."""
     store_dict, _changed = normalize_store_dict(store_dict)
     out: list[dict] = []
-    stats = {"input_rows": len(store_dict), "included": 0, "skipped": 0}
+    terminal_entries = terminal_entries if isinstance(terminal_entries, list) else []
+    stats = {"input_rows": len(store_dict), "terminal_rows": len(terminal_entries), "included": 0, "skipped": 0}
 
     meta = meta or {}
     reset_anchor = str(meta.get("reset_anchor_msg_id", "") or "").strip()
@@ -400,11 +422,14 @@ def store_dict_to_agent_messages(store_dict: dict,
         if reset_after >= 0:
             entries = [(s, e) for s, e in entries if s > reset_after]
 
+    context_entries = entries + _terminal_entries_to_context_entries(terminal_entries, start_seq=len(entries) + 1)
+    context_entries = sorted(context_entries, key=lambda x: _entry_sort_key(x[0], x[1]))
+
     # Apply summary compression
     if latest_summary_id and summary_anchor_id:
         summary_msg = None
         anchor_idx = -1
-        for i, (seq, entry) in enumerate(entries):
+        for i, (seq, entry) in enumerate(context_entries):
             if entry.get("id", "") == latest_summary_id:
                 summary_msg = _entry_to_llm_rows(entry)
             if entry.get("id", "") == summary_anchor_id:
@@ -412,7 +437,7 @@ def store_dict_to_agent_messages(store_dict: dict,
         if summary_msg and anchor_idx >= 0:
             out.extend(summary_msg)
             stats["included"] += len(summary_msg)
-            for seq, entry in entries[anchor_idx:]:
+            for seq, entry in context_entries[anchor_idx:]:
                 if entry.get("id", "") != latest_summary_id:
                     rows = _entry_to_llm_rows(entry)
                     if rows:
@@ -420,7 +445,7 @@ def store_dict_to_agent_messages(store_dict: dict,
                         stats["included"] += len(rows)
             return out, stats
 
-    for seq, entry in entries:
+    for seq, entry in context_entries:
         rows = _entry_to_llm_rows(entry)
         if rows:
             out.extend(rows)
@@ -428,6 +453,52 @@ def store_dict_to_agent_messages(store_dict: dict,
         else:
             stats["skipped"] += 1
     return out, stats
+
+
+def _terminal_entries_to_context_entries(entries: list[dict[str, Any]], *, start_seq: int) -> list[tuple[int, dict[str, Any]]]:
+    out: list[tuple[int, dict[str, Any]]] = []
+    if not entries:
+        return out
+    batch: list[str] = []
+    batch_ts = ""
+    batch_idx = 0
+
+    def flush() -> None:
+        nonlocal batch, batch_ts, batch_idx
+        text = "\n".join(x for x in batch if str(x).strip()).strip()
+        if not text:
+            batch = []
+            return
+        batch_idx += 1
+        out.append((
+            start_seq + batch_idx,
+            {
+                "role": "system",
+                "id": f"terminal-{batch_idx}",
+                "created_at": batch_ts,
+                "content": {"text": f"[Terminal Context]\n{text}"},
+            },
+        ))
+        batch = []
+        batch_ts = ""
+
+    for row in entries:
+        if not isinstance(row, dict):
+            continue
+        kind = str(row.get("kind", "") or row.get("terminal_kind", "") or "out").strip()
+        text = str(row.get("content", "") or row.get("text", "") or "").strip()
+        ts = str(row.get("ts", "") or row.get("created_at", "") or "")
+        if not text:
+            continue
+        if kind == "sep":
+            flush()
+            continue
+        if not batch_ts:
+            batch_ts = ts
+        prefix = "$ " if kind == "cmd" else ""
+        batch.append(prefix + text)
+    flush()
+    return out
 
 
 def _entry_to_llm_rows(entry: dict) -> list[dict]:

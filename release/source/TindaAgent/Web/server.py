@@ -23,7 +23,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from pydantic import BaseModel, Field
 
 from TindaAgent.Process.AI.agent import Agent
-from TindaAgent.Process.AI.client import LLMClient, has_tool_protocol_artifacts, strip_tool_protocol_artifacts
+from TindaAgent.Process.AI.client import LLMClient, has_tool_protocol_artifacts, record_llm_request, strip_tool_protocol_artifacts
 from TindaAgent.Process.Versioning import get_version_manager
 from TindaAgent.Process.Security import (
     get_current_principal,
@@ -267,11 +267,13 @@ _HTML_SETTINGS = _load_html("settings.html")
 _HTML_USER_ADMIN = _load_html("user_admin.html")
 _HTML_LOG_VIEW = _load_html("logs.html")
 _HTML_MODEL_DIAGNOSTICS = _load_html("model_diagnostics.html")
+_HTML_LLM_REQUEST = _load_html("llm_request.html")
 _JS_CHAT_RENDERER = _load_html("chat_renderer.js")
 _JS_MARKDOWN_RENDERER = _load_html("markdown_renderer.js")
 _JS_THEME_TOGGLE = _load_html("theme_toggle.js")
 _LOG_ROOT = get_log_root()
 _CONTEXT_LOG_FILE = _LOG_ROOT / "llm_context.jsonl"
+_LLM_REQUEST_LOG_FILE = Path(os.getenv("TINDA_LLM_REQUEST_LOG", str(_LOG_ROOT / "llm_request.jsonl")))
 _LOG_MAX_READ_BYTES = 2 * 1024 * 1024
 _SERVER_STARTED_AT = time.time()
 _HOME_USAGE_FILE = get_system_root() / "home_usage.jsonl"
@@ -418,6 +420,76 @@ def _write_context_log(session_id: str, messages: list[dict], *, model: str = ""
             fp.write(payload + "\n")
     except Exception as e:
         logger.warning("_write_context_log failed: %s", e)
+
+
+def _read_latest_jsonl(path: Path, *, max_bytes: int = _LOG_MAX_READ_BYTES) -> dict[str, Any] | None:
+    try:
+        if not path.exists() or not path.is_file():
+            return None
+        size = path.stat().st_size
+        with path.open("rb") as fp:
+            if size > max_bytes:
+                fp.seek(max(0, size - max_bytes))
+            raw = fp.read().decode("utf-8", errors="ignore")
+        for line in reversed(raw.splitlines()):
+            text = line.strip()
+            if not text:
+                continue
+            try:
+                item = json.loads(text)
+                return item if isinstance(item, dict) else {"value": item}
+            except Exception:
+                continue
+    except Exception as e:
+        logger.warning("_read_latest_jsonl failed path=%s err=%s", path, e)
+    return None
+
+
+def _llm_request_summary(row: dict[str, Any]) -> dict[str, Any]:
+    from TindaAgent.Process.AI.tokenizer import estimate_messages_tokens
+
+    payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+    messages = payload.get("messages") if isinstance(payload, dict) else []
+    tools = payload.get("tools") if isinstance(payload, dict) else []
+    try:
+        payload_chars = len(json.dumps(payload, ensure_ascii=False))
+    except Exception:
+        payload_chars = len(str(payload or ""))
+    content_chars = 0
+    if isinstance(messages, list):
+        for msg in messages:
+            if not isinstance(msg, dict):
+                continue
+            content = msg.get("content", "")
+            if isinstance(content, str):
+                content_chars += len(content)
+            else:
+                try:
+                    content_chars += len(json.dumps(content, ensure_ascii=False))
+                except Exception:
+                    content_chars += len(str(content or ""))
+    estimated_tokens = 0
+    if isinstance(messages, list):
+        estimated_tokens = int(estimate_messages_tokens([m for m in messages if isinstance(m, dict)]))
+    if isinstance(tools, list) and tools:
+        try:
+            from TindaAgent.Process.AI.tokenizer import estimate_tokens
+            estimated_tokens += int(estimate_tokens(json.dumps(tools, ensure_ascii=False)))
+        except Exception:
+            pass
+    return {
+        "ts": str(row.get("ts", "")),
+        "source": str(row.get("source", "")),
+        "stream": bool(row.get("stream", False)),
+        "model": str(row.get("model") or payload.get("model", "")),
+        "message_count": len(messages) if isinstance(messages, list) else int(row.get("message_count", 0) or 0),
+        "tool_count": len(tools) if isinstance(tools, list) else int(row.get("tool_count", 0) or 0),
+        "payload_chars": payload_chars,
+        "content_chars": content_chars,
+        "estimated_tokens": estimated_tokens,
+        "temperature": payload.get("temperature") if isinstance(payload, dict) else None,
+        "tool_choice": payload.get("tool_choice") if isinstance(payload, dict) else None,
+    }
 _AUTH_OPEN_PATHS = {
     "/",
     "/home",
@@ -428,6 +500,7 @@ _AUTH_OPEN_PATHS = {
     "/settings",
     "/logs",
     "/model-diagnostics",
+    "/llm-request",
     "/favicon.ico",
     "/system/version",
     "/user-admin",
@@ -858,13 +931,15 @@ def _run_model_diagnostic_single(
             result["error_message"] = f"unsupported test: {test_key}"
             return result
 
-        resp = _client._client.chat.completions.create(
-            model=model_name,
-            messages=messages,
-            temperature=0.2,
-            max_tokens=120,
-            timeout=25,
-        )
+        payload = {
+            "model": model_name,
+            "messages": messages,
+            "temperature": 0.2,
+            "max_tokens": 120,
+            "timeout": 25,
+        }
+        record_llm_request(payload, source="model_diagnostics", stream=False)
+        resp = _client._client.chat.completions.create(**payload)
         msg = resp.choices[0].message
         content = str(getattr(msg, "content", "") or "").strip()
         reasoning = str(getattr(msg, "reasoning_content", "") or "").strip()
@@ -1523,15 +1598,31 @@ def _store_to_agent_messages(rows: list[dict]) -> tuple[list[dict], dict[str, in
     out: list[dict] = []
     stats = {"input_rows": len(rows or []), "included": 0, "skipped": 0}
     for item in (rows or []):
+        if not isinstance(item, dict):
+            stats["skipped"] += 1
+            continue
         role = str(item.get("role", "")).strip()
         content = str(item.get("content", ""))
-        if not content.strip():
-            stats["skipped"] += 1; continue
-        if role == "system":
-            out.append({"role": "assistant", "content": content})
-        elif role in ("user", "assistant"):
-            out.append({"role": role, "content": content})
-        stats["included"] += 1
+        has_tool_calls = isinstance(item.get("tool_calls"), list) and bool(item.get("tool_calls"))
+        if not content.strip() and not has_tool_calls:
+            stats["skipped"] += 1
+            continue
+        if role in {"system", "user", "assistant", "tool"}:
+            row = {"role": role, "content": content}
+            if role == "assistant":
+                rc = item.get("reasoning_content")
+                if rc is not None:
+                    row["reasoning_content"] = rc
+                if has_tool_calls:
+                    row["tool_calls"] = item.get("tool_calls", [])
+            if role == "tool":
+                tool_call_id = str(item.get("tool_call_id", "") or "").strip()
+                if tool_call_id:
+                    row["tool_call_id"] = tool_call_id
+            out.append(row)
+            stats["included"] += 1
+        else:
+            stats["skipped"] += 1
     return out, stats
 
 
@@ -2431,6 +2522,36 @@ async def put_terminal_settings(data: dict[str, Any] = Body(...)):
 @app.get("/model-diagnostics", response_class=HTMLResponse)
 async def model_diagnostics_page():
     return _HTML_MODEL_DIAGNOSTICS
+
+
+@app.get("/llm-request", response_class=HTMLResponse)
+async def llm_request_page():
+    return _HTML_LLM_REQUEST
+
+
+@app.get("/llm-request/latest")
+async def get_latest_llm_request():
+    current = _require_login()
+    if not _has_llm_perm(current):
+        return JSONResponse({"ok": False, "error": "权限不足：当前账户不可查看 LLM 请求体"}, status_code=403)
+    row = _read_latest_jsonl(_LLM_REQUEST_LOG_FILE)
+    if not row:
+        return JSONResponse({
+            "ok": True,
+            "exists": False,
+            "summary": {},
+            "payload": None,
+            "log_file": str(_LLM_REQUEST_LOG_FILE),
+        })
+    payload = row.get("payload") if isinstance(row.get("payload"), dict) else row
+    return JSONResponse({
+        "ok": True,
+        "exists": True,
+        "summary": _llm_request_summary(row),
+        "payload": payload,
+        "raw": row,
+        "log_file": str(_LLM_REQUEST_LOG_FILE),
+    })
 
 
 @app.post("/model-diagnostics/run")
@@ -3752,7 +3873,8 @@ async def terminal_confirm(req: TerminalConfirmRequest):
             model=_client.model,
             trigger="terminal_confirm_recover",
         )
-        result = agent._ensure_client().chat_with_tools(agent.history, user_perm=agent.perm, temperature=0.7)
+        request_messages = agent._messages_for_llm_request(agent.history)
+        result = agent._ensure_client().chat_with_tools(request_messages, user_perm=agent.perm, temperature=0.7)
     else:
         decision = {
             "approval": approval,

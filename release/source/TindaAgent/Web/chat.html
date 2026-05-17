@@ -417,10 +417,6 @@
     [data-theme="dark"] .term-prompt {
       color: rgba(213, 138, 171, 0.54);
     }
-    [data-theme="dark"] .term-sep::before,
-    [data-theme="dark"] .term-call-row.sep::before {
-      background: linear-gradient(90deg, transparent, rgba(213, 138, 171, 0.24), transparent);
-    }
     [data-theme="dark"] .term-exec-bubble {
       background: linear-gradient(180deg, rgba(25, 19, 27, 0.84), rgba(14, 10, 16, 0.82));
       border-color: rgba(255, 176, 211, 0.12);
@@ -2301,22 +2297,7 @@
       margin: 4px 0;
     }
     .term-call-row { display: block; }
-    .term-call-row.sep {
-      display: flex;
-      align-items: center;
-      width: 100%;
-      user-select: none;
-      padding-top: 2px;
-      min-height: 8px;
-    }
-    .term-call-row.sep::before {
-      content: "";
-      display: block;
-      width: 100%;
-      height: 1px;
-      background: linear-gradient(90deg, transparent, rgba(190, 24, 93, 0.28), transparent);
-      border-radius: 999px;
-    }
+    .term-call-row.sep { display: none; }
     .term-out-row { display: block; }
     .term-out-row .term-out { display: block; }
     .term-prompt {
@@ -2329,25 +2310,7 @@
     .term-out.err { color: #dc2626; font-weight: 600; }
     .term-out.info { color: #2563eb; font-weight: 600; }
     .term-out.dim { color: #94a3b8; }
-    .term-sep {
-      display: flex;
-      align-items: center;
-      user-select: none;
-      background: transparent;
-      border: none;
-      box-shadow: none;
-      padding: 3px 0;
-      margin: 2px 0 4px;
-      min-height: 8px;
-    }
-    .term-sep::before {
-      content: "";
-      display: block;
-      width: 100%;
-      height: 1px;
-      background: linear-gradient(90deg, transparent, rgba(190, 24, 93, 0.28), transparent);
-      border-radius: 999px;
-    }
+    .term-sep { display: none; }
 
 	    .records-mask {
 	      position: fixed;
@@ -3973,34 +3936,8 @@
   }
 
   function addTermSep({ persist = true, sessionId = getSessionId(), noScroll = false } = {}) {
-    const lineText = "─".repeat(36);
-    if (termRequestGroup && termRequestGroup.isConnected) {
-      const row = document.createElement("div");
-      row.className = "term-call-row sep";
-      row.textContent = lineText;
-      termRequestGroup.appendChild(row);
-      termRequestGroup = null;
-    } else {
-      const el = document.createElement("div");
-      el.className = "term-line term-sep";
-      el.dataset.termKind = "sep";
-      el.textContent = lineText;
-      termBodyEl.appendChild(el);
-      trimTerminalLines();
-    }
+    termRequestGroup = null;
     if (!noScroll) termBodyEl.scrollTop = termBodyEl.scrollHeight;
-    if (persist) {
-      enqueueTermPersist(
-        {
-          role: "assistant",
-          entry_type: "terminal",
-          terminal_kind: "sep",
-          content: lineText,
-          ts: toIsoWithOffset(new Date()),
-        },
-        sessionId,
-      );
-    }
   }
 
   function appendTerminalWidget(contentEl, { noScroll = false } = {}) {
@@ -4771,7 +4708,7 @@
     for (var i = 0; i < lines.length; i++) {
       addTermLine("out", lines[i], cls);
     }
-    addTermLine("sep", "─".repeat(36), cls);
+    addTermSep({ persist: false });
   }
 
   async function loadCurrentSessionRecord({ sessionId = "" } = {}) {
@@ -5656,6 +5593,15 @@
         return a;
       }
     },
+    llm_request: {
+      label: "请求体", icon: '<svg class="icon" viewBox="0 0 24 24"><path d="M8 4h8l4 4v12H4V4z"/><path d="M16 4v4h4"/><path d="M8 12h8M8 16h6"/></svg>',
+      render: () => {
+        const a = document.createElement("a"); a.className = "icon-btn"; a.href = "/llm-request"; a.title = "LLM 请求体"; a.setAttribute("data-tip","LLM 请求体"); a.setAttribute("aria-label","LLM 请求体");
+        a.onclick = function(e){ e.preventDefault(); smoothNavigate("/llm-request"); };
+        a.innerHTML = QUICK_BUTTON_DEFS.llm_request.icon;
+        return a;
+      }
+    },
     admin: {
       label: "用户管理", icon: '<svg class="icon" viewBox="0 0 24 24"><path d="M12 3l7 3v6c0 4.2-2.9 7.8-7 8.8-4.1-1-7-4.6-7-8.8V6z"/><path d="M9.5 12.5l1.8 1.8 3.4-3.4"/></svg>',
       render: () => {
@@ -5858,19 +5804,7 @@
           activeGroup.appendChild(row);
           frag.appendChild(activeGroup);
         } else if (kind === "sep") {
-          if (activeGroup) {
-            const row = document.createElement("div");
-            row.className = "term-call-row sep";
-            row.textContent = "─".repeat(36);
-            activeGroup.appendChild(row);
-            activeGroup = null;
-          } else {
-            const row = document.createElement("div");
-            row.className = "term-line term-sep";
-            row.dataset.termKind = "sep";
-            row.textContent = "─".repeat(36);
-            frag.appendChild(row);
-          }
+          activeGroup = null;
         } else {
           if (activeGroup) {
             const row = document.createElement("div");

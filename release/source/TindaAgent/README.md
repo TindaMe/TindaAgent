@@ -21,6 +21,7 @@ python run_web.py
 - **Session management** — Per-session JSON storage, context compression via LLM summarization, Markdown/text export
 - **Local user auth** — JSON-backed local accounts with token-based request isolation and permission bits
 - **Context token accounting** — Counts only content that is actually sent to the LLM request context, with DeepSeek tokenizer support
+- **LLM request inspector** — Built-in `/llm-request` page for inspecting the latest real SDK request body, including messages, tools, thinking payload, and token-oriented summary fields
 - **Web UX** — Pink themed Web UI with smooth entry/exit motion for home, chat, logs, user management, and session panels
 - **Motion polish** — Layered glass-card animation system: HOME cards, changelog Markdown, runtime charts, chat header, input bar, overlays, terminal panel, admin/log/settings panels, and page exits use staggered direction-aware transitions
 - **Version management** — GitHub Releases integration, Ed25519 signature verification, multi-version install and switch
@@ -75,6 +76,19 @@ Set these in `.env` at the project root.
 - Sessions are stored under `~/.tinda/agent/Data/Sessions`.
 - Logs are stored under `~/.tinda/agent/log`.
 - DeepSeek tokenizer files are loaded from `~/.tinda/agent/tokenizer/` when available; otherwise token counting falls back to a heuristic estimator.
+- Latest LLM request snapshots are logged to `~/.tinda/agent/log/llm_request.jsonl` by default, or `TINDA_LLM_REQUEST_LOG` if overridden.
+
+## LLM Request Assembly
+
+The runtime now assembles LLM requests in a cache-friendlier order:
+
+- Stable English system policy stays at the very front of every request.
+- Tool schemas are deterministic per permission set: tool names, parameter keys, and required lists are sorted and cached.
+- Conversation history is replayed in chronological order.
+- Terminal history is merged into the LLM context as `[Terminal Context]` blocks in time order.
+- Dynamic memory context is injected near the end of the request, right before the latest user message, instead of mutating the leading system prompt.
+
+This keeps the prefix more stable while preserving strict permission-based tool visibility.
 
 ## Web Motion
 
@@ -118,6 +132,8 @@ The Web UI uses a layered motion system rather than single-step fades:
 | `/auth/local-login` | POST | Select a local account and return its token |
 | `/settings` | GET | Settings page |
 | `/logs` | GET | Log viewer |
+| `/llm-request` | GET | Latest real LLM request inspector |
+| `/llm-request/latest` | GET | Latest logged LLM request body + summary |
 | `/model-diagnostics` | GET | Model diagnostics |
 | `/user-admin` | GET | User administration |
 | `/system/versions` | GET | Version management |

@@ -56,11 +56,20 @@ def _normalize_entry(raw: dict) -> dict | None:
     content = raw.get("content", "")
     msg_id = raw.get("id", "") or sa.make_message_id()
 
+    def with_meta(item: dict | None) -> dict | None:
+        if item is None:
+            return None
+        for key in ("created_at", "turn_id", "is_summary"):
+            value = raw.get(key)
+            if value not in (None, ""):
+                item[key] = value
+        return item
+
     # Already new format?
     if isinstance(content, dict) and not content.get("user") and not content.get("text"):
         has_num_keys = any(k.isdigit() for k in content)
         if has_num_keys:
-            return {"role": role, "id": str(msg_id), "content": content}
+            return with_meta({"role": role, "id": str(msg_id), "content": content})
 
     # Old format: entry_type-based
     et = str(raw.get("entry_type", "chat")).strip() or "chat"
@@ -74,20 +83,20 @@ def _normalize_entry(raw: dict) -> dict | None:
         text = str(content or "")
 
     if et == "notice" or role == "system":
-        return sa.build_system_message(text)
+        return with_meta(sa.build_system_message(text))
     elif et == "tool_marker":
         return None  # tool markers embedded in assistant content
     elif et == "terminal":
         return None  # terminal output merged into tool_marker
     elif role == "user":
         is_raw = content.get("user") if isinstance(content, dict) else False
-        return sa.build_user_message(text, raw=bool(is_raw))
+        return with_meta(sa.build_user_message(text, raw=bool(is_raw)))
     elif role == "assistant":
         substeps = [{"kind": "text", "content": text}]
         reasoning = raw.get("reasoning_content")
         if isinstance(reasoning, str) and reasoning.strip():
             substeps.insert(0, {"kind": "thinking", "content": reasoning})
-        return sa.build_assistant_message(substeps)
+        return with_meta(sa.build_assistant_message(substeps))
     return None
 
 
@@ -486,8 +495,9 @@ class SessionStore:
         if not sid:
             return []
         data = self.load_messages(sid)
+        terminal_entries = self.load_terminal(sid)
         meta = self.get_session(sid) or {}
-        rows, _ = sa.store_dict_to_agent_messages(data, meta)
+        rows, _ = sa.store_dict_to_agent_messages(data, meta, terminal_entries=terminal_entries)
         return rows
 
     def load_effective_messages(self, session_id: str) -> dict[str, Any]:

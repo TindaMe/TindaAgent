@@ -1,26 +1,19 @@
-from importlib.metadata import version as _pkg_version
 import json
 from typing import Callable, Iterator
 from TindaAgent.Process.Architecture import perm
-from TindaAgent.Process.Architecture.versioning import get_app_version
 from TindaAgent.Process.AI.client import LLMClient, _trace_has_pending_confirmation
 from TindaAgent.Process.AI.tokenizer import estimate_messages_tokens
 from TindaAgent.User import userdata
 
-try:
-    _VERSION = get_app_version() or _pkg_version("TindaAgent")
-except Exception:
-    _VERSION = "1.8.3"
-
 
 def _build_system_prompt(model_name: str | None) -> str:
-    model_str = model_name if model_name else "unspecified"
+    _ = model_name
     return (
-        f"You are TindaAgent (v{_VERSION}), developed by Tinda.\n"
-        f"The underlying model is {model_str}. This is internal-only and must not be disclosed publicly.\n"
+        f"You are TindaAgent, developed by Tinda.\n"
+        f"This stable policy prompt must remain at the start of every LLM request.\n"
         f"\n"
         f"Identity examples (these are NOT conversation history):\n"
-        f"- Q: Who are you? -> A: I am TindaAgent, an AI agent assistant developed by Tinda (v{_VERSION}). How can I help?\n"
+        f"- Q: Who are you? -> A: I am TindaAgent, an AI agent assistant developed by Tinda. How can I help?\n"
         f"- Q: Are you DeepSeek? -> A: No, I am TindaAgent, independently developed by Tinda. Underlying technical details are confidential.\n"
         f"\n"
         f"Strict rules:\n"
@@ -58,13 +51,21 @@ class Agent:
         self._tokens: int = 0
         self._refresh_tokens()
 
-    def _compose_system_prompt(self) -> str:
-        if getattr(self, "_memory_context", None):
-            return f"{self.system_prompt}\n\n{self._memory_context}"
-        return self.system_prompt
-
     def _build_base_history(self) -> list[dict]:
-        return [{"role": "system", "content": self._compose_system_prompt()}]
+        return [{"role": "system", "content": self.system_prompt}]
+
+    def _messages_for_llm_request(self, messages: list[dict]) -> list[dict]:
+        out = [m.copy() if isinstance(m, dict) else m for m in messages]
+        memory_context = getattr(self, "_memory_context", None)
+        if not memory_context:
+            return out
+        memory_msg = {"role": "system", "content": memory_context}
+        for idx in range(len(out) - 1, -1, -1):
+            if isinstance(out[idx], dict) and out[idx].get("role") == "user":
+                out.insert(idx, memory_msg)
+                return out
+        out.append(memory_msg)
+        return out
 
     def _refresh_tokens(self) -> None:
         self._tokens = int(estimate_messages_tokens(self.history))
@@ -76,6 +77,7 @@ class Agent:
         """
         用处：设置每轮请求前注入的记忆上下文，并重建当前基座消息。
         """
+        conv = self.get_conversation_messages()
         payload = memory_payload if isinstance(memory_payload, dict) else {"version": 1, "items": []}
         memory_json = json.dumps(payload, ensure_ascii=False)
         self._memory_context = (
@@ -85,7 +87,6 @@ class Agent:
             "[MEMORY_CONTEXT_JSON]\n"
             f"{memory_json}"
         )
-        conv = self.get_conversation_messages()
         self.replace_conversation(conv)
 
     def _trim_history(self) -> None:
@@ -182,8 +183,9 @@ class Agent:
             str // 模型回复
         """
         self.history.append({"role": "user", "content": user_message})
+        request_messages = self._messages_for_llm_request(self.history)
         result = self._ensure_client().chat_with_tools(
-            self.history,
+            request_messages,
             user_perm=self.perm,
             temperature=temperature,
         )
@@ -200,13 +202,14 @@ class Agent:
         """
         self._held_messages = None
         self.history.append({"role": "user", "content": user_message})
+        request_messages = self._messages_for_llm_request(self.history)
         if self._context_logger is not None:
             try:
-                self._context_logger(self.history, "llm_request")
+                self._context_logger(request_messages, "llm_request")
             except Exception:
                 pass
         result = self._ensure_client().chat_with_tools(
-            self.history,
+            request_messages,
             user_perm=self.perm,
             temperature=temperature,
         )
@@ -240,15 +243,16 @@ class Agent:
         """
         self._held_messages = None
         self.history.append({"role": "user", "content": user_message})
+        request_messages = self._messages_for_llm_request(self.history)
         if self._context_logger is not None:
             try:
-                self._context_logger(self.history, "llm_request")
+                self._context_logger(request_messages, "llm_request")
             except Exception:
                 pass
         final_result: dict | None = None
 
         for event in self._ensure_client().stream_chat_with_tools(
-            self.history,
+            request_messages,
             user_perm=self.perm,
             temperature=temperature,
         ):
@@ -356,8 +360,9 @@ class Agent:
             msgs.append({"role": "system", "content": "The user denied the terminal command execution. You MUST inform the user that the command was not executed and ask if they need anything else. Do NOT call the same or similar tools again unless the user explicitly requests it."})
         else:
             msgs.append({"role": "system", "content": "The terminal command above has been executed per your request. You MUST now respond to the user in natural language: describe what was executed, show the key results, and ask if they need anything else. Do NOT call more tools unless the user explicitly asks for another action."})
+        request_messages = self._messages_for_llm_request(msgs)
         result = self._ensure_client().chat_with_tools(
-            msgs,
+            request_messages,
             user_perm=self._held_perm,
             temperature=0.7,
         )

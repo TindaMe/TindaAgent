@@ -30,6 +30,7 @@ SYSTEM_TOOL: dict[str, dict[str, Any]] = {}
 
 # 备用工具注册表 {func_name: {"des": str, "perm": int, "func": function}}
 SPARE_TOOL: dict[str, dict[str, Any]] = {}
+_TOOL_SCHEMA_CACHE: dict[int, list[dict[str, Any]]] = {}
 
 MAX_TEXT_LEN = 8000
 DEFAULT_TIMEZONE = "Asia/Shanghai"
@@ -178,6 +179,7 @@ def tool(tool_perm: int, tool_des: str, must: bool = False) -> Callable:
             SYSTEM_TOOL[tool_name] = tool_info
         else:
             SPARE_TOOL[tool_name] = tool_info
+        _TOOL_SCHEMA_CACHE.clear()
 
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
@@ -306,7 +308,11 @@ def list_tools(user_perm: int | None = None) -> dict[str, str]:
         dict[str, str] // {工具名: 描述}
     """
     result: dict[str, str] = {}
-    for name, info in {**SYSTEM_TOOL, **SPARE_TOOL}.items():
+    names = sorted(set(SYSTEM_TOOL) | set(SPARE_TOOL))
+    for name in names:
+        info = find_tool(name)
+        if info is None:
+            continue
         if user_perm is None or (user_perm & info["perm"]) == info["perm"]:
             result[name] = info["des"]
     return result
@@ -316,7 +322,12 @@ def build_agent_tool_schemas(user_perm: int) -> list[dict[str, Any]]:
     """Build OpenAI tool schemas — each tool exposed directly, params from signature."""
     import inspect
 
-    tools = list_tools(user_perm)
+    perm_key = int(user_perm)
+    cached = _TOOL_SCHEMA_CACHE.get(perm_key)
+    if cached is not None:
+        return json.loads(json.dumps(cached, ensure_ascii=False))
+
+    tools = list_tools(perm_key)
     schemas: list[dict[str, Any]] = []
 
     for tool_name, tool_desc in sorted(tools.items()):
@@ -352,8 +363,8 @@ def build_agent_tool_schemas(user_perm: int) -> list[dict[str, Any]]:
 
         schema_params: dict[str, Any] = {"type": "object"}
         if properties:
-            schema_params["properties"] = properties
-            schema_params["required"] = required
+            schema_params["properties"] = {k: properties[k] for k in sorted(properties)}
+            schema_params["required"] = sorted(required)
         schemas.append({
             "type": "function",
             "function": {
@@ -362,6 +373,7 @@ def build_agent_tool_schemas(user_perm: int) -> list[dict[str, Any]]:
                 "parameters": schema_params,
             },
         })
+    _TOOL_SCHEMA_CACHE[perm_key] = json.loads(json.dumps(schemas, ensure_ascii=False))
     return schemas
 
 

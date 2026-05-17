@@ -2,6 +2,7 @@ import os
 import json
 import html
 import re
+import time
 from pathlib import Path
 from typing import Any, Iterator
 from openai import OpenAI
@@ -11,11 +12,13 @@ except ImportError:
     BadRequestError = None
 from dotenv import load_dotenv
 from TindaAgent.Tool import tool as tool_registry
+from TindaAgent.Process.Architecture.paths import get_log_root
 from TindaAgent.Process.Observability import audit_event
 
 _ENV_PATH = Path(__file__).resolve().parent.parent.parent / ".env"
 load_dotenv(dotenv_path=_ENV_PATH)
 _THIS_FILE = str(Path(__file__).resolve())
+_LLM_REQUEST_LOG = Path(os.getenv("TINDA_LLM_REQUEST_LOG", str(get_log_root() / "llm_request.jsonl")))
 
 
 def _parse_args(raw: str | None) -> dict[str, Any]:
@@ -62,6 +65,71 @@ def _extract_api_error(exc: Exception) -> str:
         except Exception:
             pass
     return str(exc)
+
+
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if isinstance(value, list):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, tuple):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    return str(value)
+
+
+def _estimate_chars(value: Any) -> int:
+    try:
+        return len(json.dumps(_json_safe(value), ensure_ascii=False))
+    except Exception:
+        return len(str(value or ""))
+
+
+_SDK_ONLY_REQUEST_KEYS = {
+    "timeout",
+    "extra_headers",
+    "extra_query",
+}
+
+
+def _request_body_from_sdk_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    safe_payload = _json_safe(payload)
+    if not isinstance(safe_payload, dict):
+        return {}
+    body = {k: v for k, v in safe_payload.items() if k != "extra_body" and k not in _SDK_ONLY_REQUEST_KEYS}
+    extra_body = safe_payload.get("extra_body")
+    if isinstance(extra_body, dict):
+        body.update(extra_body)
+    return body
+
+
+def record_llm_request(payload: dict[str, Any], *, source: str, stream: bool = False) -> None:
+    try:
+        sdk_payload = _json_safe(payload)
+        request_body = _request_body_from_sdk_payload(payload)
+        messages = request_body.get("messages") if isinstance(request_body, dict) else []
+        tools = request_body.get("tools") if isinstance(request_body, dict) else []
+        row = {
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "source": str(source),
+            "stream": bool(stream),
+            "model": str(request_body.get("model", "")) if isinstance(request_body, dict) else "",
+            "message_count": len(messages) if isinstance(messages, list) else 0,
+            "tool_count": len(tools) if isinstance(tools, list) else 0,
+            "payload_chars": _estimate_chars(request_body),
+            "payload": request_body,
+            "sdk_kwargs": sdk_payload,
+        }
+        _LLM_REQUEST_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with _LLM_REQUEST_LOG.open("a", encoding="utf-8") as fp:
+            fp.write(json.dumps(row, ensure_ascii=False) + "\n")
+    except Exception as e:
+        audit_event("SYSTEM_EXECUTE", "ai", "LLMClient.record_llm_request", _THIS_FILE,
+                    f"record_llm_request_failed err={e}", extra={"ok": False, "error": str(e)})
+
+
+_record_llm_request = record_llm_request
 
 
 def _concat_reasoning(raw: Any) -> str:
@@ -369,9 +437,14 @@ class LLMClient:
         audit_event("SYSTEM_EXECUTE", "ai", "LLMClient.chat", _THIS_FILE, "llm_chat_start",
                      extra={"model": self.model, "messages_count": len(messages), "temperature": temperature})
         try:
-            resp = self._client.chat.completions.create(
-                model=self.model, messages=messages, temperature=temperature,
-                extra_body=self._extra_body)
+            payload = {
+                "model": self.model,
+                "messages": messages,
+                "temperature": temperature,
+                "extra_body": self._extra_body,
+            }
+            _record_llm_request(payload, source="LLMClient.chat", stream=False)
+            resp = self._client.chat.completions.create(**payload)
             text = resp.choices[0].message.content
             audit_event("SYSTEM_EXECUTE", "ai", "LLMClient.chat", _THIS_FILE, "llm_chat_done",
                          extra={"model": self.model, "ok": True, "reply_len": len(text or "")})
@@ -437,10 +510,16 @@ class LLMClient:
 
         while True:
             force_finalize = steps >= max_tool_steps - 1 and len(trace) > 0
-            resp = self._client.chat.completions.create(
-                model=self.model, messages=msgs, temperature=temperature,
-                tools=tools, tool_choice="none" if force_finalize else "auto",
-                extra_body=self._extra_body)
+            payload = {
+                "model": self.model,
+                "tools": tools,
+                "tool_choice": "none" if force_finalize else "auto",
+                "messages": msgs,
+                "temperature": temperature,
+                "extra_body": self._extra_body,
+            }
+            _record_llm_request(payload, source=func, stream=stream)
+            resp = self._client.chat.completions.create(**payload)
             msg = resp.choices[0].message
             rc = _concat_reasoning(getattr(msg, "reasoning_content", None))
             content = msg.content or ""
@@ -506,11 +585,17 @@ class LLMClient:
         while True:
             force_finalize = steps >= max_tool_steps - 1 and len(trace) > 0
             try:
-                stream = self._client.chat.completions.create(
-                    model=self.model, messages=msgs, temperature=temperature,
-                    tools=tools, tool_choice="none" if force_finalize else "auto",
-                    stream=True,
-                    extra_body=self._extra_body)
+                payload = {
+                    "model": self.model,
+                    "tools": tools,
+                    "tool_choice": "none" if force_finalize else "auto",
+                    "messages": msgs,
+                    "temperature": temperature,
+                    "stream": True,
+                    "extra_body": self._extra_body,
+                }
+                _record_llm_request(payload, source="LLMClient.stream_chat_with_tools", stream=True)
+                stream = self._client.chat.completions.create(**payload)
             except Exception as e:
                 detail = _extract_api_error(e)
                 audit_event("SYSTEM_EXECUTE", "ai", "LLMClient.stream_chat_with_tools", _THIS_FILE,
