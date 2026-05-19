@@ -9,6 +9,14 @@
 ### Added
 
 - **LLM 请求体查看页** — 新增 `/llm-request` 页面与 `/llm-request/latest` 接口，可直接查看最近一次真实写入 DeepSeek/OpenAI 兼容 SDK 的请求体、模型、消息数、工具数、payload 字符数、内容字符数与估算 token。
+- **模型数据面板** — `/llm-request` 扩展并别名为 `/model-data`，新增 DeepSeek 账户余额查询、余额卡片入退场动画、供应商 tab、请求体摘要、真实 payload、token 明细、缓存命中相关字段与模型数据总览。
+- **模型供应商管理** — 新增 `/model-data/providers`、`/model-data/models`、`/model-data/balance` 接口和前端管理表单，支持 DeepSeek 默认供应商，以及 OpenAI、Google Gemini、Anthropic 和自定义 OpenAI-compatible provider 的 `base_url`、调用路径、API Key 环境变量、模型 ID/显示名配置。
+- **LLM 调度抽象层** — 新增 `Process/AI/dispatcher.py` 与 `providers.py`，引入 provider-aware LLM dispatcher，集中管理当前 provider/model、辅助模型、DeepSeek 余额、模型检测调用链路和跨供应商请求日志。
+- **HOME 卡槽化左右面板** — HOME 左右区域改为可组合卡槽结构，左侧 changelog、右侧运行状态/余额/模型数据等内容由 slot 渲染，便于后续自定义显示内容。
+- **HOME 真实运行数据面板** — HOME 右侧状态接入真实系统检测，展示启动时间、系统时间、系统内存、进程内存、负载、存储卷、24h 使用柱状图、日历热力图与真实 runtime 统计。
+- **HOME 存储卷选择 UI** — 存储 donut 增加合并标签式卷选择器，支持按 C/D/E 等挂载卷切换，切换时图表从当前值平滑过渡到新值。
+- **统一 HOME 动画编排** — 新增 `data-home-motion` / `data-home-exit` 卡槽动画编排，卡片只声明 UI，入场/退场由统一 motion pipeline 处理，支持左/右卡片从上到下逐项淡入滑入和统一退场。
+- **会话分页与 SQLite 读索引** — 新增非权威 SQLite session index，用作长会话读取缓存；`GET /sessions/{id}/messages` 支持 `limit`、`before_seq`，前端增加“加载更早消息”，初始仅加载最近消息以降低长会话渲染压力。
 - **HOME 极致动画打磨** — HOME 三栏布局补齐更完整的分层动效：左侧更新日志卡片弹入、标题/内容从上方落下、Markdown 文本从上往下逐项淡入；中间主卡保留玻璃卡片入场；右侧运行状态卡片、统计块、热力图、24h 柱状图、内存/存储 donut、启动时间与系统时间按从上到下的顺序错峰入场。
 - **HOME 页面退场动画** — 从 HOME 跳转到聊天、用户管理或日志页时不再硬切：顶部栏上移淡出，左/中/右三张卡片按各自方向退场，页面整体柔和淡出后再导航。
 - **Chat 退场终端联动** — Chat 页面退场前主动收起终端、保存终端宽度、清理拖拽状态，并同步关闭时间、模型、会话浮层，避免跳转退场画面残留终端面板。
@@ -23,6 +31,16 @@
 
 - **版本提升** — 项目版本从 `1.8.2` 提升到 `1.8.3`，同步更新 Web 版本徽章、设置页版本 fallback、Chat 版本 fallback 和主题脚本标识。
 - **LLM 请求体组装顺序稳定化** — LLM 请求改为更利于缓存命中的稳定结构：固定英文 system policy 始终位于最前；工具 schema 在同权限下固定排序并缓存；memory 上下文延后到历史消息之后、当前用户消息之前；终端上下文按时间顺序合并到 messages 尾部附近。
+- **LLM 请求日志精确化** — 请求日志继续记录真实 SDK request body，同时在收到官方 usage 后回写 prompt/completion/total token；无 usage 时使用 DeepSeek 官方 tokenizer 文件计数，避免状态栏与请求体面板口径偏移。
+- **模型检测链路 provider-aware** — 模型检测页面改为按 provider/model 选择调用链路，DeepSeek 继续走 OpenAI-compatible，Google/Anthropic 可使用专属 adapter payload。
+- **DeepSeek thinking 配置** — DeepSeek 请求统一携带 `thinking: {type: enabled}` 与 `reasoning_effort: max`，保持推理模式开关和强度配置一致。
+- **上下文阈值标准化** — 上下文 token 阈值统一限制为 `16K ~ 200K`；设置页、Chat 配置弹窗、后端 settings 校验、会话 config 和运行中 agent 同步使用同一标准。
+- **自动压缩触发点调整** — 自动上下文压缩改为 LLM 请求完成后按真实上下文 token 阈值判断，不再按原始消息条数触发；压缩结果作为 system substep 附加到当前 assistant turn。
+- **上下文状态栏口径调整** — Chat 状态栏展示 `当前上下文/阈值`，压缩发生时展示 `压缩前→压缩后/阈值`，只统计实际进入 LLM request context 的消息。
+- **终端上下文独立回放** — 终端历史改为独立读取 `/sessions/{id}/terminal` 并重放到终端面板，聊天消息和终端事件在前端渲染层分离。
+- **run_terminal 长任务策略** — 移除 `run_terminal` 对命令执行的固定 subprocess timeout，长命令不再被硬超时截断，改由 SSE heartbeat/progress 持续反馈连接状态。
+- **README 路由说明更新** — README 将 LLM 请求页说明升级为模型数据面板，补充 `/model-data`、`/model-data/latest`、`/model-data/balance` 路由说明。
+- **依赖更新** — `pyproject.toml` 新增 `tokenizers>=0.22` 与 `jinja2>=3.1.0`，用于官方 tokenizer 与 Web 模板/面板能力。
 - **Web 动效策略** — 关键页面动画从单纯淡入扩展为“卡片级 + 内容级 + 文本级”的组合序列；按钮/卡片/表单过渡改为显式列出 `transform`、`opacity`、`background`、`border-color`、`box-shadow` 等属性，减少布局抖动；在 `prefers-reduced-motion` 下仍遵循已有降级策略。
 - **新建会话草稿化** — Chat 进入页与会话管理“新建”只创建前端草稿态，不再立即生成会话文件或出现在会话列表；只有真正发送用户消息/文件时才分配真实会话并写入列表，符合“有用户输入才有会话”的产品直觉。
 - **会话列表只展示有效会话** — 会话列表默认过滤 `message_count=0` 的空会话；只读接口不再因为读取消息、上下文用量、终端或工具事件而隐式创建会话。
@@ -30,6 +48,24 @@
 ### Fixed
 
 - **请求体展示与真实 API body 对齐** — 请求体日志会自动剥离 `timeout` 之类 SDK-only 字段，只保留真实写入 API body 的 `messages/tools/thinking/...`；模型检测等直连 SDK 调用也会统一落日志。
+- **工具 marker 实时顺序** — Chat 流式工具 marker 从字符串替换改为结构化顺序队列，`tool_call_start` 插入“准备调用”，`tool_step` 原地升级同一块，避免多个工具时合并、乱序或完成提示跑到前面。
+- **工具执行 progress** — 流式工具执行期间每秒发送 `tool_heartbeat`，前端同一个 `tool_marker` 显示“连接中 / 执行中 · 已等待 Ns”，长工具调用不再像卡死。
+- **工具调用期间前文覆盖** — 修复 `replace_segment` 与 reasoning flush 边界，工具调用协议/DSML 被替换时不再覆盖已输出的 thinking、正文或前序工具 marker。
+- **工具 marker 持久化匹配** — `append_to_assistant_by_turn` 增强 `id/tool_call_id/name+stdin` 匹配，running marker 会被 done marker 替换，不再刷新后出现 start/done 分裂。
+- **tool_marker 字段保真** — 工具 marker 继续保留 `name/id/tool_call_id/status/arguments/result/stdout/stdin`，前端渲染与会话文件顺序续写，不再改写成不兼容结构。
+- **长工具调用断链体验** — 后端工具执行改为 worker + heartbeat，SSE 连接在同步工具执行期间持续有事件输出，降低代理/浏览器空闲断连概率。
+- **context-usage 404 自愈** — `_require_session_access(create=False)` 在消息文件存在但 session meta 暂缺时自动补元数据，避免有效会话的 `/context-usage` 返回 404。
+- **会话读取性能** — Chat 初始加载和切换会话只渲染最近消息，旧消息按页加载；SQLite index 只作缓存，JSON 仍为权威数据，删除/压缩/写入时自动失效缓存。
+- **会话删除/切换残留** — 删除当前会话、删除全部会话或切换会话后清理旧 DOM、终端回放状态、分页状态和 pending confirm，避免旧内容残留到新草稿。
+- **上下文顺序修正** — LLM 请求体按会话 JSON sequence 顺序写入，不再因时间戳或终端记录导致前后文错序。
+- **系统/终端消息上下文过滤** — `display_target` 与 `context_policy` 统一标记 chat/terminal/system/summary 事件，UI 通知不进入 LLM 上下文，summary/terminal context 才按策略进入。
+- **上下文压缩展示** — 自动压缩结果附加到 assistant turn 的 system substep，前端按普通 markdown 渲染引用内容，不再跳转到欢迎页或丢失压缩前消息。
+- **状态栏 token 阈值同步** — 设置页保存阈值会同步 `_session_config` 和运行中 agent，Chat 弹窗也会 PATCH 当前 session config，避免前端阈值与后端判断不一致。
+- **DeepSeek token 计数日志噪音** — 官方 tokenizer 优先使用本地 tokenizer 文件计数，不依赖 PyTorch/TensorFlow/Flax 模型加载，降低 tokenizer 初始化误解和日志噪音。
+- **HOME 右侧性能数据真实性** — 右侧性能面板改为读取真实系统内存、进程内存、负载、运行时长、系统时间和磁盘卷，不再显示固定 100G 之类占位数据。
+- **HOME 图表动画卡顿** — donut、存储卷切换、热力图、24h 柱状图使用数值缓动和未完成动画续接，快速切换时不会瞬移或卡顿。
+- **模型余额面板对齐** — DeepSeek 余额右侧四项数据重排为对称卡片，数值字号、换行、高度和入退场动画统一，减少面板视觉错乱。
+- **暗色/玻璃风一致性** — Chat 暗色模式配色调整为与 HOME 的深夜樱粉玻璃方向一致，AI 气泡、用户气泡、系统提示、thinking 低饱和灰粉层级统一。
 - **工具与终端上下文排序** — 历史 `tool` 消息、`tool_calls`、独立终端日志现在能稳定按时间顺序并入 LLM 上下文，避免回灌时丢掉工具结果或把终端上下文排错位置。
 - **DeepSeek DSML/tool_calls 渲染链路** — 流式 DSML 工具调用转为安全 tool marker 顺序写入，前端使用 `replace_segment` 覆盖临时 DSML，不再污染会话内容或覆盖 thinking。
 - **工具调用断链持久化** — 流式请求开始后立即写入会话草稿，工具开始/完成 marker 按 turn_id 增量更新，降低刷新或长链路中断时丢失工具标记的概率。

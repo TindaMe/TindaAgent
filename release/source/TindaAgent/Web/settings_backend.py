@@ -15,17 +15,44 @@ from TindaAgent.Process.Architecture.paths import get_runtime_root
 from TindaAgent.Process.Security import terminal_policy
 
 SETTINGS_FILE_NAME = "web-settings.json"
+CONTEXT_TOKEN_LIMIT_MIN = 16000
+CONTEXT_TOKEN_LIMIT_MAX_FALLBACK = 200000
+CONTEXT_TOKEN_LIMIT_DEFAULT = 16000
 
 DEFAULT_WEB_SETTINGS: dict[str, Any] = {
     "stream_enabled": True,
     "terminal_open": False,
-    "token_limit": 16000,
+    "token_limit": CONTEXT_TOKEN_LIMIT_DEFAULT,
     "quick_buttons": ["model", "stream", "terminal", "compress"],
     "restore_last_session": False,
     "last_session_id": "",
     "title_model": "deepseek-v4-flash",
     "compress_model": "deepseek-v4-flash",
 }
+
+
+def normalize_context_token_limit(value: Any, *, default: int = CONTEXT_TOKEN_LIMIT_DEFAULT) -> int:
+    try:
+        parsed = int(value)
+    except Exception:
+        return int(default)
+    if CONTEXT_TOKEN_LIMIT_MIN <= parsed <= CONTEXT_TOKEN_LIMIT_MAX_FALLBACK:
+        return int(parsed)
+    return int(default)
+
+
+def validate_context_token_limit(value: Any) -> tuple[bool, int, str]:
+    try:
+        parsed = int(value)
+    except Exception:
+        return False, CONTEXT_TOKEN_LIMIT_DEFAULT, (
+            f"上下文阈值必须是数字，范围为 {CONTEXT_TOKEN_LIMIT_MIN} ~ {CONTEXT_TOKEN_LIMIT_MAX_FALLBACK}"
+        )
+    if parsed < CONTEXT_TOKEN_LIMIT_MIN or parsed > CONTEXT_TOKEN_LIMIT_MAX_FALLBACK:
+        return False, CONTEXT_TOKEN_LIMIT_DEFAULT, (
+            f"上下文阈值范围为 {CONTEXT_TOKEN_LIMIT_MIN} ~ {CONTEXT_TOKEN_LIMIT_MAX_FALLBACK}"
+        )
+    return True, int(parsed), ""
 
 
 def _settings_path() -> Path:
@@ -45,6 +72,7 @@ def load_web_settings() -> dict[str, Any]:
     # Merge with defaults so new keys always exist
     merged = dict(DEFAULT_WEB_SETTINGS)
     merged.update(raw)
+    merged["token_limit"] = normalize_context_token_limit(merged.get("token_limit"))
     return merged
 
 
@@ -53,6 +81,7 @@ def save_web_settings(data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     merged = load_web_settings()
     merged.update(data)
+    merged["token_limit"] = normalize_context_token_limit(merged.get("token_limit"))
     # Only persist known keys
     clean = {k: merged.get(k, DEFAULT_WEB_SETTINGS[k]) for k in DEFAULT_WEB_SETTINGS}
     tmp = path.with_name(path.name + ".tmp")
@@ -62,7 +91,7 @@ def save_web_settings(data: dict[str, Any]) -> None:
 
 def get_context_token_limit() -> int:
     """全局唯一的上下文 token 阈值入口。来源：web-settings.json，默认 16k。"""
-    return int(load_web_settings().get("token_limit", DEFAULT_WEB_SETTINGS["token_limit"]))
+    return normalize_context_token_limit(load_web_settings().get("token_limit"))
 
 
 def get_restore_last_session() -> bool:

@@ -16,12 +16,19 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from TindaAgent.Process.AI.tokenizer import estimate_tokens
+from TindaAgent.Process.AI.tokenizer import estimate_request_messages_tokens
 from TindaAgent.Process.Observability.audit import get_audit_engine
 from TindaAgent.Tool import tool as tool_registry
 
 LOGGER = logging.getLogger("tinda.session_adapter")
-_ENTRY_META_KEYS = ("created_at", "turn_id", "is_summary")
+_ENTRY_META_KEYS = (
+    "created_at",
+    "turn_id",
+    "is_summary",
+    "type",
+    "display_target",
+    "context_policy",
+)
 
 _DSML_TOOL_CALLS_BLOCK_RE = re.compile(
     r"\s*<[^>]*(?:tool[_\-\u2581]?calls|toolcalls)[^>]*>.*?</[^>]*(?:tool[_\-\u2581]?calls|toolcalls)[^>]*>\s*",
@@ -225,6 +232,19 @@ def _storage_steps_from_text(text: str, *, id_prefix: str) -> list[dict[str, Any
     return steps
 
 
+def _normalize_system_substep_payload(raw: Any) -> dict[str, Any]:
+    if isinstance(raw, dict):
+        payload = dict(raw)
+    else:
+        payload = {"text": str(raw or "")}
+    payload.setdefault("kind", "system")
+    payload.setdefault("display", "inline")
+    payload.setdefault("context_policy", "exclude")
+    if "text" not in payload:
+        payload["text"] = str(payload.get("summary") or payload.get("content") or "")
+    return payload
+
+
 def _storage_steps_from_substep(raw: dict[str, Any], *, id_prefix: str) -> list[dict[str, Any]]:
     if not isinstance(raw, dict):
         return []
@@ -236,6 +256,11 @@ def _storage_steps_from_substep(raw: dict[str, Any], *, id_prefix: str) -> list[
         return _storage_steps_from_text(str(raw.get("content", "")), id_prefix=id_prefix)
     if kind == "tool_marker":
         return [{"tool_marker": _normalize_tool_marker(raw)}]
+    if kind == "system":
+        payload = raw.get("content")
+        if payload in (None, ""):
+            payload = raw.get("system", raw.get("text", ""))
+        return [{"system": _normalize_system_substep_payload(payload)}]
 
     if "thinking" in raw:
         return [{"thinking": str(raw.get("thinking", ""))}]
@@ -243,6 +268,8 @@ def _storage_steps_from_substep(raw: dict[str, Any], *, id_prefix: str) -> list[
         return _storage_steps_from_text(str(raw.get("text", "")), id_prefix=id_prefix)
     if "tool_marker" in raw and isinstance(raw.get("tool_marker"), dict):
         return [{"tool_marker": _normalize_tool_marker(raw)}]
+    if "system" in raw:
+        return [{"system": _normalize_system_substep_payload(raw.get("system"))}]
     return [dict(raw)]
 
 
@@ -274,7 +301,7 @@ def normalize_store_entry(entry: dict[str, Any]) -> tuple[dict[str, Any], bool]:
         if "text" in content:
             steps = _storage_steps_from_text(str(content.get("text", "")), id_prefix=f"{msg_id}:text")
         else:
-            steps = [dict(content)] if content else []
+            steps = _storage_steps_from_substep(dict(content), id_prefix=f"{msg_id}:content") if content else []
         for idx, step in enumerate(steps):
             new_content[str(idx + 1)] = step
         new_entry["content"] = new_content if new_content else {"1": {"text": ""}}
@@ -387,9 +414,10 @@ def build_system_message(text: str, audit_id: int | None = None,
 # ── Store → LLM ──────────────────────────────────────────────────────────
 
 
-def _entry_sort_key(seq: int, entry: dict[str, Any]) -> tuple[str, int]:
-    ts = str(entry.get("created_at", "") or "")
-    return ts, int(seq)
+def _entry_sort_key(seq: int, entry: dict[str, Any]) -> tuple[int, int]:
+    # Numeric JSON order is the source of truth; timestamps can collide or drift.
+    _ = entry
+    return int(seq), 0
 
 
 def store_dict_to_agent_messages(store_dict: dict,
@@ -431,7 +459,15 @@ def store_dict_to_agent_messages(store_dict: dict,
         anchor_idx = -1
         for i, (seq, entry) in enumerate(context_entries):
             if entry.get("id", "") == latest_summary_id:
-                summary_msg = _entry_to_llm_rows(entry)
+                summary_msg = _entry_to_llm_rows(
+                    _with_event_meta(
+                        entry,
+                        source_seq=seq,
+                        event_type="summary",
+                        display_target="context",
+                        context_policy="summary",
+                    )
+                )
             if entry.get("id", "") == summary_anchor_id:
                 anchor_idx = i
         if summary_msg and anchor_idx >= 0:
@@ -476,6 +512,9 @@ def _terminal_entries_to_context_entries(entries: list[dict[str, Any]], *, start
                 "role": "system",
                 "id": f"terminal-{batch_idx}",
                 "created_at": batch_ts,
+                "type": "terminal_context",
+                "display_target": "context",
+                "context_policy": "include",
                 "content": {"text": f"[Terminal Context]\n{text}"},
             },
         ))
@@ -512,6 +551,14 @@ def _entry_to_llm_rows(entry: dict) -> list[dict]:
     entry, _changed = normalize_store_entry(entry)
     role = str(entry.get("role", "")).strip()
     content = entry.get("content", {})
+    event_type = str(entry.get("type", "") or "").strip().lower()
+    display_target = str(entry.get("display_target", "") or "").strip().lower()
+    context_policy = str(entry.get("context_policy", "") or "").strip().lower()
+
+    if context_policy == "exclude":
+        return []
+    if display_target and display_target not in {"chat", "context"} and context_policy != "include":
+        return []
 
     if role == "user":
         file_blocks = []
@@ -625,6 +672,16 @@ def _entry_to_llm_rows(entry: dict) -> list[dict]:
                 pending_reasoning.append(str(v["thinking"]))
             elif "text" in v:
                 pending_text.append(str(v["text"]))
+            elif "system" in v:
+                payload = v.get("system")
+                if not isinstance(payload, dict):
+                    payload = {"text": str(payload or "")}
+                policy = str(payload.get("context_policy", "exclude") or "exclude").strip().lower()
+                if policy in {"include", "summary"}:
+                    text = str(payload.get("text", "") or "").strip()
+                    if text:
+                        prefix = "[Context Summary]" if policy == "summary" else "[System Event]"
+                        pending_text.append(f"{prefix} {text}")
         _flush_asst()
         return rows
 
@@ -636,7 +693,15 @@ def _entry_to_llm_rows(entry: dict) -> list[dict]:
             text = content
         if not text.strip():
             return []
-        return [{"role": "assistant", "content": f"[Context Summary] {text}"}]
+        include_system = (
+            context_policy in {"include", "summary"}
+            or event_type in {"summary", "terminal_context"}
+            or bool(entry.get("is_summary", False))
+        )
+        if not include_system:
+            return []
+        prefix = "[Context Summary]" if event_type == "summary" or context_policy == "summary" or bool(entry.get("is_summary", False)) else "[System Context]"
+        return [{"role": "assistant", "content": f"{prefix} {text}"}]
 
     return []
 
@@ -645,21 +710,94 @@ def _entry_to_llm_rows(entry: dict) -> list[dict]:
 
 
 def store_dict_to_frontend(store_dict: dict) -> list[dict]:
-    """Convert new session dict to frontend-renderable entry list."""
+    """Convert session dict to unified frontend SessionEvent list."""
     store_dict, _changed = normalize_store_dict(store_dict)
     entries = []
     for k in sorted((int(k2) for k2 in store_dict if k2.isdigit()), key=int):
         entry = store_dict[str(k)]
         if not isinstance(entry, dict):
             continue
-        entries.append(_entry_to_frontend(entry))
+        entries.append(_entry_to_frontend(entry, seq=k))
     return entries
 
 
-def _entry_to_frontend(entry: dict) -> dict:
+def terminal_entries_to_frontend(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Convert persisted terminal rows to the same event envelope used by chat messages."""
+    out: list[dict[str, Any]] = []
+    for idx, raw in enumerate(entries or [], start=1):
+        if not isinstance(raw, dict):
+            continue
+        kind = str(raw.get("kind", raw.get("terminal_kind", "out")) or "out").strip() or "out"
+        text = str(raw.get("content", raw.get("text", "")) or "")
+        event = {
+            "role": "assistant",
+            "id": str(raw.get("id", "") or f"terminal-{idx}"),
+            "type": "terminal",
+            "display_target": "terminal",
+            "context_policy": "include",
+            "seq": int(raw.get("seq", idx) or idx),
+            "source_seq": int(raw.get("source_seq", 0) or 0),
+            "source": str(raw.get("source", "") or ""),
+            "job_id": str(raw.get("job_id", "") or ""),
+            "kind": kind,
+            "class": str(raw.get("class", raw.get("terminal_class", "")) or "").strip().lower(),
+            "content": text,
+            "ts": str(raw.get("ts", raw.get("created_at", "")) or ""),
+        }
+        out.append(event)
+    return out
+
+
+def _event_base(entry: dict, role: str, msg_id: str, seq: int | None) -> dict:
+    event_type = str(entry.get("type", "") or "").strip()
+    if not event_type:
+        if bool(entry.get("is_summary", False)):
+            event_type = "summary"
+        elif role == "user":
+            event_type = "user_message"
+        elif role == "assistant":
+            event_type = "assistant_message"
+        elif role == "system":
+            event_type = "system_notice"
+        else:
+            event_type = "message"
+    display_target = str(entry.get("display_target", "") or "").strip()
+    if not display_target:
+        display_target = "chat"
+    context_policy = str(entry.get("context_policy", "") or "").strip()
+    if not context_policy:
+        if event_type == "summary":
+            context_policy = "summary"
+        elif role in {"user", "assistant"}:
+            context_policy = "include"
+        else:
+            context_policy = "exclude"
+    out = {
+        "role": role,
+        "id": msg_id,
+        "type": event_type,
+        "display_target": display_target,
+        "context_policy": context_policy,
+    }
+    if seq is not None:
+        out["seq"] = int(seq)
+    source_seq = entry.get("source_seq")
+    if source_seq not in (None, ""):
+        try:
+            out["source_seq"] = int(source_seq)
+        except Exception:
+            out["source_seq"] = source_seq
+    turn_id = entry.get("turn_id")
+    if turn_id not in (None, ""):
+        out["turn_id"] = str(turn_id)
+    return out
+
+
+def _entry_to_frontend(entry: dict, seq: int | None = None) -> dict:
     role = str(entry.get("role", "")).strip()
     content = entry.get("content", {})
     msg_id = str(entry.get("id", ""))
+    base = _event_base(entry, role, msg_id, seq)
 
     if role == "user":
         if isinstance(content, dict):
@@ -670,24 +808,24 @@ def _entry_to_frontend(entry: dict) -> dict:
                     for kind, val in v.items():
                         sub_steps.append({"kind": kind, "data": val})
             if sub_steps:
-                return {"role": "user", "id": msg_id, "content": sub_steps}
+                return {**base, "content": sub_steps}
             # Fallback: flat format
             text = str(content.get("user") or content.get("text") or "")
-            return {"role": "user", "id": msg_id, "content": text}
+            return {**base, "content": text}
         elif isinstance(content, str):
-            return {"role": "user", "id": msg_id, "content": content}
-        return {"role": "user", "id": msg_id, "content": ""}
+            return {**base, "content": content}
+        return {**base, "content": ""}
 
     elif role == "assistant":
         if isinstance(content, str):
-            return {"role": "assistant", "id": msg_id, "content": content}
+            return {**base, "content": content}
         sub_steps = []
         for sk in sorted((int(k2) for k2 in content if k2.isdigit()), key=int):
             v = content[str(sk)]
             if isinstance(v, dict):
                 for kind, val in v.items():
                     sub_steps.append({"kind": kind, "data": val})
-        return {"role": "assistant", "id": msg_id, "content": sub_steps}
+        return {**base, "content": sub_steps}
 
     elif role == "system":
         text = ""
@@ -695,9 +833,28 @@ def _entry_to_frontend(entry: dict) -> dict:
             text = str(content.get("text", ""))
         elif isinstance(content, str):
             text = content
-        return {"role": "system", "id": msg_id, "content": text}
+        return {**base, "content": text}
 
-    return {"role": role, "id": msg_id, "content": str(content)}
+    return {**base, "content": str(content)}
+
+
+def _with_event_meta(
+    entry: dict,
+    *,
+    source_seq: int,
+    event_type: str | None = None,
+    display_target: str = "chat",
+    context_policy: str | None = None,
+) -> dict:
+    item = dict(entry)
+    item["source_seq"] = int(source_seq)
+    if event_type:
+        item["type"] = event_type
+    if display_target:
+        item["display_target"] = display_target
+    if context_policy:
+        item["context_policy"] = context_policy
+    return item
 
 
 def effective_store_dict(store_dict: dict, meta: dict | None = None) -> dict[str, Any]:
@@ -725,21 +882,71 @@ def effective_store_dict(store_dict: dict, meta: dict | None = None) -> dict[str
     if latest_summary_id and summary_anchor_id:
         summary_entry = None
         anchor_seq = -1
+        latest_summary_seq = -1
         for seq, entry in entries:
             msg_id = str(entry.get("id", "") or "")
             if msg_id == latest_summary_id:
                 summary_entry = entry
+                latest_summary_seq = seq
             if msg_id == summary_anchor_id:
                 anchor_seq = seq
         if summary_entry is not None and anchor_seq >= 0:
-            visible = [summary_entry]
-            visible.extend(
-                entry for seq, entry in entries
-                if seq >= anchor_seq and str(entry.get("id", "") or "") != latest_summary_id
-            )
-            return {str(i + 1): entry for i, entry in enumerate(visible)}
+            visible: list[tuple[int, dict[str, Any]]] = []
+            if str(summary_entry.get("display_target", "chat") or "chat") == "chat":
+                visible.append((
+                    anchor_seq,
+                    _with_event_meta(
+                        summary_entry,
+                        source_seq=anchor_seq,
+                        event_type="summary",
+                        context_policy="summary",
+                    ),
+                ))
+            seen_ids: set[str] = set()
+            for seq, entry in entries:
+                msg_id = str(entry.get("id", "") or "")
+                if msg_id == latest_summary_id:
+                    continue
+                keep_entry = seq >= anchor_seq or (
+                    seq == latest_summary_seq
+                    and str(entry.get("role", "") or "") == "assistant"
+                )
+                if not keep_entry:
+                    continue
+                if msg_id and msg_id in seen_ids:
+                    continue
+                if msg_id:
+                    seen_ids.add(msg_id)
+                visible.append((
+                    seq,
+                    _with_event_meta(
+                        entry,
+                        source_seq=seq,
+                        event_type=(
+                            "user_message"
+                            if str(entry.get("role", "") or "") == "user"
+                            else "assistant_message"
+                            if str(entry.get("role", "") or "") == "assistant"
+                            else "system_notice"
+                        ),
+                    ),
+                ))
+            return {str(i + 1): entry for i, (_source_seq, entry) in enumerate(visible)}
 
-    return {str(i + 1): entry for i, (_seq, entry) in enumerate(entries)}
+    return {
+        str(i + 1): _with_event_meta(
+            entry,
+            source_seq=seq,
+            event_type=(
+                "user_message"
+                if str(entry.get("role", "") or "") == "user"
+                else "assistant_message"
+                if str(entry.get("role", "") or "") == "assistant"
+                else "system_notice"
+            ),
+        )
+        for i, (seq, entry) in enumerate(entries)
+    }
 
 
 # ── Token estimation ─────────────────────────────────────────────────────
@@ -748,12 +955,7 @@ def effective_store_dict(store_dict: dict, meta: dict | None = None) -> dict[str
 def estimate_context_tokens(store_dict: dict, meta: dict | None = None) -> int:
     """Estimate token count of messages that would go to LLM."""
     llm_rows, _ = store_dict_to_agent_messages(store_dict, meta)
-    total = 0
-    for row in llm_rows:
-        content = str(row.get("content", "") or "")
-        if content.strip():
-            total += estimate_tokens(content)
-    return int(total)
+    return int(estimate_request_messages_tokens(llm_rows))
 
 
 # ── Compression helpers ──────────────────────────────────────────────────

@@ -59,7 +59,7 @@ def _normalize_entry(raw: dict) -> dict | None:
     def with_meta(item: dict | None) -> dict | None:
         if item is None:
             return None
-        for key in ("created_at", "turn_id", "is_summary"):
+        for key in getattr(sa, "_ENTRY_META_KEYS", ("created_at", "turn_id", "is_summary")):
             value = raw.get(key)
             if value not in (None, ""):
                 item[key] = value
@@ -83,20 +83,36 @@ def _normalize_entry(raw: dict) -> dict | None:
         text = str(content or "")
 
     if et == "notice" or role == "system":
-        return with_meta(sa.build_system_message(text))
+        msg = sa.build_system_message(text)
+        msg.setdefault("type", "system_notice")
+        msg.setdefault("display_target", "chat")
+        msg.setdefault("context_policy", "exclude")
+        return with_meta(msg)
     elif et == "tool_marker":
-        return None  # tool markers embedded in assistant content
+        msg = sa.build_assistant_message([{"kind": "text", "content": text}])
+        msg["type"] = "tool_marker"
+        msg["display_target"] = "chat"
+        msg["context_policy"] = "exclude"
+        return with_meta(msg)
     elif et == "terminal":
         return None  # terminal output merged into tool_marker
     elif role == "user":
         is_raw = content.get("user") if isinstance(content, dict) else False
-        return with_meta(sa.build_user_message(text, raw=bool(is_raw)))
+        msg = sa.build_user_message(text, raw=bool(is_raw))
+        msg.setdefault("type", "user_message")
+        msg.setdefault("display_target", "chat")
+        msg.setdefault("context_policy", "include")
+        return with_meta(msg)
     elif role == "assistant":
         substeps = [{"kind": "text", "content": text}]
         reasoning = raw.get("reasoning_content")
         if isinstance(reasoning, str) and reasoning.strip():
             substeps.insert(0, {"kind": "thinking", "content": reasoning})
-        return with_meta(sa.build_assistant_message(substeps))
+        msg = sa.build_assistant_message(substeps)
+        msg.setdefault("type", "assistant_message")
+        msg.setdefault("display_target", "chat")
+        msg.setdefault("context_policy", "include")
+        return with_meta(msg)
     return None
 
 
@@ -155,6 +171,15 @@ class SessionStore:
         if not sid:
             raise SessionStoreError("session_id invalid")
         return self.messages_dir / f"{sid}.json"
+
+    def has_message_file(self, session_id: str) -> bool:
+        sid = _safe_session_id(session_id)
+        if not sid:
+            return False
+        if self._messages_path(sid).exists():
+            return True
+        legacy = self.legacy_messages_dir / f"{sid}.jsonl" if self.legacy_messages_dir else None
+        return bool(legacy and legacy.exists())
 
     # ── Messages I/O ──
 
@@ -355,12 +380,20 @@ class SessionStore:
                     return False
                 inc_id = str(incoming.get("id", "") or "").strip()
                 inc_model_id = str(incoming.get("tool_call_id", "") or "").strip()
+                inc_name = str(incoming.get("name", incoming.get("tool_name", "")) or "").strip()
+                inc_stdin = str(incoming.get("stdin", "") or "").strip()
                 cur_id = str(marker.get("id", "") or "").strip()
                 cur_model_id = str(marker.get("tool_call_id", "") or "").strip()
+                cur_name = str(marker.get("name", marker.get("tool_name", "")) or "").strip()
+                cur_stdin = str(marker.get("stdin", "") or "").strip()
+                cur_status = str(marker.get("status", "") or "").strip().lower()
                 if inc_id and cur_id and inc_id == cur_id:
                     return True
                 if inc_model_id and cur_model_id and inc_model_id == cur_model_id:
                     return True
+                if cur_status in {"running", "pending"} and inc_name and inc_name == cur_name:
+                    if not inc_stdin or not cur_stdin or inc_stdin == cur_stdin:
+                        return True
                 return False
 
             changed = False
@@ -583,7 +616,8 @@ class SessionStore:
                 if owner_uid is not None and not str(row.get("owner_uid", "") or "").strip():
                     return self._touch_session_meta(sid, owner_uid=owner_uid)
                 return row
-            return self.create_session(sid, owner_uid=owner_uid)
+            message_count = len(self._load_messages_raw(sid)) if self.has_message_file(sid) else 0
+            return self._touch_session_meta(sid, owner_uid=owner_uid, message_count=message_count)
 
     def get_session(self, session_id: str) -> dict[str, Any] | None:
         sid = _safe_session_id(session_id)
@@ -749,6 +783,8 @@ class SessionStore:
         first_user_idx = -1
         first_user_text = ""
         for i, (_, e) in enumerate(entries):
+            if str(e.get("type", "") or "") == "tool_marker" or str(e.get("context_policy", "") or "") == "exclude":
+                continue
             if e.get("role") != "user":
                 continue
             text = _extract_user_text(e.get("content", {}))
@@ -761,6 +797,8 @@ class SessionStore:
 
         # 第一条 chat user 之后的 assistant chat 消息(跳过 tool_marker/terminal/notice 等)
         for _, e in entries[first_user_idx + 1:]:
+            if str(e.get("type", "") or "") == "tool_marker" or str(e.get("context_policy", "") or "") == "exclude":
+                continue
             if e.get("role") != "assistant":
                 continue
             text = _extract_assistant_text(e.get("content", {}))
@@ -770,7 +808,13 @@ class SessionStore:
         # user-only fallback(还没等到 assistant 回复就触发标题生成)
         return first_user_text, ""
 
-    def compress_context(self, session_id: str, summary_text: str) -> dict[str, Any]:
+    def compress_context(
+            self,
+            session_id: str,
+            summary_text: str,
+            *,
+            display_target: str = "chat",
+    ) -> dict[str, Any]:
         sid = _safe_session_id(session_id)
         if not sid:
             raise SessionStoreError("session_id invalid")
@@ -803,6 +847,10 @@ class SessionStore:
             summary_id = sa.make_message_id()
             summary_msg = sa.build_system_message(summary_text)
             summary_msg["id"] = summary_id
+            summary_msg["is_summary"] = True
+            summary_msg["type"] = "summary"
+            summary_msg["display_target"] = str(display_target or "chat").strip() or "chat"
+            summary_msg["context_policy"] = "summary"
             # Find approximate insertion point before the tail entries
             tail_start_key = int(keep_tail[0].get("seq", keys[-4] if len(keys) >= 4 else keys[0]))
             for k in range(tail_start_key, max_key + 1):
@@ -850,7 +898,30 @@ class SessionStore:
                         existing = []
                 except Exception:
                     existing = []
-            existing.extend(entries)
+            seen: set[tuple[str, str]] = set()
+            for row in existing:
+                if not isinstance(row, dict):
+                    continue
+                event_id = str(row.get("id", "") or "").strip()
+                source_seq = str(row.get("source_seq", "") or "").strip()
+                if event_id:
+                    seen.add(("id", event_id))
+                if source_seq and str(row.get("source", "") or "") == "tool_runtime":
+                    seen.add(("tool_runtime", source_seq))
+            for row in entries:
+                if not isinstance(row, dict):
+                    continue
+                event_id = str(row.get("id", "") or "").strip()
+                source_seq = str(row.get("source_seq", "") or "").strip()
+                if event_id and ("id", event_id) in seen:
+                    continue
+                if source_seq and str(row.get("source", "") or "") == "tool_runtime" and ("tool_runtime", source_seq) in seen:
+                    continue
+                existing.append(row)
+                if event_id:
+                    seen.add(("id", event_id))
+                if source_seq and str(row.get("source", "") or "") == "tool_runtime":
+                    seen.add(("tool_runtime", source_seq))
             temp = path.with_suffix(".terminal.json.tmp")
             temp.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
             temp.replace(path)

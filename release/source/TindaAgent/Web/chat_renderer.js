@@ -1,33 +1,320 @@
 /**
- * chat_renderer.js — new-format session message renderer.
- * Load after chat.html (which defines addBubble, renderMarkdown, messagesEl, etc.)
+ * chat_renderer.js — chat message renderer.
+ * Normal chat bubble DOM, markdown updates and assistant turn binding live here.
  */
 (function () {
   "use strict";
 
-  function renderSession(entries) {
+  var activeRenderToken = 0;
+  var assistantTurnBubbleById = new Map();
+
+  function nextFrame() {
+    return new Promise(function (resolve) {
+      requestAnimationFrame(resolve);
+    });
+  }
+
+  function getMessagesEl() {
+    return (typeof messagesEl !== "undefined" && messagesEl) ? messagesEl : null;
+  }
+
+  function isHydrating() {
+    return typeof isHydratingMessages === "function" && isHydratingMessages();
+  }
+
+  function getSpacer(container) {
+    return container ? container.querySelector(".sys-pin-spacer") : null;
+  }
+
+  function previousRenderable(container, spacer) {
+    return spacer ? spacer.previousElementSibling : container.lastElementChild;
+  }
+
+  function appendBeforeSpacer(container, node) {
+    var spacer = getSpacer(container);
+    if (spacer) container.insertBefore(node, spacer);
+    else container.appendChild(node);
+  }
+
+  function botAvatarSvg() {
+    return '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2"></circle><path d="M12 2.8v4.2M12 17v4.2M2.8 12h4.2M17 12h4.2M5.3 5.3l3 3M15.7 15.7l3 3M18.7 5.3l-3 3M8.3 15.7l-3 3"></path></svg>';
+  }
+
+  function userAvatarSvg() {
+    return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 21a8 8 0 0 0-16 0"></path><circle cx="12" cy="8" r="3.2"></circle></svg>';
+  }
+
+  function normalizeRole(role) {
+    return String(role || "") === "user" ? "user" : "bot";
+  }
+
+  function normalizeTurn(raw) {
+    if (typeof normalizeTurnId === "function") return normalizeTurnId(raw);
+    return String(raw || "").trim().replace(/[^A-Za-z0-9._:-]+/g, "_").slice(0, 80);
+  }
+
+  function rememberTurn(turnId, bubble) {
+    var tid = normalizeTurn(turnId);
+    if (!tid || !bubble) return;
+    assistantTurnBubbleById.set(tid, bubble);
+  }
+
+  function resetTurns() {
+    assistantTurnBubbleById.clear();
+  }
+
+  function findTurnBubbleInDom(turnId) {
+    var tid = normalizeTurn(turnId);
+    var container = getMessagesEl();
+    if (!tid || !container) return null;
+    var bubbles = container.querySelectorAll(".bubble[data-turn-id]");
+    for (var i = 0; i < bubbles.length; i++) {
+      if (String(bubbles[i].dataset.turnId || "") === tid) return bubbles[i];
+    }
+    return null;
+  }
+
+  function resolveTurnBubble(turnId) {
+    var tid = normalizeTurn(turnId);
+    if (!tid) return null;
+    var bubble = assistantTurnBubbleById.get(tid);
+    if (bubble && bubble.isConnected) return bubble;
+    assistantTurnBubbleById.delete(tid);
+    bubble = findTurnBubbleInDom(tid);
+    if (bubble) rememberTurn(tid, bubble);
+    return bubble;
+  }
+
+  function renderMd(text) {
+    return typeof renderMarkdown === "function" ? renderMarkdown(text) : String(text || "");
+  }
+
+  function updateBubbleMarkdown(bubbleEl, text, options) {
+    options = options || {};
+    if (!bubbleEl) return false;
+    var raw = String(text ?? "");
+    bubbleEl.classList.add("md");
+    bubbleEl.dataset.rawMd = raw;
+    bubbleEl.innerHTML = renderMd(raw);
+    if (options.turnId) {
+      var tid = normalizeTurn(options.turnId);
+      if (tid) {
+        bubbleEl.dataset.turnId = tid;
+        rememberTurn(tid, bubbleEl);
+      }
+    }
+    if (options.scroll !== false && !isHydrating() && typeof scrollToBottom === "function") {
+      scrollToBottom();
+    }
+    return true;
+  }
+
+  function appendMarkdownToBubble(bubbleEl, extraText, options) {
+    if (!bubbleEl) return false;
+    var prev = String(bubbleEl.dataset.rawMd ?? "");
+    var next = prev + String(extraText ?? "");
+    return updateBubbleMarkdown(bubbleEl, next, options);
+  }
+
+  function escape(value) {
+    if (typeof escapeHtml === "function") return escapeHtml(value);
+    return String(value ?? "").replace(/[&<>"']/g, function (ch) {
+      return {"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[ch];
+    });
+  }
+
+  function displayFileName(fullName) {
+    if (typeof getDisplayFileName === "function") return getDisplayFileName(fullName);
+    var name = String(fullName || "").trim();
+    var lastSlash = Math.max(name.lastIndexOf("/"), name.lastIndexOf("\\"));
+    return lastSlash >= 0 ? name.slice(lastSlash + 1) : name;
+  }
+
+  function createMessageRow(role, options) {
+    options = options || {};
+    var container = getMessagesEl();
+    if (!container) return null;
+    var normalizedRole = normalizeRole(role);
+    var row = document.createElement("div");
+    row.className = "msg " + normalizedRole;
+    if (container.dataset.hydrating === "1" || options.history) row.classList.add("history-msg");
+
+    var spacer = getSpacer(container);
+    var prev = previousRenderable(container, spacer);
+    if (prev && prev.classList && prev.classList.contains("msg") && prev.classList.contains(normalizedRole)) {
+      row.classList.add("same-as-prev");
+    }
+
+    var avatar = document.createElement("div");
+    avatar.className = "avatar";
+    avatar.innerHTML = normalizedRole === "bot" ? botAvatarSvg() : userAvatarSvg();
+    row.appendChild(avatar);
+    return row;
+  }
+
+  function mountRow(row) {
+    var container = getMessagesEl();
+    if (!container || !row) return;
+    appendBeforeSpacer(container, row);
+    if (!isHydrating() && typeof scrollToBottom === "function") scrollToBottom();
+  }
+
+  function renderBubble(text, role, options) {
+    options = options || {};
+    var row = createMessageRow(role, options);
+    if (!row) return { row: null, bubble: null };
+    var normalizedRole = normalizeRole(role);
+    var bubble = document.createElement("div");
+    bubble.className = "bubble" + (options.isCommand ? " cmd" : "");
+    if (normalizedRole === "bot") {
+      var tid = normalizeTurn(options.turnId || "");
+      updateBubbleMarkdown(bubble, text, { turnId: tid, scroll: false });
+    } else {
+      bubble.textContent = String(text ?? "");
+    }
+    row.appendChild(bubble);
+    mountRow(row);
+    return { row: row, bubble: bubble };
+  }
+
+  function renderFileChip(fileName) {
+    var row = createMessageRow("user", {});
+    if (!row) return { row: null, bubble: null };
+    var shortName = displayFileName(fileName);
+    var bubble = document.createElement("div");
+    bubble.className = "bubble file-chip";
+    bubble.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg><span>' + escape(shortName) + '</span>';
+    row.appendChild(bubble);
+    mountRow(row);
+    return { row: row, bubble: bubble };
+  }
+
+  function renderTyping() {
+    var row = createMessageRow("bot", {});
+    if (!row) return null;
+    var bubble = document.createElement("div");
+    bubble.className = "bubble";
+    bubble.innerHTML = '<div class="typing"><span></span><span></span><span></span></div>';
+    row.appendChild(bubble);
+    mountRow(row);
+    return row;
+  }
+
+  function createPlainRow(role, contentEl) {
+    var row = createMessageRow(role, {});
+    if (!row) return null;
+    if (contentEl instanceof Node) row.appendChild(contentEl);
+    return row;
+  }
+
+  function upsertAssistantBubble(rawText, options) {
+    options = options || {};
+    var text = String(rawText ?? "");
+    if (typeof sanitizeAssistantDisplayText === "function") {
+      text = sanitizeAssistantDisplayText(text);
+    }
+    if (!text) return null;
+    var tid = normalizeTurn(options.turnId || "");
+    var existing = resolveTurnBubble(tid);
+    if (existing) {
+      if (options.append) {
+        var prev = String(existing.dataset.rawMd ?? "");
+        var next = prev ? prev + "\n\n" + text : text;
+        updateBubbleMarkdown(existing, next, { turnId: tid });
+      } else {
+        updateBubbleMarkdown(existing, text, { turnId: tid });
+      }
+      return { row: existing.closest(".msg"), bubble: existing };
+    }
+    return renderBubble(text, "bot", {
+      isCommand: !!options.isCommand,
+      turnId: tid,
+    });
+  }
+
+  function renderToolMarkerMarkdown(marker, options) {
+    options = options || {};
+    var d = marker || {};
+    if (d.data && typeof d.data === "object") d = d.data;
+    if (typeof d !== "object") d = {};
+    var name = d.name || d.tool_name || d.agent_tool || options.name || "unknown";
+    var cid = d.id || d.call_id || options.id || options.callId || "";
+    var status = String(d.status || options.status || "").trim().toLowerCase();
+    var progressText = String(d.progress || options.progress || "").trim();
+    var elapsedMs = Number(d.elapsed_ms || d.elapsedMs || options.elapsed_ms || options.elapsedMs || 0);
+    if (!progressText && elapsedMs > 0) {
+      var seconds = Math.max(1, Math.floor(elapsedMs / 1000));
+      progressText = "连接中 / 执行中 · 已等待 " + seconds + "s";
+    }
+    var done = Object.prototype.hasOwnProperty.call(options, "done")
+      ? !!options.done
+      : status && status !== "running" && status !== "pending";
+    var lines = [
+      "> >_<",
+      "> --调用工具中--",
+      "> **准备调用工具**: " + name,
+    ];
+    if (!done && progressText) {
+      lines.push("> **状态**: " + progressText);
+    }
+    if (done) {
+      lines.push("> **已调用工具**: " + name + (cid ? " #" + cid : ""));
+    }
+    return lines.join("\n") + (options.trailingNewline === false ? "" : "\n");
+  }
+
+  async function renderSession(entries, options) {
+    options = options || {};
+    var token = ++activeRenderToken;
+    var chunkSize = Math.max(8, Math.min(Number(options.chunkSize || 18) || 18, 40));
+    var preserveScroll = !!options.preserveScroll;
+    var prevHeight = 0;
+    var prevTop = 0;
+
     if (!Array.isArray(entries) || entries.length === 0) {
       if (typeof showEmptyState === "function") showEmptyState();
       return;
     }
     if (typeof clearEmptyState === "function") clearEmptyState();
     if (typeof messagesEl !== "undefined" && messagesEl) {
+      var wrap = (typeof messagesWrap !== "undefined" && messagesWrap) ? messagesWrap : null;
+      if (preserveScroll && wrap) {
+        prevHeight = wrap.scrollHeight;
+        prevTop = wrap.scrollTop;
+      }
+      resetTurns();
       messagesEl.innerHTML = "";
       messagesEl.dataset.hydrating = "1";
     }
     try {
-      entries.forEach(function (entry) {
-        var role = (entry.role || "").trim();
-        if (role === "user") renderUserBubble(entry);
-        else if (role === "assistant") renderAssistantBubble(entry);
+      for (var i = 0; i < entries.length; i++) {
+        if (token !== activeRenderToken) return false;
+        var entry = entries[i] || {};
+        var target = String(entry.display_target || "chat").trim();
+        if (target && target !== "chat") continue;
+        var type = String(entry.type || "").trim();
+        var role = String(entry.role || "").trim();
+        if (type === "summary" || type === "system_notice") renderSystemNotice(entry);
+        else if (type === "user_message" || role === "user") renderUserBubble(entry);
+        else if (type === "assistant_message" || type === "tool_marker" || role === "assistant") renderAssistantBubble(entry);
         else if (role === "system") renderSystemNotice(entry);
-      });
+        if ((i + 1) % chunkSize === 0) {
+          await nextFrame();
+        }
+      }
     } finally {
-      if (typeof messagesEl !== "undefined" && messagesEl) {
+      if (token === activeRenderToken && typeof messagesEl !== "undefined" && messagesEl) {
         delete messagesEl.dataset.hydrating;
       }
     }
-    if (typeof scrollToBottom === "function") scrollToBottom();
+    if (token !== activeRenderToken) return false;
+    if (preserveScroll && typeof messagesWrap !== "undefined" && messagesWrap) {
+      var delta = messagesWrap.scrollHeight - prevHeight;
+      messagesWrap.scrollTop = Math.max(0, prevTop + delta);
+    } else if (typeof scrollToBottom === "function") {
+      scrollToBottom();
+    }
+    return true;
   }
 
   function _extractText(content) {
@@ -40,6 +327,7 @@
         if (typeof s === "string") return s;
         if (s.kind === "text" || s.kind === "thinking") return String(s.data || "");
         if (s.kind === "tool_marker") return "";
+        if (s.kind === "system") return _renderSystemSubstep(s);
         return String(s.data || s || "");
       }).filter(Boolean).join("\n\n");
     }
@@ -59,15 +347,15 @@
           var d = step.data || {};
           if (typeof d !== "object") d = {};
           var fn = d.file_name || d.name || "";
-          if (fn && typeof addFileChipBubble === "function") addFileChipBubble(fn);
+          if (fn) renderFileChip(fn);
         } else {
           var t = String((step.data && step.data.text) || step.data || step || "");
-          if (t.trim() && typeof addBubble === "function") addBubble(t.trim(), "user");
+          if (t.trim()) renderBubble(t.trim(), "user");
         }
       });
     } else {
       var text = _extractText(content);
-      if (text.trim() && typeof addBubble === "function") addBubble(text.trim(), "user");
+      if (text.trim()) renderBubble(text.trim(), "user");
     }
   }
 
@@ -86,6 +374,8 @@
             parts.push("> " + String(step.data || "").split("\n").join("\n> "));
           } else if (kind === "text") {
             parts.push(String(step.data || ""));
+          } else if (kind === "system") {
+            parts.push(_renderSystemSubstep(step));
           } else {
             parts.push(String(step.data || step || ""));
           }
@@ -95,27 +385,34 @@
       parts.push(_extractText(content));
     }
     var text = parts.filter(function(p) { return p.trim(); }).join("\n\n");
-    if (text.trim() && typeof addBubble === "function") addBubble(text, "bot");
+    if (text.trim()) renderBubble(text, "bot", { turnId: entry.turn_id || entry.turnId || "" });
   }
 
   function _renderToolMarker(step) {
     if (!step) return "";
-    var lines = ["> >_<", "> --调用工具中--"];
     var d = step.data || {};
     if (typeof d !== "object") d = {};
     var name = d.name || d.tool_name || "unknown";
     var cid = d.id || d.call_id || "";
     var status = String(d.status || "").trim().toLowerCase();
-    if (status === "running") {
-      lines.push("> **准备调用工具**: " + name);
-    } else {
-      lines.push("> **已调用工具**: " + name + (cid ? " #" + cid : ""));
-    }
+    var text = renderToolMarkerMarkdown(d, {
+      done: status !== "running",
+      trailingNewline: false,
+    });
     if (typeof renderToolOutputToTerminal === "function") {
       var output = d.stdout || d.stderr || "";
       if (output) renderToolOutputToTerminal(name, cid, output, d.ok);
     }
-    return lines.join("\n");
+    return text;
+  }
+
+  function _renderSystemSubstep(step) {
+    if (!step) return "";
+    var d = step.data || {};
+    if (typeof d !== "object") d = { text: String(d || "") };
+    var text = String(d.text || d.content || d.summary || "").trim();
+    if (!text) return "";
+    return text;
   }
 
   function renderSystemNotice(entry) {
@@ -132,6 +429,19 @@
   }
 
   // Expose
+  window.ChatBubbleRenderer = {
+    renderBubble: renderBubble,
+    renderFileChip: renderFileChip,
+    renderTyping: renderTyping,
+    createRow: createPlainRow,
+    updateBubbleMarkdown: updateBubbleMarkdown,
+    appendMarkdownToBubble: appendMarkdownToBubble,
+    upsertAssistantBubble: upsertAssistantBubble,
+    renderToolMarkerMarkdown: renderToolMarkerMarkdown,
+    rememberTurnBubble: rememberTurn,
+    resolveTurnBubble: resolveTurnBubble,
+    resetTurnBubbles: resetTurns,
+  };
   window.renderSession = renderSession;
   window.renderUserBubble = renderUserBubble;
   window.renderAssistantBubble = renderAssistantBubble;

@@ -21,7 +21,7 @@ python run_web.py
 - **Session management** — Per-session JSON storage, context compression via LLM summarization, Markdown/text export
 - **Local user auth** — JSON-backed local accounts with token-based request isolation and permission bits
 - **Context token accounting** — Counts only content that is actually sent to the LLM request context, with DeepSeek tokenizer support
-- **LLM request inspector** — Built-in `/llm-request` page for inspecting the latest real SDK request body, including messages, tools, thinking payload, and token-oriented summary fields
+- **Model data panel** — Built-in `/model-data` page for DeepSeek balance, latest real SDK request body, messages, tools, thinking payload, and token-oriented summary fields
 - **Web UX** — Pink themed Web UI with smooth entry/exit motion for home, chat, logs, user management, and session panels
 - **Motion polish** — Layered glass-card animation system: HOME cards, changelog Markdown, runtime charts, chat header, input bar, overlays, terminal panel, admin/log/settings panels, and page exits use staggered direction-aware transitions
 - **Version management** — GitHub Releases integration, Ed25519 signature verification, multi-version install and switch
@@ -132,8 +132,10 @@ The Web UI uses a layered motion system rather than single-step fades:
 | `/auth/local-login` | POST | Select a local account and return its token |
 | `/settings` | GET | Settings page |
 | `/logs` | GET | Log viewer |
-| `/llm-request` | GET | Latest real LLM request inspector |
-| `/llm-request/latest` | GET | Latest logged LLM request body + summary |
+| `/model-data` | GET | Model data panel with DeepSeek balance and latest LLM request payload |
+| `/model-data/latest` | GET | Latest logged LLM request body + summary |
+| `/model-data/balance` | GET | DeepSeek account balance via server-side API key |
+| `/llm-request` | GET | Backward-compatible alias for the model data panel |
 | `/model-diagnostics` | GET | Model diagnostics |
 | `/user-admin` | GET | User administration |
 | `/system/versions` | GET | Version management |

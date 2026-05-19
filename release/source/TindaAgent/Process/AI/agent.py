@@ -1,8 +1,8 @@
 import json
-from typing import Callable, Iterator
+from typing import Any, Callable, Iterator
 from TindaAgent.Process.Architecture import perm
 from TindaAgent.Process.AI.client import LLMClient, _trace_has_pending_confirmation
-from TindaAgent.Process.AI.tokenizer import estimate_messages_tokens
+from TindaAgent.Process.AI.tokenizer import estimate_request_messages_tokens
 from TindaAgent.User import userdata
 
 
@@ -34,7 +34,7 @@ class Agent:
         user_name: str,
         user_perm: int = perm.LLM_BASE,
         system_prompt: str = None,
-        client: LLMClient = None,
+        client: Any = None,
         model_name: str = None,
         max_turns: int = 12,
     ) -> None:
@@ -68,7 +68,7 @@ class Agent:
         return out
 
     def _refresh_tokens(self) -> None:
-        self._tokens = int(estimate_messages_tokens(self.history))
+        self._tokens = int(estimate_request_messages_tokens(self._messages_for_llm_request(self.history)))
 
     def estimate_current_tokens(self) -> int:
         return int(self._tokens)
@@ -151,7 +151,7 @@ class Agent:
         self.history = base + conversation
         self._refresh_tokens()
 
-    def _ensure_client(self) -> LLMClient:
+    def _ensure_client(self) -> Any:
         """懒加载 LLM 客户端"""
         if self._client is None:
             self._client = LLMClient()

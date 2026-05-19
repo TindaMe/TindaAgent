@@ -422,6 +422,22 @@
         transform: translateY(0);
       }
     }
+    @keyframes homeMotionExit {
+      from {
+        opacity: 1;
+        transform: translate3d(0, 0, 0) scale(1);
+      }
+      to {
+        opacity: 0;
+        transform:
+          translate3d(
+            var(--home-exit-x, 0),
+            var(--home-exit-y, -14px),
+            0
+          )
+          scale(var(--home-exit-scale, 0.985));
+      }
+    }
     @keyframes markdownFadeIn {
       from { opacity: 0; }
       to { opacity: 1; }
@@ -433,41 +449,21 @@
     @keyframes headerExit {
       from {
         opacity: 1;
-        transform: translateY(0) scale(1);
+        transform: translate3d(0, 0, 0) scale(1);
       }
       to {
         opacity: 0;
-        transform: translateY(-18px) scale(0.985);
-      }
-    }
-    @keyframes leftCardExit {
-      from {
-        opacity: 1;
-        transform: translateX(0) translateY(0) scale(1);
-      }
-      to {
-        opacity: 0;
-        transform: translateX(-30px) translateY(20px) scale(0.965);
+        transform: translate3d(0, -18px, 0) scale(0.985);
       }
     }
     @keyframes centerCardExit {
       from {
         opacity: 1;
-        transform: translateY(0) scale(1);
+        transform: translate3d(0, 0, 0) scale(1);
       }
       to {
         opacity: 0;
-        transform: translateY(34px) scale(0.955);
-      }
-    }
-    @keyframes rightCardExit {
-      from {
-        opacity: 1;
-        transform: translateX(0) translateY(0) scale(1);
-      }
-      to {
-        opacity: 0;
-        transform: translateX(32px) translateY(22px) scale(0.965);
+        transform: translate3d(0, 34px, 0) scale(0.955);
       }
     }
     @keyframes pageExitWash {
@@ -483,20 +479,25 @@
     }
     body.is-leaving {
       pointer-events: none;
-      animation: pageExitWash 0.50s ease-out both;
+      overflow: hidden;
     }
     body.is-leaving header {
       animation: headerExit 0.34s cubic-bezier(0.4, 0, 0.2, 1) both;
       will-change: opacity, transform;
-    }
-    body.is-leaving .home-card.changelog-card {
-      animation: leftCardExit 0.46s cubic-bezier(0.4, 0, 0.2, 1) 0.04s both;
+      backface-visibility: hidden;
     }
     body.is-leaving .home-card.hero-card {
       animation: centerCardExit 0.50s cubic-bezier(0.4, 0, 0.2, 1) 0.10s both;
+      will-change: opacity, transform;
+      backface-visibility: hidden;
+      contain: layout paint;
     }
-    body.is-leaving .home-card.stats-card {
-      animation: rightCardExit 0.46s cubic-bezier(0.4, 0, 0.2, 1) 0.16s both;
+    body.is-leaving .deco {
+      animation-play-state: paused;
+      opacity: 0;
+    }
+    body.is-leaving .home-slot * {
+      transition: none !important;
     }
 
     /* ── 浮动装饰 ── */
@@ -1495,6 +1496,19 @@
     @media (max-width: 1200px) {
       main.home-grid { grid-template-columns: 1fr; max-width: 720px; }
     }
+    .home-slot {
+      min-width: 0;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      align-self: stretch;
+    }
+    .home-slot > .home-card {
+      flex: 1 1 auto;
+      min-width: 0;
+      min-height: 0;
+    }
 
     /* ── 通用玻璃卡片 ── */
     .home-card {
@@ -1556,28 +1570,52 @@
       font-variant-numeric: tabular-nums;
       white-space: nowrap;
     }
-    .changelog-card .card-head,
-    .changelog-card .card-body {
+    .home-slot:not(.home-motion-ready) .home-card > :not(script):not(style),
+    .home-slot:not(.home-motion-ready) .stats-block > :not(script):not(style),
+    .home-slot:not(.home-motion-ready) .home-balance-cell {
       opacity: 0;
-      transform: translateY(-10px);
-      animation: sideItemDrop 0.34s cubic-bezier(0.18, 1, 0.32, 1) both;
+    }
+    .home-slot.home-motion-ready .home-card > :not([data-home-motion]):not(script):not(style),
+    .home-slot.home-motion-ready .stats-block > :not([data-home-motion]):not(script):not(style),
+    .home-slot.home-motion-ready .home-balance-cell:not([data-home-motion]) {
+      opacity: 0;
+    }
+    .home-slot [data-home-motion] {
+      opacity: 0;
+      animation:
+        var(--home-motion-name, statsDetailFade)
+        var(--home-motion-duration, 0.42s)
+        var(--home-motion-ease, ease-out)
+        var(--home-motion-delay, 0ms)
+        both;
       will-change: opacity, transform;
     }
-    .stats-card .card-head,
-    .stats-card .stats-block {
-      opacity: 0;
-      transform: translateY(-22px) scale(0.982);
-      animation: statsBlockFloatIn 0.56s cubic-bezier(0.16, 1, 0.3, 1) both;
-      will-change: opacity, transform;
+    .home-slot [data-home-motion="item"] {
+      --home-motion-name: sideItemDrop;
+      --home-motion-duration: 0.34s;
+      --home-motion-ease: cubic-bezier(0.18, 1, 0.32, 1);
     }
-    .changelog-card .card-head { animation-delay: 0.46s; }
-    .changelog-card .card-body { animation-delay: 0.56s; }
-    .stats-card .card-head { animation-delay: 0.78s; }
-    .stats-card .stats-block:nth-of-type(1) { animation-delay: 0.90s; }
-    .stats-card .stats-block:nth-of-type(2) { animation-delay: 1.04s; }
-    .stats-card .stats-block:nth-of-type(3) { animation-delay: 1.18s; }
-    .stats-card .stats-block:nth-of-type(4) { animation-delay: 1.32s; }
-    .stats-card .stats-block:nth-of-type(5) { animation-delay: 1.46s; }
+    .home-slot [data-home-motion="block"] {
+      --home-motion-name: statsBlockFloatIn;
+      --home-motion-duration: 0.56s;
+      --home-motion-ease: cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .home-slot [data-home-motion="detail"] {
+      --home-motion-name: statsDetailFade;
+      --home-motion-duration: 0.42s;
+      --home-motion-ease: ease-out;
+    }
+    .home-slot [data-home-exit] {
+      opacity: 1;
+      animation:
+        homeMotionExit
+        var(--home-exit-duration, 0.34s)
+        var(--home-exit-ease, cubic-bezier(0.4, 0, 0.2, 1))
+        var(--home-exit-delay, 0ms)
+        both !important;
+      will-change: opacity, transform;
+      backface-visibility: hidden;
+    }
 
     /* ── 左：Changelog ── */
     .changelog-card .card-body {
@@ -1614,16 +1652,8 @@
     }
     .changelog-body.is-markdown-ready > * {
       animation: markdownFadeIn 0.30s ease-out both;
+      animation-delay: var(--home-motion-delay, 0ms);
     }
-    .changelog-body.is-markdown-ready > :nth-child(1) { animation-delay: 0.72s; }
-    .changelog-body.is-markdown-ready > :nth-child(2) { animation-delay: 0.78s; }
-    .changelog-body.is-markdown-ready > :nth-child(3) { animation-delay: 0.84s; }
-    .changelog-body.is-markdown-ready > :nth-child(4) { animation-delay: 0.90s; }
-    .changelog-body.is-markdown-ready > :nth-child(5) { animation-delay: 0.96s; }
-    .changelog-body.is-markdown-ready > :nth-child(6) { animation-delay: 1.02s; }
-    .changelog-body.is-markdown-ready > :nth-child(7) { animation-delay: 1.08s; }
-    .changelog-body.is-markdown-ready > :nth-child(8) { animation-delay: 1.14s; }
-    .changelog-body.is-markdown-ready > :nth-child(n + 9) { animation-delay: 1.20s; }
     .changelog-body h1, .changelog-body h2, .changelog-body h3,
     .changelog-body h4, .changelog-body h5, .changelog-body h6 {
       font-weight: 700;
@@ -1719,31 +1749,6 @@
     }
     .stats-card::-webkit-scrollbar { width: 6px; }
     .stats-card::-webkit-scrollbar-thumb { background: rgba(255, 110, 180, 0.35); border-radius: 3px; }
-    .stats-card .block-head,
-    .stats-card .heatmap-weekdays,
-    .stats-card .heatmap-grid,
-    .stats-card .heatmap-legend,
-    .stats-card .bar24-svg,
-    .stats-card .donut-svg,
-    .stats-card .donut-info,
-    .stats-card .meta-row {
-      opacity: 0;
-      animation: statsDetailFade 0.42s ease-out both;
-      will-change: opacity, transform;
-    }
-    .stats-card .stats-block:nth-of-type(1) .block-head { animation-delay: 1.14s; }
-    .stats-card .stats-block:nth-of-type(1) .heatmap-weekdays { animation-delay: 1.22s; }
-    .stats-card .stats-block:nth-of-type(1) .heatmap-grid { animation-delay: 1.30s; }
-    .stats-card .stats-block:nth-of-type(1) .heatmap-legend { animation-delay: 1.38s; }
-    .stats-card .stats-block:nth-of-type(2) .block-head { animation-delay: 1.28s; }
-    .stats-card .stats-block:nth-of-type(2) .bar24-svg { animation-delay: 1.40s; }
-    .stats-card .stats-block:nth-of-type(3) .donut-svg { animation-delay: 1.42s; }
-    .stats-card .stats-block:nth-of-type(3) .donut-info { animation-delay: 1.52s; }
-    .stats-card .stats-block:nth-of-type(4) .donut-svg { animation-delay: 1.56s; }
-    .stats-card .stats-block:nth-of-type(4) .donut-info { animation-delay: 1.66s; }
-    .stats-card .stats-block:nth-of-type(5) .meta-row:nth-child(1) { animation-delay: 1.70s; }
-    .stats-card .stats-block:nth-of-type(5) .meta-row:nth-child(2) { animation-delay: 1.78s; }
-    .stats-card .stats-block:nth-of-type(5) .meta-row:nth-child(3) { animation-delay: 1.86s; }
 
     .stats-block {
       padding: 14px 14px;
@@ -1856,6 +1861,95 @@
       display: flex; align-items: center; gap: 14px;
       padding: 14px;
     }
+    .stats-disk {
+      position: relative;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 0;
+      padding: 0;
+      background: transparent;
+      border: none;
+      box-shadow: none;
+      overflow: visible;
+    }
+    .disk-tabs {
+      display: flex;
+      align-items: flex-end;
+      gap: 0;
+      width: max-content;
+      max-width: calc(100% - 16px);
+      min-height: 31px;
+      padding: 4px 5px 0;
+      margin-left: 8px;
+      margin-bottom: -1px;
+      overflow-x: auto;
+      scrollbar-width: none;
+      position: relative;
+      z-index: 3;
+      border: 1px solid rgba(246, 201, 218, 0.42);
+      border-bottom: none;
+      border-radius: 14px 14px 0 0;
+      background: rgba(232, 224, 229, 0.46);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.46);
+    }
+    .disk-tabs::-webkit-scrollbar { display: none; }
+    .disk-tab {
+      appearance: none;
+      border: none;
+      background: transparent;
+      color: var(--text-dim);
+      border-radius: 10px 10px 0 0;
+      min-width: 31px;
+      height: 26px;
+      padding: 0 10px;
+      font-size: 11px;
+      font-weight: 800;
+      line-height: 26px;
+      font-variant-numeric: tabular-nums;
+      cursor: pointer;
+      position: relative;
+      transition: transform 0.18s ease, opacity 0.18s ease, background 0.18s ease, border-color 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
+    }
+    .disk-tab + .disk-tab::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 8px;
+      bottom: 7px;
+      width: 1px;
+      background: rgba(124, 94, 110, 0.08);
+    }
+    .disk-tab:hover {
+      transform: translateY(-0.5px);
+      background: rgba(255, 248, 251, 0.36);
+      color: var(--text);
+    }
+    .disk-tab.active {
+      height: 28px;
+      line-height: 28px;
+      transform: translateY(1px);
+      background: rgba(255, 248, 251, 0.86);
+      color: var(--accent-deep);
+      box-shadow: 0 -5px 14px rgba(255, 110, 180, 0.07), inset 0 1px 0 rgba(255, 255, 255, 0.62);
+      z-index: 4;
+    }
+    .disk-tab.active::before,
+    .disk-tab.active + .disk-tab::before {
+      opacity: 0;
+    }
+    .disk-body {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      min-width: 0;
+      padding: 14px;
+      border-radius: 17px;
+      border: 1px solid rgba(246, 201, 218, 0.54);
+      background: rgba(255, 248, 251, 0.62);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.56);
+      position: relative;
+      z-index: 1;
+    }
     .donut-svg {
       width: 78px; height: 78px;
       flex-shrink: 0;
@@ -1875,6 +1969,33 @@
       white-space: nowrap;
     }
     #diskBlock .donut-percent { color: #6d28a9; }
+    [data-theme="dark"] .disk-tabs {
+      background: rgba(45, 34, 43, 0.62);
+      border-color: rgba(255, 194, 219, 0.12);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.055);
+    }
+    [data-theme="dark"] .disk-tab {
+      background: transparent;
+      color: rgba(245, 214, 228, 0.66);
+      box-shadow: none;
+    }
+    [data-theme="dark"] .disk-tab + .disk-tab::before {
+      background: rgba(255, 194, 219, 0.07);
+    }
+    [data-theme="dark"] .disk-tab:hover {
+      background: rgba(255, 194, 219, 0.08);
+      color: rgba(255, 237, 246, 0.92);
+    }
+    [data-theme="dark"] .disk-tab.active {
+      background: rgba(66, 45, 60, 0.92);
+      color: rgba(255, 217, 235, 0.96);
+      box-shadow: 0 -8px 24px rgba(255, 124, 176, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    }
+    [data-theme="dark"] .disk-body {
+      background: rgba(66, 45, 60, 0.36);
+      border-color: rgba(255, 194, 219, 0.14);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07);
+    }
 
     /* 启动 / 系统时间 */
     .stats-meta {
@@ -1891,6 +2012,77 @@
       color: var(--text);
       font-variant-numeric: tabular-nums;
       font-weight: 600;
+    }
+    .home-balance-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+    .home-balance-title {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--text);
+      font-size: 12px;
+      font-weight: 900;
+    }
+    .home-balance-provider {
+      color: var(--accent-deep);
+      font-size: 11px;
+      font-weight: 900;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .home-balance-state {
+      color: var(--text-faint);
+      font-size: 11px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+    .home-balance-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+    .home-balance-cell {
+      min-width: 0;
+      min-height: 58px;
+      padding: 10px;
+      border-radius: 14px;
+      border: 1px solid rgba(246, 201, 218, 0.48);
+      background: rgba(255, 248, 251, 0.42);
+      display: grid;
+      align-content: center;
+      gap: 4px;
+    }
+    .home-balance-label {
+      color: var(--text-faint);
+      font-size: 10.5px;
+      font-weight: 900;
+      line-height: 1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .home-balance-value {
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 900;
+      line-height: 1.15;
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .home-balance-value.primary {
+      color: var(--accent-deep);
+      font-size: 17px;
+    }
+    [data-theme="dark"] .home-balance-cell {
+      background: rgba(66, 45, 60, 0.30);
+      border-color: rgba(255, 194, 219, 0.12);
     }
 
     /* 移动端收紧 */
@@ -1931,23 +2123,25 @@
 
 <main class="home-grid">
 
-  <!-- 左侧：Changelog 卡片 -->
-  <section class="home-card changelog-card" aria-label="更新日志">
-    <header class="card-head">
-      <span class="card-title">
-        <svg class="card-title-icon" viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M9 4h7l4 4v12a1 1 0 0 1-1 1H9a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z"></path>
-          <path d="M15 4v5h5"></path>
-          <path d="M12 14h4M12 17h4M12 11h2"></path>
-        </svg>
-        更新日志
-      </span>
-      <span class="card-sub" id="changelogVersion">CHANGELOG.md</span>
-    </header>
-    <div class="card-body changelog-body" id="changelogBody">
-      <div class="changelog-skeleton">加载中…</div>
-    </div>
-  </section>
+  <!-- 左侧卡槽：默认承载 Changelog 组件 -->
+  <aside class="home-slot home-slot-left" data-home-slot="left" aria-label="HOME 左侧卡槽">
+    <section class="home-card changelog-card home-widget" data-home-widget="changelog" aria-label="更新日志">
+      <header class="card-head">
+        <span class="card-title">
+          <svg class="card-title-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M9 4h7l4 4v12a1 1 0 0 1-1 1H9a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z"></path>
+            <path d="M15 4v5h5"></path>
+            <path d="M12 14h4M12 17h4M12 11h2"></path>
+          </svg>
+          更新日志
+        </span>
+        <span class="card-sub" id="changelogVersion">CHANGELOG.md</span>
+      </header>
+      <div class="card-body changelog-body" id="changelogBody">
+        <div class="changelog-skeleton">加载中…</div>
+      </div>
+    </section>
+  </aside>
 
   <!-- 中间：保留原 hero -->
   <section class="home-card hero-card">
@@ -2007,87 +2201,125 @@
     </div>
   </section>
 
-  <!-- 右侧：运行状态面板 -->
-  <section class="home-card stats-card" aria-label="运行状态">
-    <header class="card-head">
-      <span class="card-title">
-        <svg class="card-title-icon" viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M4 19V5"></path>
-          <path d="M4 19h16"></path>
-          <path d="M8 14v3M12 9v8M16 12v5"></path>
-        </svg>
-        运行状态
-      </span>
-      <span class="card-sub" id="statsTotal">实时</span>
-    </header>
-
-    <!-- 1. 月度热力图 -->
-    <div class="stats-block stats-heatmap">
-      <header class="block-head">
-        <button class="month-nav" id="monthPrev" type="button" aria-label="上一月">◀</button>
-        <select class="month-select" id="monthSelect" aria-label="选择月份"></select>
-        <button class="month-nav" id="monthNext" type="button" aria-label="下一月">▶</button>
+  <!-- 右侧卡槽：默认承载运行状态组件 -->
+  <aside class="home-slot home-slot-right" data-home-slot="right" aria-label="HOME 右侧卡槽">
+    <section class="home-card stats-card home-widget" data-home-widget="runtime_status" aria-label="运行状态">
+      <header class="card-head">
+        <span class="card-title">
+          <svg class="card-title-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 19V5"></path>
+            <path d="M4 19h16"></path>
+            <path d="M8 14v3M12 9v8M16 12v5"></path>
+          </svg>
+          运行状态
+        </span>
+        <span class="card-sub" id="statsTotal">真实采样</span>
       </header>
-      <div class="heatmap-weekdays" aria-hidden="true">
-        <span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span>
-      </div>
-      <div class="heatmap-grid" id="heatmapGrid" role="grid" aria-label="使用频率热力图"></div>
-      <div class="heatmap-legend">
-        <span>少</span>
-        <span class="lvl lvl-0" aria-hidden="true"></span>
-        <span class="lvl lvl-1" aria-hidden="true"></span>
-        <span class="lvl lvl-2" aria-hidden="true"></span>
-        <span class="lvl lvl-3" aria-hidden="true"></span>
-        <span class="lvl lvl-4" aria-hidden="true"></span>
-        <span>多</span>
-      </div>
-    </div>
 
-    <!-- 2. 24h 柱状图（3h 间隔） -->
-    <div class="stats-block stats-bar24">
-      <header class="block-head">
-        <span>近 24 小时使用</span>
-        <span class="block-head-sub" id="bar24Total">--</span>
-      </header>
-      <svg class="bar24-svg" id="bar24Svg" viewBox="0 0 320 110" preserveAspectRatio="xMidYMid meet" aria-label="24 小时柱状图"></svg>
-    </div>
+      <!-- 1. 月度热力图 -->
+      <div class="stats-block stats-heatmap">
+        <header class="block-head">
+          <button class="month-nav" id="monthPrev" type="button" aria-label="上一月">◀</button>
+          <select class="month-select" id="monthSelect" aria-label="选择月份"></select>
+          <button class="month-nav" id="monthNext" type="button" aria-label="下一月">▶</button>
+        </header>
+        <div class="heatmap-weekdays" aria-hidden="true">
+          <span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span>
+        </div>
+        <div class="heatmap-grid" id="heatmapGrid" role="grid" aria-label="使用频率热力图"></div>
+        <div class="heatmap-legend">
+          <span>少</span>
+          <span class="lvl lvl-0" aria-hidden="true"></span>
+          <span class="lvl lvl-1" aria-hidden="true"></span>
+          <span class="lvl lvl-2" aria-hidden="true"></span>
+          <span class="lvl lvl-3" aria-hidden="true"></span>
+          <span class="lvl lvl-4" aria-hidden="true"></span>
+          <span>多</span>
+        </div>
+      </div>
 
-    <!-- 3. 内存扇形图 -->
-    <div class="stats-block stats-donut" id="memBlock">
-      <svg class="donut-svg" id="memDonut" viewBox="0 0 100 100" aria-hidden="true"></svg>
-      <div class="donut-info">
-        <div class="donut-title">内存使用</div>
-        <div class="donut-percent" id="memPercent">--%</div>
-        <div class="donut-detail" id="memDetail">-- / --</div>
+      <!-- 2. 24h 柱状图（3h 间隔） -->
+      <div class="stats-block stats-bar24">
+        <header class="block-head">
+          <span>近 24 小时使用</span>
+          <span class="block-head-sub" id="bar24Total">--</span>
+        </header>
+        <svg class="bar24-svg" id="bar24Svg" viewBox="0 0 320 110" preserveAspectRatio="xMidYMid meet" aria-label="24 小时柱状图"></svg>
       </div>
-    </div>
 
-    <!-- 4. 存储扇形图 -->
-    <div class="stats-block stats-donut" id="diskBlock">
-      <svg class="donut-svg" id="diskDonut" viewBox="0 0 100 100" aria-hidden="true"></svg>
-      <div class="donut-info">
-        <div class="donut-title">存储使用</div>
-        <div class="donut-percent" id="diskPercent">--%</div>
-        <div class="donut-detail" id="diskDetail">-- / --</div>
+      <!-- 3. 内存扇形图 -->
+      <div class="stats-block stats-donut" id="memBlock">
+        <svg class="donut-svg" id="memDonut" viewBox="0 0 100 100" aria-hidden="true"></svg>
+        <div class="donut-info">
+          <div class="donut-title">系统内存</div>
+          <div class="donut-percent" id="memPercent">--%</div>
+          <div class="donut-detail" id="memDetail">-- / --</div>
+        </div>
       </div>
-    </div>
 
-    <!-- 5+6. 启动时间 / 系统时间 -->
-    <div class="stats-block stats-meta">
-      <div class="meta-row">
-        <span class="meta-label">启动于</span>
-        <span class="meta-value" id="startedAt">--</span>
+      <!-- 4. 存储扇形图 -->
+      <div class="stats-block stats-donut stats-disk" id="diskBlock">
+        <div class="disk-tabs" id="diskTabs" role="tablist" aria-label="选择磁盘"></div>
+        <div class="disk-body">
+          <svg class="donut-svg" id="diskDonut" viewBox="0 0 100 100" aria-hidden="true"></svg>
+          <div class="donut-info">
+            <div class="donut-title" id="diskTitle">运行数据盘</div>
+            <div class="donut-percent" id="diskPercent">--%</div>
+            <div class="donut-detail" id="diskDetail">-- / --</div>
+          </div>
+        </div>
       </div>
-      <div class="meta-row">
-        <span class="meta-label">运行</span>
-        <span class="meta-value" id="uptime">--</span>
+
+      <!-- 5+6. 启动时间 / 系统时间 -->
+      <div class="stats-block stats-meta">
+        <div class="meta-row">
+          <span class="meta-label">启动于</span>
+          <span class="meta-value" id="startedAt">--</span>
+        </div>
+        <div class="meta-row">
+          <span class="meta-label">运行</span>
+          <span class="meta-value" id="uptime">--</span>
+        </div>
+        <div class="meta-row">
+          <span class="meta-label">系统时间</span>
+          <span class="meta-value" id="systemTime">--</span>
+        </div>
+        <div class="meta-row">
+          <span class="meta-label">负载</span>
+          <span class="meta-value" id="loadAverage">--</span>
+        </div>
       </div>
-      <div class="meta-row">
-        <span class="meta-label">系统时间</span>
-        <span class="meta-value" id="systemTime">--</span>
+
+      <!-- 6. 模型账户余额 -->
+      <div class="stats-block home-balance-widget home-widget" data-home-widget="deepseek_balance" aria-label="DPSK 账户余额">
+        <div class="home-balance-head">
+          <div class="home-balance-title">
+            <span>账户余额</span>
+            <span class="home-balance-provider" id="homeBalanceProvider">DPSK</span>
+          </div>
+          <div class="home-balance-state" id="homeBalanceState">等待查询</div>
+        </div>
+        <div class="home-balance-grid" id="homeBalanceGrid">
+          <div class="home-balance-cell">
+            <div class="home-balance-label">状态</div>
+            <div class="home-balance-value">--</div>
+          </div>
+          <div class="home-balance-cell">
+            <div class="home-balance-label">余额</div>
+            <div class="home-balance-value primary">--</div>
+          </div>
+          <div class="home-balance-cell">
+            <div class="home-balance-label">币种</div>
+            <div class="home-balance-value">--</div>
+          </div>
+          <div class="home-balance-cell">
+            <div class="home-balance-label">Key</div>
+            <div class="home-balance-value">--</div>
+          </div>
+        </div>
       </div>
-    </div>
-  </section>
+    </section>
+  </aside>
 </main>
 
 <!-- 账户信息弹窗 -->
@@ -2170,9 +2402,10 @@
   function smoothNavigate(url) {
     if (!url) return;
     if (document.body.classList.contains("is-leaving")) return;
+    window.HomeMotion?.startExit?.();
     document.body.classList.add("is-leaving");
     const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
-    setTimeout(() => { location.href = url; }, reduceMotion ? 40 : 680);
+    setTimeout(() => { location.href = url; }, reduceMotion ? 40 : 620);
   }
 
   const ui = {
@@ -2774,6 +3007,9 @@
       updateAuthUI();
       await loadProfile();
       await loadUsersAndSelection();
+      if (window.DeepSeekBalanceWidget?.mount) {
+        window.DeepSeekBalanceWidget.mount();
+      }
       if (ui.modalOverlay) void closeModalNode(ui.modalOverlay, "account");
       setAuthMessageState("登录成功", "success");
     } catch (e) {
@@ -2870,10 +3106,21 @@
 
   ui.switchBtn?.addEventListener("click", loginSelectedUser);
   syncVersionBadge();
-  (async function initAuthPanel() {
+  let authReadyPromise = Promise.resolve();
+  authReadyPromise = (async function initAuthPanel() {
     await loadAuthStatus();
     await loadUsersAndSelection();
   })();
+
+  function escapeHtml(value) {
+    return String(value ?? "").replace(/[&<>"']/g, ch => ({
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#39;",
+    }[ch]));
+  }
 
   /* ─────────────────────── Changelog 面板 ─────────────────────── */
   const ChangelogPanel = (function () {
@@ -2916,6 +3163,8 @@
     let lastSyncPerf = 0;    // performance.now() 上次同步时刻
     let pollTimer = null;
     let clockTimer = null;
+    let selectedStorageRoot = "";
+    const donutStates = new Map();
 
     function fmtBytes(n) {
       n = Number(n) || 0;
@@ -3024,21 +3273,126 @@
       if (totalEl) totalEl.textContent = `共 ${totalCount} 次`;
     }
 
-    function renderDonut(svgId, percent, color) {
+    function clampPercent(value) {
+      return Math.max(0, Math.min(100, Number(value) || 0));
+    }
+
+    function easeOutCubic(t) {
+      return 1 - Math.pow(1 - t, 3);
+    }
+
+    function ensureDonut(svgId, color) {
       const svg = document.getElementById(svgId);
-      if (!svg) return;
+      if (!svg) return null;
+      let track = svg.querySelector(".donut-track");
+      let meter = svg.querySelector(".donut-meter");
+      if (!track || !meter) {
+        svg.innerHTML = "";
+        track = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+        meter = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+        track.classList.add("donut-track");
+        meter.classList.add("donut-meter");
+        [track, meter].forEach((circle) => {
+          circle.setAttribute("cx", "50");
+          circle.setAttribute("cy", "50");
+          circle.setAttribute("r", "38");
+          circle.setAttribute("fill", "none");
+          circle.setAttribute("stroke-width", "10");
+        });
+        track.setAttribute("stroke", "#f0e6eb");
+        meter.setAttribute("stroke-linecap", "round");
+        meter.setAttribute("transform", "rotate(-90 50 50)");
+        svg.appendChild(track);
+        svg.appendChild(meter);
+      }
+      meter.setAttribute("stroke", color);
+      return meter;
+    }
+
+    function setDonutFrame(svgId, percent, color, percentId) {
+      const meter = ensureDonut(svgId, color);
+      if (!meter) return;
       const r = 38;
       const c = 2 * Math.PI * r;
-      const pct = Math.max(0, Math.min(100, Number(percent) || 0));
-      const filled = (c * pct) / 100;
-      const remain = c - filled;
-      svg.innerHTML = `
-        <circle cx="50" cy="50" r="${r}" fill="none" stroke="#f0e6eb" stroke-width="10"/>
-        <circle cx="50" cy="50" r="${r}" fill="none" stroke="${color}" stroke-width="10"
-                stroke-dasharray="${filled.toFixed(2)} ${remain.toFixed(2)}"
-                stroke-linecap="round"
-                transform="rotate(-90 50 50)"/>
-      `;
+      const pct = clampPercent(percent);
+      meter.style.strokeDasharray = `${c.toFixed(2)}`;
+      meter.style.strokeDashoffset = `${(c * (1 - pct / 100)).toFixed(2)}`;
+      const percentEl = percentId ? document.getElementById(percentId) : null;
+      if (percentEl) percentEl.textContent = pct.toFixed(1) + "%";
+      const state = donutStates.get(svgId) || {};
+      state.current = pct;
+      donutStates.set(svgId, state);
+    }
+
+    function animateDonut(svgId, percent, color, percentId) {
+      const target = clampPercent(percent);
+      const state = donutStates.get(svgId) || { current: 0, raf: 0 };
+      if (state.raf) cancelAnimationFrame(state.raf);
+
+      const from = clampPercent(state.current);
+      const distance = Math.abs(target - from);
+      const reduceMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      if (reduceMotion || distance < 0.05) {
+        state.raf = 0;
+        donutStates.set(svgId, state);
+        setDonutFrame(svgId, target, color, percentId);
+        return;
+      }
+
+      const start = performance.now();
+      const duration = Math.min(980, Math.max(520, 520 + distance * 5.2));
+      const step = (now) => {
+        const t = Math.min(1, (now - start) / duration);
+        const current = from + (target - from) * easeOutCubic(t);
+        setDonutFrame(svgId, current, color, percentId);
+        if (t < 1) {
+          state.raf = requestAnimationFrame(step);
+          donutStates.set(svgId, state);
+          return;
+        }
+        state.raf = 0;
+        state.current = target;
+        donutStates.set(svgId, state);
+        setDonutFrame(svgId, target, color, percentId);
+      };
+      state.current = from;
+      state.raf = requestAnimationFrame(step);
+      donutStates.set(svgId, state);
+    }
+
+    function renderStorageTabs(volumes) {
+      const tabs = document.getElementById("diskTabs");
+      if (!tabs) return;
+      tabs.innerHTML = "";
+      (volumes || []).forEach((disk) => {
+        const root = String(disk.root || "");
+        const label = String(disk.label || root || "?");
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "disk-tab" + (root === selectedStorageRoot ? " active" : "");
+        btn.setAttribute("role", "tab");
+        btn.setAttribute("aria-selected", root === selectedStorageRoot ? "true" : "false");
+        btn.textContent = label;
+        btn.title = root;
+        btn.addEventListener("click", () => {
+          selectedStorageRoot = root;
+          applyStorage(disk, volumes);
+        });
+        tabs.appendChild(btn);
+      });
+    }
+
+    function applyStorage(disk, volumes) {
+      if (!disk) return;
+      selectedStorageRoot = String(disk.root || selectedStorageRoot || "");
+      renderStorageTabs(volumes || []);
+      const pct = Number(disk.percent) || 0;
+      animateDonut("diskDonut", pct, "rgb(167, 139, 250)", "diskPercent");
+      document.getElementById("diskDetail").textContent = `${fmtBytes(disk.used)} / ${fmtBytes(disk.total)}`;
+      const titleEl = document.getElementById("diskTitle");
+      if (titleEl) titleEl.textContent = disk.is_runtime ? "运行数据盘" : `${disk.label || "磁盘"} 盘`;
+      const diskBlock = document.getElementById("diskBlock");
+      if (diskBlock) diskBlock.title = `${disk.label || "磁盘"} 盘真实采样: ${disk.root || ""}`;
     }
 
     function applyStats(j) {
@@ -3061,19 +3415,38 @@
 
       if (j.memory) {
         const pct = Number(j.memory.percent) || 0;
-        renderDonut("memDonut", pct, "rgb(255, 110, 180)");
-        document.getElementById("memPercent").textContent = pct.toFixed(1) + "%";
+        animateDonut("memDonut", pct, "rgb(255, 110, 180)", "memPercent");
         document.getElementById("memDetail").textContent = `${fmtBytes(j.memory.used)} / ${fmtBytes(j.memory.total)}`;
+        const memBlock = document.getElementById("memBlock");
+        if (memBlock) {
+          const proc = j.process_memory || {};
+          const source = j.memory.source || "unknown";
+          memBlock.title = `系统内存真实采样: ${source}${proc.rss ? ` · 进程 RSS ${fmtBytes(proc.rss)}` : ""}`;
+        }
       }
-      if (j.storage) {
-        const pct = Number(j.storage.percent) || 0;
-        renderDonut("diskDonut", pct, "rgb(167, 139, 250)");
-        document.getElementById("diskPercent").textContent = pct.toFixed(1) + "%";
-        document.getElementById("diskDetail").textContent = `${fmtBytes(j.storage.used)} / ${fmtBytes(j.storage.total)}`;
+      const volumes = Array.isArray(j.storages) ? j.storages : [];
+      if (volumes.length || j.storage) {
+        if (!selectedStorageRoot) {
+          const runtimeDisk = volumes.find((item) => item && item.is_runtime);
+          selectedStorageRoot = String((runtimeDisk || j.storage || {}).root || "");
+        }
+        const activeDisk = volumes.find((item) => item && String(item.root || "") === selectedStorageRoot)
+          || volumes.find((item) => item && item.is_runtime)
+          || j.storage;
+        applyStorage(activeDisk, volumes);
       }
 
       const startedEl = document.getElementById("startedAt");
       if (startedEl) startedEl.textContent = fmtLocal(new Date(serverStartedAt));
+      const statsTotal = document.getElementById("statsTotal");
+      if (statsTotal) statsTotal.textContent = "真实采样";
+      const loadEl = document.getElementById("loadAverage");
+      if (loadEl) {
+        const load = j.load_average || {};
+        loadEl.textContent = Number.isFinite(Number(load.one))
+          ? `${Number(load.one).toFixed(2)} / ${Number(load.five).toFixed(2)} / ${Number(load.fifteen).toFixed(2)}`
+          : "--";
+      }
       tickClock();
     }
 
@@ -3151,8 +3524,285 @@
     return { start };
   })();
 
-  ChangelogPanel.load();
-  StatsPanel.start();
+  const DeepSeekBalanceWidget = (function () {
+    const stateEl = document.getElementById("homeBalanceState");
+    const providerEl = document.getElementById("homeBalanceProvider");
+    const gridEl = document.getElementById("homeBalanceGrid");
+
+    function renderCells(rows) {
+      if (!gridEl) return;
+      gridEl.innerHTML = rows.map((row) => {
+        const primaryClass = row.primary ? " primary" : "";
+        return `
+          <div class="home-balance-cell">
+            <div class="home-balance-label">${escapeHtml(row.label)}</div>
+            <div class="home-balance-value${primaryClass}" title="${escapeHtml(row.value)}">${escapeHtml(row.value)}</div>
+          </div>
+        `;
+      }).join("");
+    }
+
+    function setProvider(meta) {
+      if (!providerEl) return;
+      providerEl.textContent = String(meta?.label || "DPSK").toUpperCase();
+      providerEl.title = String(meta?.name || "DeepSeek");
+    }
+
+    function setLoading(text) {
+      if (stateEl) stateEl.textContent = text;
+    }
+
+    function setError(text) {
+      if (stateEl) stateEl.textContent = "失败";
+      renderCells([
+        { label: "状态", value: "不可用" },
+        { label: "余额", value: "--", primary: true },
+        { label: "币种", value: "--" },
+        { label: "原因", value: String(text || "查询失败") },
+      ]);
+    }
+
+    function setBalance(data) {
+      const infos = Array.isArray(data?.balance_infos) ? data.balance_infos : [];
+      const info = infos[0] || {};
+      const currency = String(info.currency || "-");
+      const total = String(info.total_balance ?? "-");
+      const granted = String(info.granted_balance ?? "-");
+      const toppedUp = String(info.topped_up_balance ?? "-");
+      if (stateEl) stateEl.textContent = data?.is_available ? "可用" : "不可用";
+      setProvider(data);
+      renderCells([
+        { label: "状态", value: data?.is_available ? "可用" : "不可用" },
+        { label: "余额", value: total, primary: true },
+        { label: "币种", value: currency },
+        { label: "Key", value: data?.key_masked ? `Key ${data.key_masked}` : "-" },
+        { label: "赠金", value: granted },
+        { label: "充值", value: toppedUp },
+      ]);
+    }
+
+    async function loadProviders() {
+      try {
+        const res = await apiFetch("/model-data/providers", { method: "GET" });
+        const data = await readJsonSafe(res);
+        if (!res.ok || data?.ok === false) return "deepseek";
+        const providers = Array.isArray(data?.providers) ? data.providers : [];
+        const current = providers.find((item) => item?.key === data?.current_provider) || providers[0];
+        setProvider(current);
+        return String(current?.key || "deepseek");
+      } catch {
+        return "deepseek";
+      }
+    }
+
+    async function mount() {
+      if (!gridEl) return;
+      await authReadyPromise.catch(() => {});
+      if (!authState?.logged_in) {
+        setLoading("未登录");
+        renderCells([
+          { label: "状态", value: "需登录" },
+          { label: "余额", value: "--", primary: true },
+          { label: "币种", value: "--" },
+          { label: "Key", value: "--" },
+        ]);
+        return;
+      }
+      setLoading("查询中");
+      const provider = await loadProviders();
+      try {
+        const res = await apiFetch(`/model-data/balance?provider=${encodeURIComponent(provider)}`, { method: "GET" });
+        const data = await readJsonSafe(res);
+        if (!res.ok || data?.ok === false) throw new Error(String(data?.error || `HTTP ${res.status}`));
+        setBalance(data);
+      } catch (e) {
+        setError(String(e?.message || e));
+      }
+    }
+
+    return { mount };
+  })();
+  window.DeepSeekBalanceWidget = DeepSeekBalanceWidget;
+
+  const HomeSlotRegistry = {
+    left: {
+      key: "left",
+      element: document.querySelector('[data-home-slot="left"]'),
+      widgets: ["changelog"],
+    },
+    right: {
+      key: "right",
+      element: document.querySelector('[data-home-slot="right"]'),
+      widgets: ["runtime_status", "deepseek_balance"],
+    },
+  };
+
+  const HomeWidgetRegistry = {
+    changelog: {
+      slot: "left",
+      mount: () => ChangelogPanel.load(),
+    },
+    runtime_status: {
+      slot: "right",
+      mount: () => StatsPanel.start(),
+    },
+    deepseek_balance: {
+      slot: "right",
+      mount: () => DeepSeekBalanceWidget.mount(),
+    },
+  };
+
+  const HomeMotion = (function () {
+    const SLOT_BASE_DELAYS = {
+      left: 460,
+      right: 780,
+    };
+    const SLOT_STEP_MS = 120;
+    const DETAIL_STEP_MS = 70;
+    const EXIT_STEP_MS = 36;
+    const observers = new WeakMap();
+
+    function setMotion(node, type, delayMs) {
+      if (!node) return;
+      const nextDelay = `${Math.max(0, Math.round(delayMs))}ms`;
+      if (node.dataset.homeMotion !== type) node.dataset.homeMotion = type;
+      if (node.style.getPropertyValue("--home-motion-delay") !== nextDelay) {
+        node.style.setProperty("--home-motion-delay", nextDelay);
+      }
+    }
+
+    function directChildren(parent, selectors = [":scope > :not(script):not(style)"]) {
+      if (!parent) return [];
+      const out = [];
+      selectors.forEach((selector) => {
+        try {
+          parent.querySelectorAll(selector).forEach((node) => out.push(node));
+        } catch {}
+      });
+      return Array.from(new Set(out));
+    }
+
+    function applyBlockMotion(block, blockDelay) {
+      setMotion(block, "block", blockDelay);
+      directChildren(block).forEach((node, index) => {
+        setMotion(node, "detail", blockDelay + 220 + index * DETAIL_STEP_MS);
+      });
+      block.querySelectorAll(".home-balance-cell").forEach((node, index) => {
+        setMotion(node, "detail", blockDelay + 320 + index * 58);
+      });
+    }
+
+    function applyCardMotion(card, slotKey, widgetIndex, cursor) {
+      const baseDelay = cursor.delay;
+      if (card.matches(".changelog-card")) {
+        directChildren(card, [":scope > .card-head", ":scope > .card-body"]).forEach((node, index) => {
+          setMotion(node, "item", baseDelay + index * 100);
+        });
+        const body = card.querySelector(":scope > .changelog-body");
+        if (body) {
+          Array.from(body.children).forEach((node, index) => {
+            node.style.setProperty("--home-motion-delay", `${baseDelay + 260 + index * 58}ms`);
+          });
+        }
+        return baseDelay + 260;
+      }
+      directChildren(card, [":scope > .card-head"]).forEach((node) => {
+        setMotion(node, "block", baseDelay);
+      });
+      let nextDelay = baseDelay + 120;
+      const blocks = Array.from(card.querySelectorAll(":scope > .stats-block"));
+      blocks.forEach((block, blockIndex) => {
+        const blockDelay = baseDelay + 120 + blockIndex * SLOT_STEP_MS;
+        applyBlockMotion(block, blockDelay);
+        nextDelay = Math.max(nextDelay, blockDelay + 320);
+      });
+      return nextDelay;
+    }
+
+    function applySlot(slot) {
+      if (!slot) return;
+      const slotKey = String(slot.dataset.homeSlot || "");
+      const base = SLOT_BASE_DELAYS[slotKey] ?? 560;
+      let cursor = { delay: base };
+      const cards = Array.from(slot.querySelectorAll(":scope > .home-card"));
+      cards.forEach((card, index) => {
+        cursor.delay = applyCardMotion(card, slotKey, index, cursor) + 20;
+      });
+      slot.classList.add("home-motion-ready");
+      observeSlot(slot);
+    }
+
+    function observeSlot(slot) {
+      if (!slot || observers.has(slot)) return;
+      let scheduled = false;
+      const observer = new MutationObserver(() => {
+        if (scheduled) return;
+        scheduled = true;
+        requestAnimationFrame(() => {
+          scheduled = false;
+          applySlot(slot);
+        });
+      });
+      observer.observe(slot, { childList: true, subtree: true });
+      observers.set(slot, observer);
+    }
+
+    function applyAll() {
+      document.querySelectorAll("[data-home-slot]").forEach(applySlot);
+    }
+
+    function setExit(node, delayMs, slotKey, layer = "detail") {
+      if (!node) return;
+      const isLeft = slotKey === "left";
+      const isRight = slotKey === "right";
+      const x = layer === "card" ? (isLeft ? "-18px" : (isRight ? "18px" : "0")) : "0";
+      const y = layer === "card" ? "16px" : "-14px";
+      node.dataset.homeExit = layer;
+      node.style.setProperty("--home-exit-delay", `${Math.max(0, Math.round(delayMs))}ms`);
+      node.style.setProperty("--home-exit-duration", layer === "card" ? "0.42s" : "0.30s");
+      node.style.setProperty("--home-exit-x", x);
+      node.style.setProperty("--home-exit-y", y);
+      node.style.setProperty("--home-exit-scale", layer === "card" ? "0.972" : "0.985");
+    }
+
+    function startExit() {
+      const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
+      if (reduceMotion) return;
+      document.querySelectorAll("[data-home-slot]").forEach((slot) => {
+        const slotKey = String(slot.dataset.homeSlot || "");
+        const details = Array.from(slot.querySelectorAll("[data-home-motion]"))
+          .filter((node) => !node.matches(".home-card"));
+        details.reverse().forEach((node, index) => {
+          setExit(node, index * EXIT_STEP_MS, slotKey, "detail");
+        });
+        const cards = Array.from(slot.querySelectorAll(":scope > .home-card")).reverse();
+        cards.forEach((card, index) => {
+          setExit(card, 110 + index * 64, slotKey, "card");
+        });
+      });
+    }
+
+    return { applyAll, applySlot, startExit };
+  })();
+  window.HomeMotion = HomeMotion;
+
+  function mountHomeWidgets() {
+    Object.entries(HomeWidgetRegistry).forEach(([name, widget]) => {
+      const slot = HomeSlotRegistry[widget.slot];
+      const el = document.querySelector(`[data-home-widget="${name}"]`);
+      if (!slot || !el) return;
+      widget.element = el;
+      widget.slotElement = slot.element;
+      try {
+        widget.mount();
+      } catch (err) {
+        console.error("[home] widget mount failed:", name, err);
+      }
+    });
+    HomeMotion.applyAll();
+  }
+
+  mountHomeWidgets();
 </script>
 <script src="/theme_toggle.js"></script>
 </body>

@@ -120,6 +120,13 @@ class ToolRuntimeManager:
         event = dict(payload)
         event["seq"] = seq
         event["session_id"] = session_id
+        event.setdefault("id", f"tool_event_{seq}")
+        if str(event.get("type", "") or "") == "terminal":
+            event.setdefault("display_target", "terminal")
+            event.setdefault("context_policy", "include")
+        else:
+            event.setdefault("display_target", "terminal")
+            event.setdefault("context_policy", "exclude")
         self._events[session_id].append(event)
         overflow = len(self._events[session_id]) - self._max_events
         if overflow > 0:

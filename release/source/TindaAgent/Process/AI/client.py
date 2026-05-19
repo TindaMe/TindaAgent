@@ -1,7 +1,9 @@
 import os
 import json
 import html
+import queue
 import re
+import threading
 import time
 from pathlib import Path
 from typing import Any, Iterator
@@ -19,6 +21,7 @@ _ENV_PATH = Path(__file__).resolve().parent.parent.parent / ".env"
 load_dotenv(dotenv_path=_ENV_PATH)
 _THIS_FILE = str(Path(__file__).resolve())
 _LLM_REQUEST_LOG = Path(os.getenv("TINDA_LLM_REQUEST_LOG", str(get_log_root() / "llm_request.jsonl")))
+_last_llm_request_row: dict[str, Any] | None = None
 
 
 def _parse_args(raw: str | None) -> dict[str, Any]:
@@ -104,12 +107,67 @@ def _request_body_from_sdk_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return body
 
 
-def record_llm_request(payload: dict[str, Any], *, source: str, stream: bool = False) -> None:
+def _usage_to_dict(usage: Any) -> dict[str, Any]:
+    if usage is None:
+        return {}
+    if isinstance(usage, dict):
+        return _json_safe(usage) if isinstance(_json_safe(usage), dict) else {}
+    for attr in ("model_dump", "dict"):
+        fn = getattr(usage, attr, None)
+        if callable(fn):
+            try:
+                data = fn()
+                return data if isinstance(data, dict) else {}
+            except Exception:
+                pass
+    data: dict[str, Any] = {}
+    for key in ("prompt_tokens", "completion_tokens", "total_tokens",
+                "prompt_cache_hit_tokens", "prompt_cache_miss_tokens"):
+        val = getattr(usage, key, None)
+        if val is not None:
+            data[key] = val
+    return _json_safe(data) if data else {}
+
+
+def _apply_response_usage(row: dict[str, Any], usage: Any) -> dict[str, Any]:
+    usage_dict = _usage_to_dict(usage)
+    if not usage_dict:
+        return row
+    row["response_usage"] = usage_dict
+    prompt_tokens = usage_dict.get("prompt_tokens")
+    if isinstance(prompt_tokens, int):
+        row["request_tokens"] = int(prompt_tokens)
+        token_usage = row.get("token_usage") if isinstance(row.get("token_usage"), dict) else {}
+        token_usage["total"] = int(prompt_tokens)
+        token_usage["source"] = "api_usage"
+        row["token_usage"] = token_usage
+    total_tokens = usage_dict.get("total_tokens")
+    if isinstance(total_tokens, int):
+        row["total_tokens"] = int(total_tokens)
+    completion_tokens = usage_dict.get("completion_tokens")
+    if isinstance(completion_tokens, int):
+        row["completion_tokens"] = int(completion_tokens)
+    return row
+
+
+def _append_llm_request_row(row: dict[str, Any]) -> None:
+    _LLM_REQUEST_LOG.parent.mkdir(parents=True, exist_ok=True)
+    with _LLM_REQUEST_LOG.open("a", encoding="utf-8") as fp:
+        fp.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def record_llm_request(payload: dict[str, Any], *, source: str, stream: bool = False, response_usage: Any = None) -> dict[str, Any] | None:
+    global _last_llm_request_row
     try:
         sdk_payload = _json_safe(payload)
         request_body = _request_body_from_sdk_payload(payload)
         messages = request_body.get("messages") if isinstance(request_body, dict) else []
         tools = request_body.get("tools") if isinstance(request_body, dict) else []
+        try:
+            from TindaAgent.Process.AI.tokenizer import estimate_request_token_usage
+            token_usage = estimate_request_token_usage(request_body)
+        except Exception:
+            token_usage = {"total": 0, "messages": 0, "tools": 0, "tokenizer": {"engine": "unknown"}}
         row = {
             "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
             "source": str(source),
@@ -118,15 +176,36 @@ def record_llm_request(payload: dict[str, Any], *, source: str, stream: bool = F
             "message_count": len(messages) if isinstance(messages, list) else 0,
             "tool_count": len(tools) if isinstance(tools, list) else 0,
             "payload_chars": _estimate_chars(request_body),
+            "request_tokens": int(token_usage.get("total", 0) or 0),
+            "payload_tokens": int(token_usage.get("payload", 0) or 0),
+            "token_usage": token_usage,
             "payload": request_body,
             "sdk_kwargs": sdk_payload,
         }
-        _LLM_REQUEST_LOG.parent.mkdir(parents=True, exist_ok=True)
-        with _LLM_REQUEST_LOG.open("a", encoding="utf-8") as fp:
-            fp.write(json.dumps(row, ensure_ascii=False) + "\n")
+        _apply_response_usage(row, response_usage)
+        _last_llm_request_row = row
+        _append_llm_request_row(row)
+        return row
     except Exception as e:
         audit_event("SYSTEM_EXECUTE", "ai", "LLMClient.record_llm_request", _THIS_FILE,
                     f"record_llm_request_failed err={e}", extra={"ok": False, "error": str(e)})
+        return None
+
+
+def record_llm_response_usage(usage: Any) -> None:
+    try:
+        if _last_llm_request_row is None:
+            return
+        row = dict(_last_llm_request_row)
+        _apply_response_usage(row, usage)
+        if row is _last_llm_request_row or "response_usage" not in row:
+            return
+        row["ts"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+        row["usage_update"] = True
+        _append_llm_request_row(row)
+    except Exception as e:
+        audit_event("SYSTEM_EXECUTE", "ai", "LLMClient.record_llm_response_usage", _THIS_FILE,
+                    f"record_llm_response_usage_failed err={e}", extra={"ok": False, "error": str(e)})
 
 
 _record_llm_request = record_llm_request
@@ -429,7 +508,8 @@ class LLMClient:
         if not self.api_key:
             raise ValueError("缺少 DEEPSEEK_API_KEY，请在 .env 中配置")
         self._client = OpenAI(api_key=self.api_key, base_url=self.base_url)
-        # 思考模式拉到最大
+        # DeepSeek uses thinking.type for the switch and reasoning_effort for intensity.
+        self._reasoning_effort = "max"
         self._thinking = {"type": "enabled"}
         self._extra_body = {"thinking": self._thinking}
 
@@ -441,10 +521,12 @@ class LLMClient:
                 "model": self.model,
                 "messages": messages,
                 "temperature": temperature,
+                "reasoning_effort": self._reasoning_effort,
                 "extra_body": self._extra_body,
             }
             _record_llm_request(payload, source="LLMClient.chat", stream=False)
             resp = self._client.chat.completions.create(**payload)
+            record_llm_response_usage(getattr(resp, "usage", None))
             text = resp.choices[0].message.content
             audit_event("SYSTEM_EXECUTE", "ai", "LLMClient.chat", _THIS_FILE, "llm_chat_done",
                          extra={"model": self.model, "ok": True, "reply_len": len(text or "")})
@@ -499,6 +581,92 @@ class LLMClient:
                          extra={"tool_name": name, "ok": True, "call_id": call_id})
         return steps, has_pending_confirmation
 
+    def _run_tools_iter(
+            self,
+            tool_calls: list[dict],
+            user_perm: int,
+            msgs: list[dict],
+            trace: list[dict],
+            func: str,
+            *,
+            heartbeat_interval: float = 1.0,
+    ) -> Iterator[dict]:
+        """Run blocking tools in a worker thread and emit heartbeats while waiting."""
+        q: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=1)
+        current: dict[str, Any] = {"name": "", "tool_call_id": "", "call_id": "", "arguments": {}}
+
+        def worker() -> None:
+            try:
+                steps = []
+                has_pending_confirmation = False
+                for call in tool_calls:
+                    name = call["function"]["name"]
+                    args = _parse_args(call["function"].get("arguments", ""))
+                    model_id = call.get("id", "")
+                    current.update({"name": name, "tool_call_id": model_id, "call_id": "", "arguments": args})
+                    event_id = audit_event("TOOL_EXECUTE", "ai", func, _THIS_FILE, f"tool_start tool={name}",
+                                            extra={"tool_name": name, "has_arguments": bool(args), "model_id": model_id})
+                    call_id = f"tc_{event_id:010d}"
+                    current["call_id"] = call_id
+                    raw = tool_registry.run_agent_tool(name, user_perm, args, call_id=call_id)
+                    parsed = _parse_json(raw)
+
+                    user_safe = parsed
+                    model_content = raw
+                    if isinstance(parsed, dict):
+                        parsed.setdefault("call_id", call_id)
+                        user_safe.setdefault("call_id", call_id)
+                        if _result_has_pending_confirmation(parsed):
+                            has_pending_confirmation = True
+                        if parsed.get("error_code") == "permission_denied" and parsed.get("expose_to_user") is False:
+                            model_view = dict(parsed)
+                            model_view["error"] = parsed.get("llm_message") or parsed.get("error") or "permission denied"
+                            model_content = json.dumps(model_view, ensure_ascii=False)
+
+                            safe = dict(parsed)
+                            safe["error"] = parsed.get("user_message") or "该工具当前不可用，请尝试其它方式。"
+                            for k in ("llm_message", "missing_perm_labels", "required_perm_labels",
+                                      "required_perm_bits", "user_perm", "user_perm_labels"):
+                                safe.pop(k, None)
+                            user_safe = safe
+                    if _result_has_pending_confirmation(user_safe):
+                        has_pending_confirmation = True
+
+                    trace.append({"agent_tool": name, "call_id": call_id, "tool_call_id": model_id,
+                                  "arguments": args, "result": user_safe, "raw_result": raw})
+                    steps.append({"agent_tool": name, "call_id": call_id, "tool_call_id": model_id,
+                                  "arguments": args, "result": user_safe, "raw_result": raw})
+                    msgs.append({"role": "tool", "tool_call_id": call["id"], "content": model_content})
+                    audit_event("TOOL_EXECUTE", "ai", func, _THIS_FILE, f"tool_done tool={name}",
+                                extra={"tool_name": name, "ok": True, "call_id": call_id})
+                current.clear()
+                q.put({"type": "result", "steps": steps, "pending": has_pending_confirmation})
+            except BaseException as exc:
+                current.clear()
+                q.put({"type": "error", "error": exc})
+
+        thread = threading.Thread(target=worker, daemon=True, name="tinda-llm-tool-runner")
+        thread.start()
+        started = time.monotonic()
+        while True:
+            try:
+                item = q.get(timeout=max(0.2, float(heartbeat_interval)))
+            except queue.Empty:
+                yield {
+                    "type": "tool_heartbeat",
+                    "elapsed_ms": int((time.monotonic() - started) * 1000),
+                    "tool": dict(current),
+                }
+                continue
+            if item.get("type") == "error":
+                raise item["error"]
+            yield {
+                "type": "tool_result",
+                "steps": item.get("steps", []),
+                "pending": bool(item.get("pending", False)),
+            }
+            return
+
     def _process_tool_loop(self, messages: list[dict], user_perm: int, temperature: float,
                            max_tool_steps: int, stream: bool, base_len: int,
                            func: str) -> tuple[str, list[dict], int, list[dict]]:
@@ -516,10 +684,12 @@ class LLMClient:
                 "tool_choice": "none" if force_finalize else "auto",
                 "messages": msgs,
                 "temperature": temperature,
+                "reasoning_effort": self._reasoning_effort,
                 "extra_body": self._extra_body,
             }
             _record_llm_request(payload, source=func, stream=stream)
             resp = self._client.chat.completions.create(**payload)
+            record_llm_response_usage(getattr(resp, "usage", None))
             msg = resp.choices[0].message
             rc = _concat_reasoning(getattr(msg, "reasoning_content", None))
             content = msg.content or ""
@@ -592,6 +762,7 @@ class LLMClient:
                     "messages": msgs,
                     "temperature": temperature,
                     "stream": True,
+                    "reasoning_effort": self._reasoning_effort,
                     "extra_body": self._extra_body,
                 }
                 _record_llm_request(payload, source="LLMClient.stream_chat_with_tools", stream=True)
@@ -607,8 +778,12 @@ class LLMClient:
             tool_calls_map = {}
             stream_visible_sent = 0
             stream_protocol_started = False
+            response_usage = None
 
             for chunk in stream:
+                chunk_usage = getattr(chunk, "usage", None)
+                if chunk_usage is not None:
+                    response_usage = chunk_usage
                 if not chunk.choices:
                     continue
                 delta = chunk.choices[0].delta
@@ -648,6 +823,8 @@ class LLMClient:
 
             content = "".join(content_parts)
             rc = "".join(reasoning_parts)
+            if response_usage is not None:
+                record_llm_response_usage(response_usage)
 
             calls = []
             if not force_finalize:
@@ -692,13 +869,25 @@ class LLMClient:
             msg_out = _attach_reasoning(
                 {"role": "assistant", "content": content_for_history, "tool_calls": calls}, rc)
             msgs.append(msg_out)
-            step_trace, has_pending_confirmation = self._run_tools(
-                calls,
-                user_perm,
-                msgs,
-                trace,
-                "LLMClient.stream_chat_with_tools",
-            )
+            step_trace = []
+            has_pending_confirmation = False
+            for tool_event in self._run_tools_iter(
+                    calls,
+                    user_perm,
+                    msgs,
+                    trace,
+                    "LLMClient.stream_chat_with_tools",
+            ):
+                if tool_event.get("type") == "tool_heartbeat":
+                    yield {
+                        "type": "tool_heartbeat",
+                        "elapsed_ms": int(tool_event.get("elapsed_ms", 0) or 0),
+                        "tool": tool_event.get("tool", {}),
+                    }
+                    continue
+                if tool_event.get("type") == "tool_result":
+                    step_trace = tool_event.get("steps", [])
+                    has_pending_confirmation = bool(tool_event.get("pending", False))
             if step_trace:
                 yield {"type": "tool_step", "trace": step_trace}
 

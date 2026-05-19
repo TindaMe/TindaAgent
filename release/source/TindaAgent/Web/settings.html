@@ -692,10 +692,10 @@
       <p class="sub">控制 token 阈值与自动压缩</p>
       <div class="input-row">
         <label for="settingTokenLimit">压缩阈值</label>
-        <input type="number" id="settingTokenLimit" min="100" max="10000000" step="100" value="16000">
+        <input type="number" id="settingTokenLimit" min="16000" max="200000" step="1000" value="16000">
         <span class="unit">tokens</span>
       </div>
-      <div class="hint" style="font-size:11px;color:var(--text-dim);">超过此值自动压缩上下文（100 ~ 10M）</div>
+      <div class="hint" style="font-size:11px;color:var(--text-dim);">超过此值自动压缩上下文（16K ~ 200K，未知模型按保守上限处理）</div>
     </div>
 
     <div class="card">
@@ -778,6 +778,8 @@
     const AUTH_TOKEN_KEY = "ta_auth_token";
     const SETTINGS_KEY = "tinda_settings";
     const TOKEN_DEFAULT = 16000;
+    const TOKEN_MIN = 16000;
+    const TOKEN_MAX = 200000;
     const SETTINGS_EXIT_MS = 460;
     const prefersReducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches === true;
     let settingsMotionStarted = false;
@@ -976,11 +978,22 @@
     }
 
     const tokenEl = document.getElementById("settingTokenLimit");
-    tokenEl.value = String(s.token_limit || TOKEN_DEFAULT);
-    tokenEl.addEventListener("change", () => {
-      const val = Math.max(100, Math.min(10000000, parseInt(tokenEl.value, 10) || TOKEN_DEFAULT));
+    const initialToken = Number(s.token_limit || TOKEN_DEFAULT);
+    tokenEl.value = String(initialToken >= TOKEN_MIN && initialToken <= TOKEN_MAX ? initialToken : TOKEN_DEFAULT);
+    tokenEl.addEventListener("change", async () => {
+      const val = parseInt(tokenEl.value, 10);
+      if (!Number.isFinite(val) || val < TOKEN_MIN || val > TOKEN_MAX) {
+        tokenEl.value = String(s.token_limit || TOKEN_DEFAULT);
+        showToast(`压缩阈值范围为 ${TOKEN_MIN} ~ ${TOKEN_MAX} tokens`);
+        return;
+      }
       tokenEl.value = String(val);
-      saveSettings({ token_limit: val });
+      try {
+        await saveSettings({ token_limit: val });
+      } catch (e) {
+        showToast(`保存失败：${String(e?.message || e)}`);
+        return;
+      }
       // Sync to sessionStorage so in-chat dialog sees the same value
       sessionStorage.setItem("tinda_max_context_tokens", String(val));
       // Also push to current session if active
@@ -1050,7 +1063,7 @@
       { key: "compress",   label: "压缩上下文", icon: '<svg viewBox="0 0 24 24"><path d="M4 6h16"/><path d="M4 12h10"/><path d="M4 18h7"/><path d="M18 10v8"/><path d="M14 14h8"/></svg>',   action: "function:noop" },
       { key: "sessions",   label: "会话管理",   icon: '<svg viewBox="0 0 24 24"><path d="M4 5h12a2 2 0 0 1 2 2v12H6a2 2 0 0 1-2-2z"/><path d="M8 9h6M8 13h6"/><path d="M18 7h2v12h-2"/></svg>',   action: "function:noop" },
       { key: "logs",       label: "日志查看",   icon: '<svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 9h8M8 13h8M8 17h6"/></svg>',   action: "nav:/logs" },
-      { key: "llm_request", label: "请求体查看", icon: '<svg viewBox="0 0 24 24"><path d="M8 4h8l4 4v12H4V4z"/><path d="M16 4v4h4"/><path d="M8 12h8M8 16h6"/></svg>',   action: "nav:/llm-request" },
+      { key: "llm_request", label: "模型数据面板", icon: '<svg viewBox="0 0 24 24"><path d="M8 4h8l4 4v12H4V4z"/><path d="M16 4v4h4"/><path d="M8 12h8M8 16h6"/></svg>',   action: "nav:/model-data" },
       { key: "diagnostics",label: "模型检测",   icon: '<svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M7 15l3-3 2 2 4-4"/><path d="M7 10h3"/></svg>',   action: "nav:/model-diagnostics" },
       { key: "reset",      label: "清空上下文", icon: '<svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.3-5.7"/><path d="M20 4v5h-5"/></svg>',   action: "function:noop" },
     ];

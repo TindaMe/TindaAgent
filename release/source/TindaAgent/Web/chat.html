@@ -236,12 +236,22 @@
       -webkit-backdrop-filter: blur(14px) saturate(1.05);
     }
     [data-theme="dark"] .sys-notice::before {
-      content: "系统";
+      content: none;
       color: #ffadc9;
       font-size: 9.5px;
       font-weight: 700;
       letter-spacing: 0.08em;
       opacity: 0.72;
+    }
+    [data-theme="dark"] .history-load-more {
+      background: rgba(25, 19, 27, 0.58);
+      border-color: rgba(255, 176, 211, 0.13);
+      color: #c4a9b8;
+      box-shadow: 0 10px 26px rgba(0, 0, 0, 0.16);
+    }
+    [data-theme="dark"] .history-load-more:hover {
+      background: rgba(47, 35, 48, 0.72);
+      color: #ffadc9;
     }
 
     /* 深色模式硬编码颜色覆盖 — 终端 */
@@ -1400,6 +1410,30 @@
       width: 100%;
       flex-shrink: 0;
       pointer-events: none;
+    }
+    .history-load-more {
+      align-self: center;
+      appearance: none;
+      border: 1px solid rgba(255, 150, 200, 0.34);
+      background: rgba(255, 255, 255, 0.54);
+      color: var(--text-dim);
+      padding: 6px 14px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+      box-shadow: 0 8px 22px rgba(255, 110, 180, 0.08);
+      transition: transform 0.2s var(--ease-out-terminal), opacity 0.2s ease, background 0.2s ease, color 0.2s ease;
+    }
+    .history-load-more:hover {
+      transform: translateY(-1px);
+      background: rgba(255, 255, 255, 0.72);
+      color: var(--accent-deep);
+    }
+    .history-load-more:disabled {
+      opacity: 0.55;
+      cursor: default;
+      transform: none;
     }
 
     /* Toast（工具调用类轻量通知） */
@@ -3015,8 +3049,8 @@
   <div class="config-dialog">
     <h3>上下文配置</h3>
     <p class="sub">设置触发自动压缩的 token 阈值（当前会话）</p>
-    <label for="configTokenInput">最大上下文字 token（100 ~ 10M）</label>
-    <input type="number" id="configTokenInput" min="100" max="10000000" step="100" value="16000" placeholder="16000">
+    <label for="configTokenInput">最大上下文字 token（16K ~ 200K）</label>
+    <input type="number" id="configTokenInput" min="16000" max="200000" step="1000" value="16000" placeholder="16000">
     <div class="btn-row">
       <button class="btn" onclick="hideConfigDialog()">取消</button>
       <button class="btn save" onclick="saveConfig()">保存</button>
@@ -3216,6 +3250,11 @@
   const AUTH_TOKEN_KEY = "ta_auth_token";
   const VERSION_FALLBACK = "v1.8.3";
   const CONTEXT_TOKEN_DEFAULT = 16000;
+  const CONTEXT_TOKEN_MIN = 16000;
+  const CONTEXT_TOKEN_MAX = 200000;
+  const CHAT_INITIAL_MESSAGE_LIMIT = 120;
+  const CHAT_HISTORY_PAGE_LIMIT = 120;
+  const STREAM_RENDER_INTERVAL_MS = 56;
 
   /**
    * 全局唯一的上下文 token 阈值入口。
@@ -3225,11 +3264,41 @@
   function getContextTokenLimit() {
     try {
       var s = JSON.parse(localStorage.getItem("tinda_settings") || "{}");
-      if (typeof s.token_limit === "number" && s.token_limit >= 100) return s.token_limit;
+      if (isValidContextTokenLimit(s.token_limit)) return Math.floor(Number(s.token_limit));
     } catch (_) {}
     var ss = sessionStorage.getItem("tinda_max_context_tokens");
-    if (ss) { var v = parseInt(ss, 10); if (v >= 100) return v; }
+    if (ss) { var v = parseInt(ss, 10); if (isValidContextTokenLimit(v)) return v; }
     return CONTEXT_TOKEN_DEFAULT;
+  }
+
+  function isValidContextTokenLimit(value) {
+    const n = Number(value);
+    return Number.isFinite(n) && n >= CONTEXT_TOKEN_MIN && n <= CONTEXT_TOKEN_MAX;
+  }
+
+  function parseContextTokenLimitInput(value) {
+    const parsed = parseInt(String(value || ""), 10);
+    if (isValidContextTokenLimit(parsed)) return Math.floor(parsed);
+    return 0;
+  }
+
+  async function syncContextTokenLimitForSession(sessionId = getSessionId()) {
+    const sid = String(sessionId || "").trim();
+    const limit = Number(getContextTokenLimit());
+    if (!sid || isDraftSessionId(sid) || !isValidContextTokenLimit(limit)) return 0;
+    try {
+      const res = await apiFetch(`/sessions/${encodeURIComponent(sid)}/config`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ max_context_tokens: Math.floor(limit) }),
+      });
+      const data = await res.json();
+      if (res.ok && data?.ok !== false) {
+        statusContextTokenLimit = Math.floor(limit);
+        return Math.floor(limit);
+      }
+    } catch (_) {}
+    return 0;
   }
 
   function getAuthToken() {
@@ -3313,8 +3382,8 @@
   let sessionsCache = [];
   let activeSessionTitle = "新对话";
   let statusContextUsageLength = 0;
-  let autoCompressInFlight = false;
-  let lastAutoCompressTime = 0;
+  let statusContextTokenLimit = CONTEXT_TOKEN_DEFAULT;
+  let statusContextPreviousUsageLength = 0;
   let gatewayOnline = true;
   let gatewayHeartbeatTimer = 0;
   let toolPollTimer = 0;
@@ -3357,7 +3426,8 @@
   let termPersistBuffer = [];
   let termPersistTimer = 0;
   let termRequestGroup = null;
-  const assistantTurnBubbleById = new Map();
+  let hydratedSessionEntries = [];
+  let historyPagingState = { sid: "", oldestSeq: 0, hasMore: false, loading: false };
 
   // --- Toast ---
   let toastTimer = 0;
@@ -3491,7 +3561,10 @@
   function renderHeaderStatus() {
     const onlineText = gatewayOnline ? "在线" : "离线";
     const sessionText = String(activeSessionTitle || "新会话").trim() || "新会话";
-    const usageText = String(normalizeStatusCount(statusContextUsageLength));
+    const usageNow = normalizeStatusCount(statusContextUsageLength);
+    const limit = normalizeStatusCount(statusContextTokenLimit) || getContextTokenLimit();
+    const previous = normalizeStatusCount(statusContextPreviousUsageLength);
+    const usageText = previous > usageNow ? `${previous}→${usageNow}/${limit}` : `${usageNow}/${limit}`;
     if (statusTextEl) {
       statusTextEl.innerHTML = `${escapeHtml(onlineText)} <span class="status-sep">·</span> ${escapeHtml(sessionText)} <span class="status-sep">·</span> ${escapeHtml(usageText)}`;
     }
@@ -3539,6 +3612,7 @@
     const sid = String(sessionId || "").trim();
     if (!sid || isDraftSessionId(sid)) {
       statusContextUsageLength = 0;
+      statusContextPreviousUsageLength = 0;
       renderHeaderStatus();
       return;
     }
@@ -3551,28 +3625,10 @@
         activeSessionTitle = nextTitle;
       }
       statusContextUsageLength = normalizeStatusCount(data?.usage_length);
+      const serverLimit = normalizeStatusCount(data?.max_context_tokens);
+      if (serverLimit >= 100) statusContextTokenLimit = serverLimit;
       renderHeaderStatus();
       setGatewayOnlineState(true);
-
-      // Auto-compression: check if token usage exceeds threshold
-      try {
-        const usageLen = Number(data?.usage_length || 0);
-        if (usageLen > 0 && !autoCompressInFlight) {
-          const threshold = getContextTokenLimit();
-          if (usageLen > threshold) {
-            const now = Date.now();
-            if (now - lastAutoCompressTime > 300000) {
-              autoCompressInFlight = true;
-              lastAutoCompressTime = now;
-              try {
-                await compressCurrentContext();
-              } finally {
-                autoCompressInFlight = false;
-              }
-            }
-          }
-        }
-      } catch {}
     } catch {
       // 网关探测由独立心跳负责；这里保持上一次可用值，避免 UI 抖动。
     }
@@ -3714,7 +3770,13 @@
       const toolSteps = Math.max(0, Number(data?.tool_steps || 0));
       // confirm 不走 SSE，手动补 >_< 标记
       const marker = (toolSteps > 0) ? "\n\n> >_<\n> --调用工具中--\n" : "";
-      const finalReply = marker ? replyText + marker : replyText;
+      const compressionText = absorbContextCompressionPayload(data.context_compression);
+      let finalReply = marker ? replyText + marker : replyText;
+      if (compressionText) {
+        finalReply = String(finalReply || "").trim()
+          ? `${finalReply}\n\n${compressionText}`
+          : compressionText;
+      }
       if (finalReply.trim()) {
         upsertAssistantTurnBubble(finalReply, { turnId: data?.turn_id, append: true });
       }
@@ -3924,6 +3986,9 @@
       enqueueTermPersist(
         {
           role: "assistant",
+          type: "terminal",
+          display_target: "terminal",
+          context_policy: "include",
           entry_type: "terminal",
           terminal_kind: type === "cmd" ? "cmd" : "out",
           terminal_class: type === "cmd" ? "" : inferTerminalClass(text, cls),
@@ -4182,6 +4247,7 @@
     setStoredSessionId(sid);
     activeSessionTitle = "新会话";
     statusContextUsageLength = 0;
+    statusContextPreviousUsageLength = 0;
     renderHeaderStatus();
     return sid;
   }
@@ -4196,6 +4262,8 @@
     clearPinnedSpacer();
     resetAssistantTurnBubbleMap();
     clearPendingConfirm();
+    hydratedSessionEntries = [];
+    historyPagingState = { sid: "", oldestSeq: 0, hasMore: false, loading: false };
     if (messagesEl) {
       delete messagesEl.dataset.hydrating;
       messagesEl.innerHTML = "";
@@ -4214,6 +4282,7 @@
     }).catch(() => {});
     activeSessionTitle = title;
     statusContextUsageLength = 0;
+    statusContextPreviousUsageLength = 0;
     renderHeaderStatus();
   }
 
@@ -4327,6 +4396,9 @@
     const content = String(raw.content ?? "");
     if (!content.trim()) return null;
     const entry = { role, content, ts: String(raw.ts || toIsoWithOffset(new Date())) };
+    if (raw.type) entry.type = String(raw.type);
+    if (raw.display_target) entry.display_target = String(raw.display_target);
+    if (raw.context_policy) entry.context_policy = String(raw.context_policy);
     if (raw.entry_type) entry.entry_type = String(raw.entry_type);
     if (raw.terminal_kind) entry.terminal_kind = String(raw.terminal_kind);
     if (raw.terminal_class) entry.terminal_class = String(raw.terminal_class);
@@ -4367,7 +4439,7 @@
 
   function normalizeModelChoice(raw) {
     const key = String(raw || "").trim().toLowerCase();
-    return MODEL_ALIAS_MAP[key] || "";
+    return MODEL_ALIAS_MAP[key] || String(raw || "").trim();
   }
 
   function getModelLabel(modelId) {
@@ -4703,12 +4775,169 @@
   function renderToolOutputToTerminal(toolName, callId, output, ok) {
     if (!output) return;
     var cls = ok ? "" : "err";
-    addTermLine("cmd", "[" + toolName + " #" + callId + "]", cls);
+    addTermLine("cmd", "[" + toolName + " #" + callId + "]", cls, { persist: false, noScroll: true });
     var lines = String(output).split("\n");
     for (var i = 0; i < lines.length; i++) {
-      addTermLine("out", lines[i], cls);
+      addTermLine("out", lines[i], cls, { persist: false, noScroll: true });
     }
-    addTermSep({ persist: false });
+    addTermSep({ persist: false, noScroll: true });
+  }
+
+  function appendTerminalEventToFragment(ev, state) {
+    if (!ev || typeof ev !== "object") return;
+    const kind = String(ev.kind || ev.terminal_kind || "out");
+    const text = String(ev.text ?? ev.content ?? "");
+    const frag = state?.frag;
+    if (!frag) return;
+    if (kind === "cmd") {
+      const group = document.createElement("div");
+      group.className = "term-line term-call-group";
+      group.dataset.termKind = "call-group";
+      const row = document.createElement("div");
+      row.className = "term-call-row cmd";
+      row.innerHTML = `<span class="term-prompt">tinda@agent ~ % </span><span class="term-cmd">${escapeHtml(text)}</span>`;
+      group.appendChild(row);
+      frag.appendChild(group);
+      state.activeGroup = group;
+    } else if (kind === "sep") {
+      state.activeGroup = null;
+    } else if (state.activeGroup) {
+      const row = document.createElement("div");
+      row.className = "term-call-row out";
+      const span = document.createElement("span");
+      const cls = inferTerminalClass(text, String(ev.class || ev.terminal_class || ""));
+      span.className = "term-out" + (cls ? " " + cls : "");
+      span.textContent = text;
+      row.appendChild(span);
+      state.activeGroup.appendChild(row);
+    } else {
+      let group = frag.lastElementChild;
+      if (
+        !group
+        || !group.classList
+        || !group.classList.contains("term-line")
+        || String(group.dataset?.termKind || "") !== "out-group"
+      ) {
+        group = document.createElement("div");
+        group.className = "term-line term-out-group";
+        group.dataset.termKind = "out-group";
+        frag.appendChild(group);
+      }
+      const outRow = document.createElement("div");
+      outRow.className = "term-out-row";
+      const span = document.createElement("span");
+      const cls = inferTerminalClass(text, String(ev.class || ev.terminal_class || ""));
+      span.className = "term-out" + (cls ? " " + cls : "");
+      span.textContent = text;
+      outRow.appendChild(span);
+      group.appendChild(outRow);
+    }
+  }
+
+  function appendTerminalEvents(events, { replay = false } = {}) {
+    if (!Array.isArray(events) || !events.length) return 0;
+    const frag = document.createDocumentFragment();
+    const state = { frag, activeGroup: null };
+    let appended = 0;
+    events.forEach((ev) => {
+      if (!ev || typeof ev !== "object") return;
+      if (String(ev.display_target || "terminal") !== "terminal") return;
+      if (String(ev.type || "terminal") !== "terminal") return;
+      const seq = replay
+        ? (String(ev.source || "") === "tool_runtime" ? Number(ev.source_seq || 0) : 0)
+        : Number(ev.seq || ev.source_seq || 0);
+      if (seq > 0) {
+        if (processedTerminalSeq.has(seq)) return;
+        processedTerminalSeq.add(seq);
+        if (replay) toolLastSeq = Math.max(toolLastSeq, seq);
+      }
+      appendTerminalEventToFragment(ev, state);
+      appended += 1;
+    });
+    if (appended > 0) {
+      termBodyEl.appendChild(frag);
+      trimTerminalLines();
+      termBodyEl.scrollTop = termBodyEl.scrollHeight;
+    }
+    return appended;
+  }
+
+  async function fetchSessionMessagesPage(sid, { beforeSeq = 0, limit = CHAT_INITIAL_MESSAGE_LIMIT } = {}) {
+    const params = new URLSearchParams();
+    const safeLimit = Math.max(1, Math.min(Number(limit) || CHAT_INITIAL_MESSAGE_LIMIT, 500));
+    params.set("limit", String(safeLimit));
+    if (beforeSeq > 0) params.set("before_seq", String(beforeSeq));
+    const res = await apiFetch(`/sessions/${encodeURIComponent(sid)}/messages?${params.toString()}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    return {
+      entries: Array.isArray(data.entries) ? data.entries : [],
+      oldestSeq: Number(data.oldest_seq || 0),
+      newestSeq: Number(data.newest_seq || 0),
+      hasMore: !!data.has_more,
+      total: Number(data.total || 0),
+    };
+  }
+
+  async function fetchSessionTerminalEvents(sid) {
+    const res = await apiFetch(`/sessions/${encodeURIComponent(sid)}/terminal`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    return Array.isArray(data.entries) ? data.entries : [];
+  }
+
+  function removeHistoryLoadMoreControl() {
+    messagesEl?.querySelectorAll(".history-load-more").forEach((node) => node.remove());
+  }
+
+  function renderHistoryLoadMoreControl() {
+    removeHistoryLoadMoreControl();
+    if (!messagesEl || !historyPagingState.hasMore || !historyPagingState.sid) return;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "history-load-more";
+    btn.textContent = historyPagingState.loading ? "加载中..." : "加载更早消息";
+    btn.disabled = !!historyPagingState.loading;
+    btn.addEventListener("click", loadOlderHistoryPage);
+    messagesEl.insertBefore(btn, messagesEl.firstElementChild || null);
+  }
+
+  async function renderHydratedSessionEntries(entries, { preserveScroll = false } = {}) {
+    if (typeof renderSession === "function") {
+      await renderSession(entries, {
+        chunkSize: 16,
+        preserveScroll,
+      });
+    }
+    renderHistoryLoadMoreControl();
+  }
+
+  async function loadOlderHistoryPage() {
+    if (historyPagingState.loading || !historyPagingState.hasMore || !historyPagingState.sid) return;
+    const sid = historyPagingState.sid;
+    historyPagingState.loading = true;
+    renderHistoryLoadMoreControl();
+    try {
+      const page = await fetchSessionMessagesPage(sid, {
+        beforeSeq: historyPagingState.oldestSeq,
+        limit: CHAT_HISTORY_PAGE_LIMIT,
+      });
+      if (sid !== historyPagingState.sid) return;
+      const seen = new Set(hydratedSessionEntries.map((entry) => String(entry?.seq || entry?.id || "")));
+      const older = page.entries.filter((entry) => !seen.has(String(entry?.seq || entry?.id || "")));
+      hydratedSessionEntries = older.concat(hydratedSessionEntries);
+      historyPagingState.oldestSeq = page.oldestSeq || historyPagingState.oldestSeq;
+      historyPagingState.hasMore = page.hasMore;
+      await renderHydratedSessionEntries(hydratedSessionEntries, { preserveScroll: true });
+    } catch (e) {
+      reportErrorToTerminal(`读取更早消息失败：${String(e?.message || e)}`, { source: "session_record", sessionId: sid });
+      showToast("读取更早消息失败", "warn");
+    } finally {
+      if (sid === historyPagingState.sid) {
+        historyPagingState.loading = false;
+        renderHistoryLoadMoreControl();
+      }
+    }
   }
 
   async function loadCurrentSessionRecord({ sessionId = "" } = {}) {
@@ -4718,11 +4947,26 @@
         showEmptyState();
         return false;
       }
-      const res = await apiFetch(`/sessions/${encodeURIComponent(sid)}/messages`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      const entries = Array.isArray(data.entries) ? data.entries : [];
-      renderSession(entries);
+      const data = await fetchSessionMessagesPage(sid, { limit: CHAT_INITIAL_MESSAGE_LIMIT });
+      hydratedSessionEntries = data.entries;
+      historyPagingState = {
+        sid,
+        oldestSeq: data.oldestSeq,
+        hasMore: data.hasMore,
+        loading: false,
+      };
+      await renderHydratedSessionEntries(hydratedSessionEntries);
+      resetTerminalForReplay();
+      try {
+        const terminalEntries = await fetchSessionTerminalEvents(sid);
+        appendTerminalEvents(terminalEntries, { replay: true });
+      } catch (terminalError) {
+        reportErrorToTerminal(`读取终端历史失败：${String(terminalError?.message || terminalError)}`, {
+          source: "session_terminal",
+          sessionId: sid,
+          persist: false,
+        });
+      }
       await syncPendingConfirmationsFromServer(sid, { silent: true });
       await refreshContextUsageLength(sid);
       return true;
@@ -4795,77 +5039,17 @@
     if (typeof text !== "string") {
       try { text = JSON.stringify(text, null, 2); } catch (e) { text = String(text || ""); }
     }
-    const row = document.createElement("div");
-    row.className = "msg " + role;
-    if (messagesEl?.dataset.hydrating === "1") row.classList.add("history-msg");
-
-    const spacer = messagesEl.querySelector(".sys-pin-spacer");
-    const prev = spacer ? spacer.previousElementSibling : messagesEl.lastElementChild;
-    if (prev && prev.classList.contains("msg") && prev.classList.contains(role)) {
-      row.classList.add("same-as-prev");
+    if (window.ChatBubbleRenderer?.renderBubble) {
+      return window.ChatBubbleRenderer.renderBubble(text, role, { isCommand, turnId });
     }
-
-    const avatar = document.createElement("div");
-    avatar.className = "avatar";
-    avatar.innerHTML = role === "bot"
-      ? `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2"></circle><path d="M12 2.8v4.2M12 17v4.2M2.8 12h4.2M17 12h4.2M5.3 5.3l3 3M15.7 15.7l3 3M18.7 5.3l-3 3M8.3 15.7l-3 3"></path></svg>`
-      : `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 21a8 8 0 0 0-16 0"></path><circle cx="12" cy="8" r="3.2"></circle></svg>`;
-
-    const bubble = document.createElement("div");
-    bubble.className = "bubble" + (isCommand ? " cmd" : "");
-    if (role === "bot") {
-      bubble.classList.add("md");
-      bubble.dataset.rawMd = String(text ?? "");
-      bubble.innerHTML = renderMarkdown(text);
-      const tid = normalizeTurnId(turnId);
-      if (tid) {
-        bubble.dataset.turnId = tid;
-        rememberAssistantTurnBubble(tid, bubble);
-      }
-    } else {
-      bubble.textContent = text;
-    }
-
-    row.appendChild(avatar);
-    row.appendChild(bubble);
-    if (spacer) {
-      messagesEl.insertBefore(row, spacer);
-    } else {
-      messagesEl.appendChild(row);
-    }
-    if (!isHydratingMessages()) scrollToBottom();
-    return { row, bubble };
+    return { row: null, bubble: null };
   }
 
   function addFileChipBubble(fileName) {
-    const shortName = getDisplayFileName(fileName);
-    const row = document.createElement("div");
-    row.className = "msg user";
-    if (messagesEl?.dataset.hydrating === "1") row.classList.add("history-msg");
-
-    const spacer = messagesEl.querySelector(".sys-pin-spacer");
-    const prev = spacer ? spacer.previousElementSibling : messagesEl.lastElementChild;
-    if (prev && prev.classList.contains("msg") && prev.classList.contains("user")) {
-      row.classList.add("same-as-prev");
+    if (window.ChatBubbleRenderer?.renderFileChip) {
+      return window.ChatBubbleRenderer.renderFileChip(fileName);
     }
-
-    const avatar = document.createElement("div");
-    avatar.className = "avatar";
-    avatar.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 21a8 8 0 0 0-16 0"></path><circle cx="12" cy="8" r="3.2"></circle></svg>`;
-
-    const bubble = document.createElement("div");
-    bubble.className = "bubble file-chip";
-    bubble.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg><span>${escapeHtml(shortName)}</span>`;
-
-    row.appendChild(avatar);
-    row.appendChild(bubble);
-    if (spacer) {
-      messagesEl.insertBefore(row, spacer);
-    } else {
-      messagesEl.appendChild(row);
-    }
-    if (!isHydratingMessages()) scrollToBottom();
-    return { row, bubble };
+    return { row: null, bubble: null };
   }
 
   function getDisplayFileName(fullName) {
@@ -4891,6 +5075,18 @@
     return cleaned;
   }
 
+  function absorbContextCompressionPayload(payload) {
+    if (!payload || typeof payload !== "object") return "";
+    const usageBefore = normalizeStatusCount(payload.usage_before);
+    const usageAfter = normalizeStatusCount(payload.usage_after);
+    const serverLimit = normalizeStatusCount(payload.max_context_tokens);
+    if (serverLimit >= 100) statusContextTokenLimit = serverLimit;
+    if (usageBefore > 0) statusContextPreviousUsageLength = usageBefore;
+    if (usageAfter >= 0) statusContextUsageLength = usageAfter;
+    renderHeaderStatus();
+    return String(payload.text || payload.content || payload.summary || "").trim();
+  }
+
   function _streamDisplay(reasoning, content) {
     const r = String(reasoning || "").trim();
     const c = String(content || "").trim();
@@ -4914,58 +5110,26 @@
   }
 
   function resetAssistantTurnBubbleMap() {
-    assistantTurnBubbleById.clear();
+    window.ChatBubbleRenderer?.resetTurnBubbles?.();
   }
 
   function resolveAssistantTurnBubble(turnId) {
-    const tid = normalizeTurnId(turnId);
-    if (!tid) return null;
-    const bubble = assistantTurnBubbleById.get(tid);
-    if (!bubble || !bubble.isConnected) {
-      assistantTurnBubbleById.delete(tid);
-      return null;
-    }
-    return bubble;
+    return window.ChatBubbleRenderer?.resolveTurnBubble?.(turnId) || null;
   }
 
   function rememberAssistantTurnBubble(turnId, bubbleEl) {
-    const tid = normalizeTurnId(turnId);
-    if (!tid || !bubbleEl) return;
-    assistantTurnBubbleById.set(tid, bubbleEl);
+    window.ChatBubbleRenderer?.rememberTurnBubble?.(turnId, bubbleEl);
   }
 
   function upsertAssistantTurnBubble(rawText, { turnId = "", append = false, isCommand = false } = {}) {
-    const text = sanitizeAssistantDisplayText(rawText);
-    if (!text) return null;
-    const tid = normalizeTurnId(turnId);
-    const existing = resolveAssistantTurnBubble(tid);
-    if (existing) {
-      if (append) {
-        const prev = String(existing.dataset.rawMd ?? "");
-        const next = prev ? `${prev}\n\n${text}` : text;
-        existing.dataset.rawMd = next;
-        existing.innerHTML = renderMarkdown(next);
-      } else {
-        existing.dataset.rawMd = text;
-        existing.innerHTML = renderMarkdown(text);
-      }
-      if (!isHydratingMessages()) scrollToBottom();
-      return { row: existing.closest(".msg"), bubble: existing };
-    }
-    return addBubble(text, "bot", { isCommand, turnId: tid });
+    return window.ChatBubbleRenderer?.upsertAssistantBubble?.(rawText, { turnId, append, isCommand }) || null;
   }
 
   function createMsgRow(role, contentEl) {
-    const row = document.createElement("div");
-    row.className = "msg " + role;
-    const avatar = document.createElement("div");
-    avatar.className = "avatar";
-    avatar.innerHTML = role === "bot"
-      ? `<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"></circle><path d="M12 2.8v4.2M12 17v4.2M2.8 12h4.2M17 12h4.2M5.3 5.3l3 3M15.7 15.7l3 3M18.7 5.3l-3 3M8.3 15.7l-3 3"></path></svg>`
-      : `<svg viewBox="0 0 24 24"><path d="M20 21a8 8 0 0 0-16 0"></path><circle cx="12" cy="8" r="3.2"></circle></svg>`;
-    row.appendChild(avatar);
-    if (contentEl instanceof Node) row.appendChild(contentEl);
-    return row;
+    if (window.ChatBubbleRenderer?.createRow) {
+      return window.ChatBubbleRenderer.createRow(role, contentEl);
+    }
+    return null;
   }
 
   function renderTermExecBubble(entry) {
@@ -5007,12 +5171,7 @@
   }
 
   function appendMarkdownToBotBubble(bubbleEl, extraText) {
-    if (!bubbleEl) return false;
-    const prev = String(bubbleEl.dataset.rawMd ?? "");
-    const next = `${prev}${String(extraText ?? "")}`;
-    bubbleEl.dataset.rawMd = next;
-    bubbleEl.innerHTML = renderMarkdown(next);
-    return true;
+    return window.ChatBubbleRenderer?.appendMarkdownToBubble?.(bubbleEl, extraText) || false;
   }
 
   // markdown 渲染函数（escapeHtml / safeHref / renderInlineMarkdown / parseTableCells /
@@ -5020,20 +5179,10 @@
   // 通过 window 全局向后兼容暴露，旧调用点 renderMarkdown(text) / escapeHtml(text) 等继续可用。
 
   function addTyping() {
-    const row = document.createElement("div");
-    row.className = "msg bot";
-    row.innerHTML = `
-      <div class="avatar"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2"></circle><path d="M12 2.8v4.2M12 17v4.2M2.8 12h4.2M17 12h4.2M5.3 5.3l3 3M15.7 15.7l3 3M18.7 5.3l-3 3M8.3 15.7l-3 3"></path></svg></div>
-      <div class="bubble"><div class="typing"><span></span><span></span><span></span></div></div>
-    `;
-    const spacer = messagesEl.querySelector(".sys-pin-spacer");
-    if (spacer) {
-      messagesEl.insertBefore(row, spacer);
-    } else {
-      messagesEl.appendChild(row);
+    if (window.ChatBubbleRenderer?.renderTyping) {
+      return window.ChatBubbleRenderer.renderTyping();
     }
-    scrollToBottom();
-    return row;
+    return null;
   }
 
   function setStreamToggleUI() {
@@ -5594,10 +5743,10 @@
       }
     },
     llm_request: {
-      label: "请求体", icon: '<svg class="icon" viewBox="0 0 24 24"><path d="M8 4h8l4 4v12H4V4z"/><path d="M16 4v4h4"/><path d="M8 12h8M8 16h6"/></svg>',
+      label: "模型数据", icon: '<svg class="icon" viewBox="0 0 24 24"><path d="M8 4h8l4 4v12H4V4z"/><path d="M16 4v4h4"/><path d="M8 12h8M8 16h6"/></svg>',
       render: () => {
-        const a = document.createElement("a"); a.className = "icon-btn"; a.href = "/llm-request"; a.title = "LLM 请求体"; a.setAttribute("data-tip","LLM 请求体"); a.setAttribute("aria-label","LLM 请求体");
-        a.onclick = function(e){ e.preventDefault(); smoothNavigate("/llm-request"); };
+        const a = document.createElement("a"); a.className = "icon-btn"; a.href = "/model-data"; a.title = "模型数据面板"; a.setAttribute("data-tip","模型数据面板"); a.setAttribute("aria-label","模型数据面板");
+        a.onclick = function(e){ e.preventDefault(); smoothNavigate("/model-data"); };
         a.innerHTML = QUICK_BUTTON_DEFS.llm_request.icon;
         return a;
       }
@@ -5766,6 +5915,7 @@
             clearStoredSessionId();
             activeSessionTitle = "无会话";
             statusContextUsageLength = 0;
+            statusContextPreviousUsageLength = 0;
             renderHeaderStatus();
           }
           if (res.status === 403 || res.status === 404) {
@@ -5783,65 +5933,7 @@
       toolEventsLastErrorAt = 0;
       if (!events.length) return;
       showTerm();
-      const frag = document.createDocumentFragment();
-      let activeGroup = null;
-      events.forEach((ev) => {
-        const seq = Number(ev?.seq || 0);
-        if (seq > 0) {
-          if (processedTerminalSeq.has(seq)) return;
-          processedTerminalSeq.add(seq);
-        }
-        if (ev?.type !== "terminal") return;
-        const kind = String(ev?.kind || "out");
-        const text = String(ev?.text || "");
-        if (kind === "cmd") {
-          activeGroup = document.createElement("div");
-          activeGroup.className = "term-line term-call-group";
-          activeGroup.dataset.termKind = "call-group";
-          const row = document.createElement("div");
-          row.className = "term-call-row cmd";
-          row.innerHTML = `<span class="term-prompt">tinda@agent ~ % </span><span class="term-cmd">${escapeHtml(text)}</span>`;
-          activeGroup.appendChild(row);
-          frag.appendChild(activeGroup);
-        } else if (kind === "sep") {
-          activeGroup = null;
-        } else {
-          if (activeGroup) {
-            const row = document.createElement("div");
-            row.className = "term-call-row out";
-            const span = document.createElement("span");
-            const cls = inferTerminalClass(text, String(ev?.class || ""));
-            span.className = "term-out" + (cls ? " " + cls : "");
-            span.textContent = text;
-            row.appendChild(span);
-            activeGroup.appendChild(row);
-          } else {
-            let group = frag.lastElementChild;
-            if (
-              !group
-              || !group.classList
-              || !group.classList.contains("term-line")
-              || String(group.dataset?.termKind || "") !== "out-group"
-            ) {
-              group = document.createElement("div");
-              group.className = "term-line term-out-group";
-              group.dataset.termKind = "out-group";
-              frag.appendChild(group);
-            }
-            const outRow = document.createElement("div");
-            outRow.className = "term-out-row";
-            const span = document.createElement("span");
-            const cls = inferTerminalClass(text, String(ev?.class || ""));
-            span.className = "term-out" + (cls ? " " + cls : "");
-            span.textContent = text;
-            outRow.appendChild(span);
-            group.appendChild(outRow);
-          }
-        }
-      });
-      termBodyEl.appendChild(frag);
-      trimTerminalLines();
-      termBodyEl.scrollTop = termBodyEl.scrollHeight;
+      appendTerminalEvents(events);
     } catch (e) {
       // 网络抖动/切页瞬断时不每秒刷红错误；仅在持续失败时节流提示
       toolEventsFetchErrorStreak += 1;
@@ -5907,8 +5999,14 @@
       if (!res.ok || data?.ok === false) {
         throw new Error(String(data?.error || `http ${res.status}`));
       }
+      const usageBefore = normalizeStatusCount(data?.usage_before);
+      const usageAfter = normalizeStatusCount(data?.usage_after);
+      const serverLimit = normalizeStatusCount(data?.max_context_tokens);
+      if (serverLimit >= 100) statusContextTokenLimit = serverLimit;
+      if (usageBefore > 0) statusContextPreviousUsageLength = usageBefore;
+      if (usageAfter >= 0) statusContextUsageLength = usageAfter;
+      renderHeaderStatus();
       addSystemNotice(`上下文已压缩：压缩 ${Number(data?.compressed_count || 0)} 条历史消息`);
-      await loadCurrentSessionRecord();
       await refreshRecords();
       refreshContextUsageLength(sid).catch(() => {});
     } catch (e) {
@@ -5931,7 +6029,12 @@
 
   async function saveConfig() {
     const input = document.getElementById("configTokenInput");
-    const val = Math.max(100, Math.min(10000000, parseInt(String(input?.value || CONTEXT_TOKEN_DEFAULT), 10) || CONTEXT_TOKEN_DEFAULT));
+    const val = parseContextTokenLimitInput(input?.value);
+    if (!val) {
+      showToast(`上下文阈值范围为 ${CONTEXT_TOKEN_MIN} ~ ${CONTEXT_TOKEN_MAX} tokens`, "warn");
+      if (input) input.value = String(getContextTokenLimit());
+      return;
+    }
     if (input) input.value = String(val);
     sessionStorage.setItem("tinda_max_context_tokens", String(val));
     try {
@@ -5942,15 +6045,8 @@
     const sid = getSessionId();
     if (sid && !isDraftSessionId(sid)) {
       try {
-        const res = await apiFetch(`/sessions/${encodeURIComponent(sid)}/config`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ max_context_tokens: val }),
-        });
-        const data = await res.json();
-        if (!res.ok || data?.ok === false) {
-          throw new Error(String(data?.error || `http ${res.status}`));
-        }
+        const synced = await syncContextTokenLimitForSession(sid);
+        if (!synced) throw new Error("session config sync failed");
         showToast(`上下文阈值已设为 ${val} tokens`, "ok");
       } catch (e) {
         showToast(`保存失败：${String(e?.message || e)}`, "error");
@@ -5985,6 +6081,10 @@
     inputEl.value = "";
     autoResize();
     setMessageSendInFlight(true);
+    // 当前 DOM 进入实时对话态，避免“加载更早”重渲染覆盖正在流式生成的内容。
+    historyPagingState.hasMore = false;
+    removeHistoryLoadMoreControl();
+    hydratedSessionEntries = [];
 
     if (hasFile && fileBackup) {
       fileBackup.forEach(function(f) { addFileChipBubble(f.name); });
@@ -6039,8 +6139,172 @@
         let streamSegmentStart = 0;
         let streamReasoning = "";
         let donePayload = null;
-        const startedToolCallIds = new Set();
-        const completedToolCallIds = new Set();
+        const streamParts = [];
+        const toolCallBlockKeyIndex = new Map();
+        let streamRenderRaf = 0;
+        let streamRenderTimer = 0;
+        let streamRenderLastAt = 0;
+        let streamRenderPending = "";
+
+        function toolBlockMarkdown(name, cid, done, progress) {
+          if (window.ChatBubbleRenderer?.renderToolMarkerMarkdown) {
+            return window.ChatBubbleRenderer.renderToolMarkerMarkdown(
+              { name: name || "unknown", id: cid || "", progress: progress || "" },
+              { done: !!done, progress: progress || "" }
+            );
+          }
+          return "";
+        }
+
+        function normalizeToolCallKey(value) {
+          return String(value || "").trim();
+        }
+
+        function toolKeysFromPayload(payload) {
+          if (!payload || typeof payload !== "object") return [];
+          const keys = [
+            payload.tool_call_id,
+            payload.call_id,
+            payload.id,
+          ].map(normalizeToolCallKey).filter(Boolean);
+          const name = normalizeToolCallKey(payload.agent_tool || payload.name || payload.tool_name);
+          const args = payload.arguments && typeof payload.arguments === "object" ? payload.arguments : {};
+          const argHint = normalizeToolCallKey(args.cmd || args.text || args.key || "");
+          if (name && argHint) keys.push(`${name}:${argHint}`);
+          return Array.from(new Set(keys));
+        }
+
+        function findToolBlockIndex(keys, name) {
+          for (const key of keys) {
+            if (toolCallBlockKeyIndex.has(key)) return toolCallBlockKeyIndex.get(key);
+          }
+          const cleanName = normalizeToolCallKey(name);
+          if (cleanName) {
+            const runningIdx = streamParts.findIndex((part) => part && part.type === "tool" && !part.done && part.name === cleanName);
+            if (runningIdx >= 0) return runningIdx;
+          }
+          return -1;
+        }
+
+        function rememberToolBlockKeys(index, keys) {
+          keys.forEach((key) => {
+            if (key) toolCallBlockKeyIndex.set(key, index);
+          });
+        }
+
+        function upsertToolBlock(payload, done, progress) {
+          if (!payload || typeof payload !== "object") return false;
+          const name = normalizeToolCallKey(payload.agent_tool || payload.name || payload.tool_name) || "unknown";
+          const cid = normalizeToolCallKey(payload.call_id || payload.id || "").replace(/^tc_/, "");
+          const progressText = normalizeToolCallKey(progress || payload.progress || "");
+          const keys = toolKeysFromPayload(payload);
+          const idx = findToolBlockIndex(keys, name);
+          const nextBlock = {
+            type: "tool",
+            name,
+            cid,
+            done: !!done,
+            progress: progressText,
+            block: toolBlockMarkdown(name, cid, !!done, progressText),
+          };
+          if (idx >= 0) {
+            const prev = streamParts[idx] || {};
+            const nextDone = prev.done || nextBlock.done;
+            const nextName = prev.name || nextBlock.name;
+            const nextCid = nextBlock.cid || prev.cid || "";
+            const nextProgress = nextDone ? "" : (nextBlock.progress || prev.progress || "");
+            streamParts[idx] = {
+              type: "tool",
+              name: nextName,
+              cid: nextCid,
+              done: nextDone,
+              progress: nextProgress,
+              block: toolBlockMarkdown(nextName, nextCid, nextDone, nextProgress),
+            };
+            rememberToolBlockKeys(idx, keys);
+          } else {
+            flushCurrentStreamTextPart();
+            streamParts.push(nextBlock);
+            rememberToolBlockKeys(streamParts.length - 1, keys);
+          }
+          return true;
+        }
+
+        function flushCurrentStreamTextPart() {
+          const text = String(streamText || "");
+          if (text.trim()) {
+            streamParts.push({ type: "text", text });
+          }
+          streamText = "";
+          streamSegmentStart = 0;
+        }
+
+        function buildStreamTextWithToolBlocks() {
+          const parts = [];
+          streamParts.forEach((part) => {
+            const text = part?.type === "tool" ? String(part.block || "") : String(part?.text || "");
+            if (text.trim()) parts.push(text.trim());
+          });
+          const current = String(streamText || "").trim();
+          if (current) parts.push(current);
+          return parts.join("\n\n");
+        }
+
+        function flushStreamReasoningToText() {
+          if (!streamReasoning) return false;
+          if (streamText && !streamText.endsWith("\n\n")) streamText += "\n";
+          streamText += "> " + streamReasoning.split("\n").join("\n> ") + "\n\n";
+          streamReasoning = "";
+          streamSegmentStart = streamText.length;
+          return true;
+        }
+
+        function replaceCurrentStreamSegment(content) {
+          flushStreamReasoningToText();
+          const replaceStart = Math.max(0, Math.min(streamSegmentStart, streamText.length));
+          const cleanSegment = String(content || "");
+          streamText = streamText.slice(0, replaceStart) + cleanSegment;
+          streamSegmentStart = streamText.length;
+        }
+
+        function commitStreamBubbleRender(text) {
+          if (!renderDelta || !streamBot) return;
+          const displayText = String(text ?? "");
+          window.ChatBubbleRenderer?.updateBubbleMarkdown?.(streamBot.bubble, displayText);
+          streamRenderLastAt = performance.now();
+        }
+
+        function queueStreamBubbleRender(text, { force = false } = {}) {
+          if (!renderDelta || !streamBot) return;
+          streamRenderPending = String(text ?? "");
+          if (force) {
+            if (streamRenderTimer) {
+              clearTimeout(streamRenderTimer);
+              streamRenderTimer = 0;
+            }
+            if (streamRenderRaf) {
+              cancelAnimationFrame(streamRenderRaf);
+              streamRenderRaf = 0;
+            }
+            commitStreamBubbleRender(streamRenderPending);
+            return;
+          }
+          if (streamRenderRaf || streamRenderTimer) return;
+          const elapsed = performance.now() - streamRenderLastAt;
+          const wait = Math.max(0, STREAM_RENDER_INTERVAL_MS - elapsed);
+          const schedule = () => {
+            streamRenderTimer = 0;
+            streamRenderRaf = requestAnimationFrame(() => {
+              streamRenderRaf = 0;
+              commitStreamBubbleRender(streamRenderPending);
+            });
+          };
+          if (wait > 0) {
+            streamRenderTimer = setTimeout(schedule, wait);
+          } else {
+            schedule();
+          }
+        }
 
         while (true) {
           const { value, done } = await reader.read();
@@ -6066,71 +6330,35 @@
             }
 
             if (eventName === "delta") {
-              if (streamReasoning) {
-                if (streamText && !streamText.endsWith("\n\n")) streamText += "\n";
-                streamText += "> " + streamReasoning.split("\n").join("\n> ") + "\n\n";
-                streamReasoning = "";
-                streamSegmentStart = streamText.length;
-              }
+              flushStreamReasoningToText();
               streamText += String(payload.content || "");
               if (renderDelta && streamBot) {
-                const cur = _streamDisplay(streamReasoning, streamText);
-                streamBot.bubble.dataset.rawMd = cur;
-                streamBot.bubble.innerHTML = renderMarkdown(cur);
-                scrollToBottom();
+                const cur = _streamDisplay(streamReasoning, buildStreamTextWithToolBlocks());
+                queueStreamBubbleRender(cur);
               }
             } else if (eventName === "reasoning_delta") {
               streamReasoning += String(payload.content || "");
               if (renderDelta && streamBot) {
-                const cur = _streamDisplay(streamReasoning, streamText);
-                streamBot.bubble.dataset.rawMd = cur;
-                streamBot.bubble.innerHTML = renderMarkdown(cur);
-                scrollToBottom();
+                const cur = _streamDisplay(streamReasoning, buildStreamTextWithToolBlocks());
+                queueStreamBubbleRender(cur);
               }
             } else if (eventName === "replace_segment") {
-              const replaceStart = streamSegmentStart;
-              if (streamReasoning) {
-                if (streamText && !streamText.endsWith("\n\n")) streamText += "\n";
-                streamText += "> " + streamReasoning.split("\n").join("\n> ") + "\n\n";
-                streamReasoning = "";
-              }
-              const cleanSegment = String(payload.content || "");
-              streamText = streamText.slice(0, replaceStart) + cleanSegment;
-              streamSegmentStart = streamText.length;
+              replaceCurrentStreamSegment(payload.content);
               if (renderDelta && streamBot) {
-                streamBot.bubble.dataset.rawMd = streamText;
-                streamBot.bubble.innerHTML = renderMarkdown(streamText);
-                scrollToBottom();
+                queueStreamBubbleRender(buildStreamTextWithToolBlocks(), { force: true });
               }
             } else if (eventName === "tool_call_start") {
-              if (streamReasoning) {
-                if (streamText && !streamText.endsWith("\n\n")) streamText += "\n";
-                streamText += "> " + streamReasoning.split("\n").join("\n> ") + "\n\n";
-                streamReasoning = "";
-              }
+              flushStreamReasoningToText();
               const calls = Array.isArray(payload.calls) ? payload.calls : [];
-              const lines = [];
+              let changed = false;
               calls.forEach(function(call) {
                 if (!call || typeof call !== "object") return;
-                const name = call.agent_tool || "unknown";
-                const dedupeKey = String(call.tool_call_id || name || "").trim();
-                if (dedupeKey && startedToolCallIds.has(dedupeKey)) return;
-                if (dedupeKey) startedToolCallIds.add(dedupeKey);
-                const line = "> **准备调用工具**: " + name + "\n";
-                lines.push(line);
+                if (upsertToolBlock(call, false)) changed = true;
               });
-              if (lines.length > 0) {
-                lines.forEach(function(line) {
-                  if (streamText && !streamText.endsWith("\n\n")) streamText += "\n\n";
-                  streamText += `> >_<\n> --调用工具中--\n`;
-                  streamText += line;
-                });
-              }
+              if (!changed) continue;
               streamSegmentStart = streamText.length;
               if (renderDelta && streamBot) {
-                streamBot.bubble.dataset.rawMd = streamText;
-                streamBot.bubble.innerHTML = renderMarkdown(streamText);
-                scrollToBottom();
+                queueStreamBubbleRender(buildStreamTextWithToolBlocks(), { force: true });
               }
             } else if (eventName === "tool_step") {
               const trace = Array.isArray(payload?.trace) ? payload.trace : [];
@@ -6138,21 +6366,32 @@
                 renderToolTraceToTerminal(trace, { sessionId: sid, persist: false });
                 trace.forEach(function(step) {
                   if (!step || typeof step !== "object") return;
-                  var name = step.agent_tool || "unknown";
-                  var cid = (step.call_id || "").replace("tc_", "");
-                  var doneKey = String(step.call_id || step.tool_call_id || name || "").trim();
-                  if (doneKey && completedToolCallIds.has(doneKey)) return;
-                  if (doneKey) completedToolCallIds.add(doneKey);
-                  if (streamText && !streamText.endsWith("\n\n")) streamText += "\n\n";
-                  streamText += "> >_<\n> --调用工具中--\n";
-                  streamText += "> **已调用工具**: " + name + (cid ? " #" + cid : "") + "\n";
+                  upsertToolBlock(step, true);
                 });
                 streamSegmentStart = streamText.length;
                 if (renderDelta && streamBot) {
-                  streamBot.bubble.dataset.rawMd = streamText;
-                  streamBot.bubble.innerHTML = renderMarkdown(streamText);
-                  scrollToBottom();
+                  queueStreamBubbleRender(buildStreamTextWithToolBlocks(), { force: true });
                 }
+              }
+            } else if (eventName === "tool_heartbeat") {
+              const hbTool = payload.tool && typeof payload.tool === "object" ? payload.tool : {};
+              const hbName = normalizeToolCallKey(hbTool.name || hbTool.agent_tool || "");
+              const hasRunningTool = streamParts.some((part) => part && part.type === "tool" && !part.done);
+              const elapsed = Math.max(0, Number(payload.elapsed_ms || 0));
+              const seconds = elapsed > 0 ? Math.max(1, Math.floor(elapsed / 1000)) : 0;
+              const progress = seconds > 0 ? `连接中 / 执行中 · 已等待 ${seconds}s` : "连接中 / 执行中";
+              if (hbName || hasRunningTool) {
+                const heartbeatPayload = {
+                  agent_tool: hbName || "unknown",
+                  tool_call_id: hbTool.tool_call_id || "",
+                  call_id: hbTool.call_id || "",
+                  arguments: hbTool.arguments || {},
+                  progress,
+                };
+                upsertToolBlock(heartbeatPayload, false, progress);
+              }
+              if (renderDelta && streamBot) {
+                queueStreamBubbleRender(buildStreamTextWithToolBlocks(), { force: true });
               }
             } else if (eventName === "done") {
               donePayload = payload;
@@ -6169,38 +6408,33 @@
 
         const doneTurnId = normalizeTurnId(donePayload?.turn_id || "");
         if (donePayload) {
+            const compressionText = absorbContextCompressionPayload(donePayload.context_compression);
             // Flush any remaining accumulated reasoning
-            if (streamReasoning) {
-              if (streamText && !streamText.endsWith("\n\n")) streamText += "\n";
-              streamText += "> " + streamReasoning.split("\n").join("\n> ") + "\n\n";
-              streamReasoning = "";
-              streamSegmentStart = streamText.length;
-            }
+            flushStreamReasoningToText();
             // Backfill reasoning from done payload (only if no streaming reasoning happened)
-            if (!streamText.trim() && donePayload.reasoning_content) {
+            if (!buildStreamTextWithToolBlocks().trim() && donePayload.reasoning_content) {
               const rc = String(donePayload.reasoning_content || "").trim();
-              if (rc) { streamText = "> " + rc.split("\n").join("\n> ") + "\n\n"; }
+              if (rc) {
+                streamText = "> " + rc.split("\n").join("\n> ") + "\n\n";
+                streamSegmentStart = streamText.length;
+              }
             }
             // Inject tool details from donePayload into streamText (avoid duplicate)
             const toolTrace = Array.isArray(donePayload.tool_trace) ? donePayload.tool_trace : [];
-            if (toolTrace.length > 0 && streamText.indexOf("**已调用工具**") < 0) {
+            if (toolTrace.length > 0) {
               toolTrace.forEach(function(step) {
                 if (!step || typeof step !== "object") return;
-                var name = step.agent_tool || "unknown";
-                var cid = (step.call_id || "").replace("tc_", "");
-                if (streamText && !streamText.endsWith("\n\n")) streamText += "\n\n";
-                streamText += "> >_<\n> --调用工具中--\n";
-                streamText += "> **已调用工具**: " + name + (cid ? " #" + cid : "") + "\n";
+                upsertToolBlock(step, true);
               });
             }
+            streamText = buildStreamTextWithToolBlocks();
             // delta 已完整构建 streamText，done 仅补 turn_id，不再追加文本
             if (typeof donePayload.reply === "string") {
               if (!streamText) {
                 streamText = sanitizeAssistantDisplayText(String(donePayload.reply || ""));
               }
               if (renderDelta && streamBot) {
-                streamBot.bubble.dataset.rawMd = streamText;
-                streamBot.bubble.innerHTML = renderMarkdown(streamText);
+                queueStreamBubbleRender(streamText, { force: true });
                 if (doneTurnId) {
                   streamBot.bubble.dataset.turnId = doneTurnId;
                   rememberAssistantTurnBubble(doneTurnId, streamBot.bubble);
@@ -6209,14 +6443,20 @@
             } else if (!streamText && donePayload.reply) {
               streamText = sanitizeAssistantDisplayText(String(donePayload.reply));
               if (renderDelta && streamBot) {
-                streamBot.bubble.dataset.rawMd = streamText;
-                streamBot.bubble.innerHTML = renderMarkdown(streamText);
+                queueStreamBubbleRender(streamText, { force: true });
                 if (doneTurnId) {
                   streamBot.bubble.dataset.turnId = doneTurnId;
                   rememberAssistantTurnBubble(doneTurnId, streamBot.bubble);
                 }
               }
             }
+            if (compressionText) {
+              if (streamText && !streamText.endsWith("\n\n")) streamText += "\n\n";
+              streamText += compressionText;
+            }
+          if (renderDelta && streamBot && streamText) {
+            queueStreamBubbleRender(streamText, { force: true });
+          }
           clearTypingPlaceholder();
           if (!renderDelta) {
             const fallbackText = streamText || String(donePayload.reply || "（无回复）");
@@ -6287,6 +6527,12 @@
         var displayText = replyText;
         if (reasoningText) {
           displayText = "> " + reasoningText.split("\n").join("\n> ") + "\n\n" + replyText;
+        }
+        const compressionText = absorbContextCompressionPayload(data.context_compression);
+        if (compressionText) {
+          displayText = String(displayText || "").trim()
+            ? `${displayText}\n\n${compressionText}`
+            : compressionText;
         }
         upsertAssistantTurnBubble(displayText || "（无回复）", { turnId: data?.turn_id, isCommand: text.startsWith("/") });
         // 工具轨迹由后端同轮次写入会话，前端这里仅做实时展示（不落盘），避免刷新后位置漂移。
@@ -6480,11 +6726,7 @@
     if (typeof s.token_limit === "number" && s.token_limit >= 100) {
       const sid = getSessionId();
       if (sid && !isDraftSessionId(sid)) {
-        apiFetch(`/sessions/${encodeURIComponent(sid)}/config`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ max_context_tokens: s.token_limit }),
-        }).catch(() => {});
+        syncContextTokenLimitForSession(sid).catch(() => {});
       }
     }
   } catch {}

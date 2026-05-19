@@ -15,6 +15,7 @@ os.environ["TINDA_HOME"] = tempfile.mkdtemp(prefix="tinda_test_home_")
 
 from TindaAgent.Tool import tool
 from TindaAgent.Web import server
+from TindaAgent.Web import settings_backend
 from TindaAgent.Web.session_store import SessionStore
 from TindaAgent.Process.AI import client as ai_client
 from TindaAgent.Process.Architecture import paths as arch_paths
@@ -289,7 +290,14 @@ class LogArchiveEventLookupTests(unittest.TestCase):
         self.assertGreater(usage, 0)
 
     def test_estimate_context_usage_length_counts_only_llm_context_content(self) -> None:
-        with patch("TindaAgent.Process.AI.tokenizer.estimate_tokens", side_effect=lambda text: len(str(text))):
+        def fake_messages_tokens(messages: list[dict]) -> int:
+            total = 0
+            for msg in messages:
+                total += len(str(msg.get("content", "")))
+                total += len(str(msg.get("reasoning_content", "")))
+            return total
+
+        with patch("TindaAgent.Process.AI.tokenizer.estimate_request_messages_tokens", side_effect=fake_messages_tokens):
             usage = server._estimate_context_usage_length(
                 [
                     {"role": "user", "entry_type": "chat", "content": "u"},
@@ -301,7 +309,98 @@ class LogArchiveEventLookupTests(unittest.TestCase):
                 ]
             )
 
-        self.assertEqual(usage, len("u") + len("aa") + len("sss"))
+        self.assertEqual(usage, len("u") + len("aa") + len("hidden") + len("sss"))
+
+    def test_store_dict_to_agent_messages_preserves_json_sequence_order(self) -> None:
+        from TindaAgent.Web import session_adapter as sa
+
+        rows, _stats = sa.store_dict_to_agent_messages(
+            {
+                "1": {
+                    "role": "user",
+                    "created_at": "2026-05-01T00:00:02+08:00",
+                    "content": {"1": {"text": "first"}},
+                },
+                "2": {
+                    "role": "assistant",
+                    "created_at": "2026-05-01T00:00:01+08:00",
+                    "content": {"1": {"text": "second"}},
+                },
+                "3": {
+                    "role": "user",
+                    "created_at": "2026-05-01T00:00:00+08:00",
+                    "content": {"1": {"text": "third"}},
+                },
+            }
+        )
+
+        self.assertEqual([r.get("content") for r in rows], ["first", "second", "third"])
+
+    def test_store_dict_to_frontend_returns_unified_event_metadata(self) -> None:
+        from TindaAgent.Web import session_adapter as sa
+
+        entries = sa.store_dict_to_frontend(
+            {
+                "1": {"role": "user", "id": "u1", "content": {"1": {"text": "hello"}}},
+                "2": {"role": "system", "id": "s1", "content": {"text": "notice"}},
+            }
+        )
+
+        self.assertEqual(str(entries[0].get("type", "")), "user_message")
+        self.assertEqual(str(entries[0].get("display_target", "")), "chat")
+        self.assertEqual(str(entries[0].get("context_policy", "")), "include")
+        self.assertEqual(int(entries[0].get("seq", 0)), 1)
+        self.assertEqual(str(entries[1].get("type", "")), "system_notice")
+        self.assertEqual(str(entries[1].get("context_policy", "")), "exclude")
+
+    def test_store_dict_to_agent_messages_skips_system_notice_context(self) -> None:
+        from TindaAgent.Web import session_adapter as sa
+
+        rows, _stats = sa.store_dict_to_agent_messages(
+            {
+                "1": {
+                    "role": "system",
+                    "id": "notice",
+                    "type": "system_notice",
+                    "display_target": "chat",
+                    "context_policy": "exclude",
+                    "content": {"text": "UI notice should not enter LLM"},
+                },
+                "2": {"role": "user", "id": "u1", "content": {"1": {"text": "real user"}}},
+            }
+        )
+
+        self.assertEqual([r.get("content") for r in rows], ["real user"])
+
+    def test_terminal_entries_to_frontend_returns_event_envelope(self) -> None:
+        from TindaAgent.Web import session_adapter as sa
+
+        entries = sa.terminal_entries_to_frontend(
+            [{"kind": "cmd", "content": "echo hi", "class": "", "ts": "2026-05-19T00:00:00+08:00"}]
+        )
+
+        self.assertEqual(str(entries[0].get("type", "")), "terminal")
+        self.assertEqual(str(entries[0].get("display_target", "")), "terminal")
+        self.assertEqual(str(entries[0].get("context_policy", "")), "include")
+        self.assertEqual(str(entries[0].get("content", "")), "echo hi")
+
+    def test_append_terminal_deduplicates_tool_runtime_events(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="tinda_terminal_dedupe_") as tmp:
+            store = SessionStore(Path(tmp))
+            sid = "s_terminal_dedupe"
+            event = {
+                "id": "tool_event_1",
+                "source": "tool_runtime",
+                "source_seq": 1,
+                "kind": "out",
+                "content": "hello",
+            }
+            store.append_terminal(sid, [dict(event)])
+            store.append_terminal(sid, [dict(event)])
+            rows = store.load_terminal(sid)
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(str(rows[0].get("content", "")), "hello")
 
     def test_get_session_context_usage_api_returns_numeric_length(self) -> None:
         sid = "s_context_usage_api"
@@ -332,6 +431,66 @@ class LogArchiveEventLookupTests(unittest.TestCase):
         self.assertGreater(int(payload.get("usage_length", 0)), 0)
         title_mock.assert_not_called()
 
+    def test_get_session_context_usage_api_returns_effective_token_limit(self) -> None:
+        sid = "s_context_usage_limit"
+
+        class _FakeStore:
+            def get_context_messages(self, _sid: str) -> list[dict]:
+                return [{"role": "user", "content": "hello"}]
+
+            def get_session(self, _sid: str) -> dict:
+                return {"id": _sid, "title": "测试标题"}
+
+        with patch.object(server, "_store", _FakeStore()), \
+             patch.object(server, "_require_session_access", return_value=(sid, {})), \
+             patch.object(server, "_require_login", return_value=object()), \
+             patch.object(server, "_generate_title_from_first_round") as title_mock, \
+             patch.dict(server._session_config, {sid: {}}, clear=True), \
+             patch("TindaAgent.Web.settings_backend.get_context_token_limit", return_value=159000):
+            resp = asyncio.run(server.get_session_context_usage(sid))
+
+        payload = json.loads(resp.body.decode("utf-8"))
+        self.assertTrue(bool(payload.get("ok")))
+        self.assertEqual(int(payload.get("max_context_tokens", 0)), 159000)
+        title_mock.assert_not_called()
+
+    def test_put_web_settings_token_limit_updates_live_agents(self) -> None:
+        sid = "s_live_agent_limit"
+
+        class _FakeAgent:
+            def __init__(self) -> None:
+                self.max_context_tokens = 16000
+
+        fake_agent = _FakeAgent()
+        with patch.object(server, "_require_login", return_value=object()), \
+             patch.object(server, "save_web_settings") as save_mock, \
+             patch.object(server, "load_web_settings", return_value={"token_limit": 159000}), \
+             patch.dict(server._sessions, {sid: fake_agent}, clear=True), \
+             patch.dict(server._session_config, {sid: {}}, clear=True):
+            payload = asyncio.run(server.put_web_settings({"token_limit": 159000}))
+            self.assertEqual(int(server._session_config[sid].get("max_context_tokens", 0)), 159000)
+
+        self.assertEqual(int(fake_agent.max_context_tokens), 159000)
+        self.assertEqual(int(payload.get("token_limit", 0)), 159000)
+        save_mock.assert_called_once_with({"token_limit": 159000})
+
+    def test_context_token_limit_invalid_settings_falls_back_to_default(self) -> None:
+        self.assertEqual(settings_backend.normalize_context_token_limit(15999), 16000)
+        self.assertEqual(settings_backend.normalize_context_token_limit(200001), 16000)
+        self.assertEqual(settings_backend.normalize_context_token_limit("bad"), 16000)
+        self.assertEqual(settings_backend.normalize_context_token_limit(200000), 200000)
+
+    def test_put_web_settings_rejects_token_limit_outside_range(self) -> None:
+        with patch.object(server, "_require_login", return_value=object()), \
+             patch.object(server, "save_web_settings") as save_mock:
+            resp = asyncio.run(server.put_web_settings({"token_limit": 200001}))
+
+        payload = json.loads(resp.body.decode("utf-8"))
+        self.assertEqual(int(resp.status_code), 400)
+        self.assertFalse(bool(payload.get("ok")))
+        self.assertIn("16000", str(payload.get("error", "")))
+        save_mock.assert_not_called()
+
     def test_get_session_context_usage_api_triggers_title_generation_when_placeholder(self) -> None:
         sid = "s_context_usage_title_trigger"
 
@@ -359,7 +518,7 @@ class LogArchiveEventLookupTests(unittest.TestCase):
         self.assertEqual(str(payload.get("title", "")), "新对话")
         title_mock.assert_called_once_with(sid)
 
-    def test_auto_compress_triggers_by_raw_chat_count_when_token_not_over_limit(self) -> None:
+    def test_auto_compress_skips_by_raw_chat_count_when_token_not_over_limit(self) -> None:
         sid = "s_auto_compress_row_trigger"
         raw_rows: list[dict] = []
         for i in range(82):
@@ -395,7 +554,7 @@ class LogArchiveEventLookupTests(unittest.TestCase):
             def get_context_messages(self, _session_id: str) -> list[dict]:
                 return [dict(x) for x in self._rows]
 
-            def compress_context(self, _session_id: str, _summary: str) -> dict:
+            def compress_context(self, _session_id: str, _summary: str, **_kwargs) -> dict:
                 self.compress_calls += 1
                 self._rows = self._rows[-4:]
                 self._rows.append(
@@ -415,15 +574,15 @@ class LogArchiveEventLookupTests(unittest.TestCase):
         with patch.dict(server._sessions, {sid: fake_agent}, clear=True), \
              patch.object(server, "_store", fake_store), \
              patch.object(server, "_compress_messages_with_llm", return_value="summary"), \
+             patch.object(server, "_estimate_context_usage_length", return_value=1200), \
              patch.object(server, "_store_to_agent_messages", return_value=([{"role": "system", "content": "summary"}], {})):
             info = server._maybe_auto_compress(sid, context_rows=raw_rows)
 
-        self.assertTrue(bool(info.get("compressed")))
-        self.assertEqual(str(info.get("trigger", "")), "raw_chat_count")
-        self.assertEqual(int(info.get("estimated_tokens_before", -1)), 1200)
-        self.assertEqual(int(info.get("estimated_tokens_after", -1)), 300)
-        self.assertEqual(int(fake_store.compress_calls), 1)
-        self.assertEqual(int(fake_agent.replace_calls), 1)
+        self.assertFalse(bool(info.get("compressed")))
+        self.assertEqual(str(info.get("reason", "")), "below_threshold")
+        self.assertEqual(int(info.get("usage_before", -1)), 1200)
+        self.assertEqual(int(fake_store.compress_calls), 0)
+        self.assertEqual(int(fake_agent.replace_calls), 0)
 
     def test_auto_compress_skips_when_below_threshold(self) -> None:
         sid = "s_auto_compress_skip"
@@ -509,7 +668,7 @@ class LogArchiveEventLookupTests(unittest.TestCase):
             def get_context_messages(self, _session_id: str) -> list[dict]:
                 return [dict(x) for x in self._rows]
 
-            def compress_context(self, _session_id: str, _summary: str) -> dict:
+            def compress_context(self, _session_id: str, _summary: str, **_kwargs) -> dict:
                 self.compress_calls += 1
                 self._rows = self._rows[-4:]
                 return {"ok": True}
@@ -519,6 +678,8 @@ class LogArchiveEventLookupTests(unittest.TestCase):
         with patch.dict(server._sessions, {sid: fake_agent}, clear=True), \
              patch.object(server, "_store", fake_store), \
              patch.object(server, "_compress_messages_with_llm", return_value="summary"), \
+             patch.object(server, "_effective_context_token_limit", return_value=16000), \
+             patch.object(server, "_estimate_context_usage_length", side_effect=[20001, 900]), \
              patch.object(server, "_store_to_agent_messages", return_value=([{"role": "system", "content": "summary"}], {})):
             info = server._maybe_auto_compress(sid, context_rows=raw_rows)
 
@@ -601,6 +762,9 @@ class LogArchiveEventLookupTests(unittest.TestCase):
         class _FakeStore:
             def ensure_session(self, _sid: str) -> None:
                 return None
+
+            def get_session(self, _sid: str) -> dict:
+                return {"id": _sid, "owner_uid": ""}
 
         class _FakeAgent:
             def has_pending_confirmation(self) -> bool:

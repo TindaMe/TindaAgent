@@ -51,7 +51,6 @@ STOPWORDS = {
 }
 _THIS_FILE = str(Path(__file__).resolve())
 
-
 def _normalize_text(raw_text: str, max_len: int = MAX_TEXT_LEN) -> str:
     text = str(raw_text or "").strip()
     if len(text) > max_len:
@@ -776,10 +775,9 @@ def _safe_env() -> dict[str, str]:
     }
 
 
-@tool(perm.TOOL_EXECUTE | perm.PUBLIC_EXECUTE, "Execute a shell command in terminal. Parameters: cmd=command string, supports multiline bash/heredoc; note=purpose (max 80 chars); timeout=seconds (default 30); cwd=working dir (optional). System operations (rm/mv/chmod etc) require SYSTEM_EXECUTE permission.", must=True)
+@tool(perm.TOOL_EXECUTE | perm.PUBLIC_EXECUTE, "Execute a shell command in terminal. Parameters: cmd=command string, supports multiline bash/heredoc; note=purpose (max 80 chars); cwd=working dir (optional). Long-running commands stay connected through heartbeat/progress events. System operations (rm/mv/chmod etc) require SYSTEM_EXECUTE permission.", must=True)
 def run_terminal(
     cmd: str = "",
-    timeout: int = 30,
     cwd: str | None = None,
     command: str | None = None,
     note: str = "",
@@ -845,7 +843,6 @@ def run_terminal(
             executable=shell_path,
             capture_output=True,
             text=True,
-            timeout=max(1, min(int(timeout), 120)),
             cwd=work_dir,
             env={**_safe_env(), "PYTHONUNBUFFERED": "1"},
         )
@@ -876,9 +873,6 @@ def run_terminal(
         if cwd_info:
             ret["cwd_note"] = cwd_info
         return ret
-    except subprocess.TimeoutExpired:
-        return {"ok": False, "error": f"Command timed out (>{timeout}s): {command[:120]}",
-                "cmd": command, "note": note_text}
     except Exception as e:
         return {"ok": False, "error": str(e), "cmd": command[:120], "note": note_text}
 

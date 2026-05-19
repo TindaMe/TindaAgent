@@ -23,7 +23,8 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from pydantic import BaseModel, Field
 
 from TindaAgent.Process.AI.agent import Agent
-from TindaAgent.Process.AI.client import LLMClient, has_tool_protocol_artifacts, record_llm_request, strip_tool_protocol_artifacts
+from TindaAgent.Process.AI.client import has_tool_protocol_artifacts, strip_tool_protocol_artifacts
+from TindaAgent.Process.AI.dispatcher import LlmDispatcher
 from TindaAgent.Process.Versioning import get_version_manager
 from TindaAgent.Process.Security import (
     get_current_principal,
@@ -49,9 +50,11 @@ from TindaAgent.Process.Architecture.paths import (
 )
 from TindaAgent.Process.Observability import audit_event
 from TindaAgent.Web.session_store import SessionStore, SessionStoreError, cleanup_legacy_chat_records
+from TindaAgent.Web.session_sqlite_index import SessionSQLiteIndex
 from TindaAgent.Web import session_adapter as sa
 from TindaAgent.Web.settings_backend import (
     load_web_settings, save_web_settings,
+    validate_context_token_limit,
     get_restore_last_session, get_last_session_id, set_last_session_id,
     load_terminal_settings, save_terminal_settings,
 )
@@ -92,9 +95,9 @@ def _infer_http_op_type(method: str, path: str) -> str:
         return "PUBLIC_READ"
     return "PUBLIC_WRITE"
 
-_client = LLMClient()
-
-_aux_model_cache: dict[str, LLMClient] = {}
+_llm = LlmDispatcher()
+_client = _llm.primary_client
+_tool_client = _llm.tool_client
 
 
 def _find_first_reasoning(agent: Agent) -> str | None:
@@ -170,7 +173,12 @@ def _build_substeps_from_history(agent: Agent, tool_trace: list[dict] | None) ->
                 tresult = tinfo.get("result", {}) if isinstance(tinfo, dict) else {}
                 ok = _tool_result_ok(tresult)
                 stdout = _tool_result_output(tresult)
-                stdin = str(fn.get("cmd", "") or fn.get("text", "") or fn.get("key", "") or "")
+                stdin = (
+                    str(parsed_args.get("cmd") or parsed_args.get("text") or parsed_args.get("key") or "")
+                    if isinstance(parsed_args, dict)
+                    else ""
+                )
+                model_id = str(tinfo.get("tool_call_id", "") or cid).strip() if isinstance(tinfo, dict) else cid
                 substeps.append({
                     "kind": "tool_marker",
                     "name": name,
@@ -178,13 +186,15 @@ def _build_substeps_from_history(agent: Agent, tool_trace: list[dict] | None) ->
                     "stdin": stdin[:500],
                     "stdout": stdout[:500],
                     "id": use_cid.lstrip("tc_"),
+                    "tool_call_id": model_id,
+                    "status": "done",
                     "arguments": parsed_args if isinstance(parsed_args, dict) else {},
                     "result": tresult if isinstance(tresult, dict) else {},
                 })
     return substeps
 
 
-def _get_aux_client(model_key: str, env_var: str, default_model: str) -> LLMClient:
+def _get_aux_client(model_key: str, env_var: str, default_model: str):
     """Lazily get or create an auxiliary LLM client.
 
     Resolution order: web settings → env var → default.
@@ -196,15 +206,21 @@ def _get_aux_client(model_key: str, env_var: str, default_model: str) -> LLMClie
         or os.getenv(env_var, "").strip()
         or default_model
     )
-    if model not in _aux_model_cache:
-        _aux_model_cache[model] = LLMClient(model=model)
-    return _aux_model_cache[model]
+    return _llm.get_client(model=model, provider="deepseek", purpose=model_key)
 _version_mgr = get_version_manager()
 
 _MIGRATION = bootstrap_storage()
 _SESSIONS_ROOT = get_sessions_root()
 _store = SessionStore(_SESSIONS_ROOT, legacy_root_dir=get_legacy_sessions_root())
+_sqlite_index = SessionSQLiteIndex(get_system_root() / "session_index.sqlite3")
 _tool_runtime = ToolRuntimeManager()
+
+
+def _invalidate_session_index(session_id: str) -> None:
+    try:
+        _sqlite_index.delete_session(str(session_id or "").strip())
+    except Exception:
+        pass
 
 _cleanup_flag_file = _SESSIONS_ROOT / ".legacy_cleaned"
 if not _cleanup_flag_file.exists():
@@ -229,6 +245,22 @@ if _normalized_sessions:
 _sessions: dict[str, Agent] = {}
 _session_last_access: dict[str, float] = {}
 _session_config: dict[str, dict] = {}
+
+
+def _effective_context_token_limit(session_id: str) -> int:
+    sid = str(session_id or "").strip()
+    cfg = _session_config.get(sid, {}) if sid else {}
+    from TindaAgent.Web.settings_backend import get_context_token_limit
+    try:
+        value = int(get_context_token_limit())
+    except Exception:
+        value = 16000
+    if value >= 16000:
+        return int(value)
+    value = cfg.get("max_context_tokens")
+    if isinstance(value, int) and 16000 <= value <= 200000:
+        return int(value)
+    return 16000
 _MAX_SESSIONS = 300
 _LLM_EXECUTE_PERM = int(perm.PUBLIC_EXECUTE)
 _terminal_pending_lock = threading.Lock()
@@ -297,9 +329,98 @@ def _read_proc_memory() -> dict[str, object]:
         total = int(meminfo.get("MemTotal", 0))
         available = int(meminfo.get("MemAvailable", 0))
         used = max(0, total - available)
-        return {"total": total, "used": used, "available": available, "percent": _safe_percent(used, total)}
+        return {
+            "scope": "system",
+            "source": "/proc/meminfo",
+            "total": total,
+            "used": used,
+            "available": available,
+            "percent": _safe_percent(used, total),
+        }
     except Exception:
-        return {"total": 0, "used": 0, "available": 0, "percent": 0.0}
+        pass
+    try:
+        page_size = int(os.sysconf("SC_PAGE_SIZE"))
+        page_count = int(os.sysconf("SC_PHYS_PAGES"))
+        available_pages = int(os.sysconf("SC_AVPHYS_PAGES"))
+        total = max(0, page_size * page_count)
+        available = max(0, page_size * available_pages)
+        used = max(0, total - available)
+        return {
+            "scope": "system",
+            "source": "os.sysconf",
+            "total": total,
+            "used": used,
+            "available": available,
+            "percent": _safe_percent(used, total),
+        }
+    except Exception:
+        return {"scope": "system", "source": "unavailable", "total": 0, "used": 0, "available": 0, "percent": 0.0}
+
+
+def _read_process_memory() -> dict[str, object]:
+    try:
+        statm = Path("/proc/self/statm").read_text(encoding="utf-8", errors="ignore").split()
+        page_size = int(os.sysconf("SC_PAGE_SIZE"))
+        size = int(statm[0]) * page_size if len(statm) >= 1 else 0
+        resident = int(statm[1]) * page_size if len(statm) >= 2 else 0
+        return {"scope": "process", "source": "/proc/self/statm", "rss": resident, "vms": size}
+    except Exception:
+        return {"scope": "process", "source": "unavailable", "rss": 0, "vms": 0}
+
+
+def _read_load_average() -> dict[str, object]:
+    try:
+        one, five, fifteen = os.getloadavg()
+        return {"source": "os.getloadavg", "one": round(one, 2), "five": round(five, 2), "fifteen": round(fifteen, 2)}
+    except Exception:
+        return {"source": "unavailable", "one": None, "five": None, "fifteen": None}
+
+
+def _disk_usage_payload(path: Path, *, label: str, scope: str, is_runtime: bool = False) -> dict[str, object] | None:
+    try:
+        disk = shutil.disk_usage(path)
+        return {
+            "label": label,
+            "scope": scope,
+            "source": "shutil.disk_usage",
+            "root": str(path),
+            "total": int(disk.total),
+            "used": int(disk.used),
+            "free": int(disk.free),
+            "percent": _safe_percent(float(disk.used), float(disk.total)),
+            "is_runtime": bool(is_runtime),
+        }
+    except Exception:
+        return None
+
+
+def _read_storage_volumes() -> list[dict[str, object]]:
+    runtime_root = get_runtime_root()
+    volumes: list[dict[str, object]] = []
+    seen_roots: set[str] = set()
+
+    for letter in "abcdefghijklmnopqrstuvwxyz":
+        mount = Path("/mnt") / letter
+        if not mount.exists():
+            continue
+        payload = _disk_usage_payload(
+            mount,
+            label=letter.upper(),
+            scope="windows_drive",
+            is_runtime=str(runtime_root).startswith(str(mount) + os.sep) or runtime_root == mount,
+        )
+        if payload and str(payload["root"]) not in seen_roots:
+            volumes.append(payload)
+            seen_roots.add(str(payload["root"]))
+
+    if not any(bool(item.get("is_runtime")) for item in volumes):
+        payload = _disk_usage_payload(runtime_root, label="运行", scope="runtime_root", is_runtime=True)
+        if payload and str(payload["root"]) not in seen_roots:
+            volumes.append(payload)
+            seen_roots.add(str(payload["root"]))
+
+    return volumes
 
 
 def _usage_event_from_request(request: Request) -> dict[str, object] | None:
@@ -446,7 +567,7 @@ def _read_latest_jsonl(path: Path, *, max_bytes: int = _LOG_MAX_READ_BYTES) -> d
 
 
 def _llm_request_summary(row: dict[str, Any]) -> dict[str, Any]:
-    from TindaAgent.Process.AI.tokenizer import estimate_messages_tokens
+    from TindaAgent.Process.AI.tokenizer import estimate_request_token_usage
 
     payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
     messages = payload.get("messages") if isinstance(payload, dict) else []
@@ -468,15 +589,13 @@ def _llm_request_summary(row: dict[str, Any]) -> dict[str, Any]:
                     content_chars += len(json.dumps(content, ensure_ascii=False))
                 except Exception:
                     content_chars += len(str(content or ""))
-    estimated_tokens = 0
-    if isinstance(messages, list):
-        estimated_tokens = int(estimate_messages_tokens([m for m in messages if isinstance(m, dict)]))
-    if isinstance(tools, list) and tools:
-        try:
-            from TindaAgent.Process.AI.tokenizer import estimate_tokens
-            estimated_tokens += int(estimate_tokens(json.dumps(tools, ensure_ascii=False)))
-        except Exception:
-            pass
+    token_usage = row.get("token_usage") if isinstance(row.get("token_usage"), dict) else None
+    if not token_usage:
+        token_usage = estimate_request_token_usage(payload)
+    request_tokens = int(row.get("request_tokens") or token_usage.get("total", 0) or 0)
+    payload_tokens = int(row.get("payload_tokens") or token_usage.get("payload", 0) or 0)
+    tokenizer_info = token_usage.get("tokenizer") if isinstance(token_usage.get("tokenizer"), dict) else {}
+    response_usage = row.get("response_usage") if isinstance(row.get("response_usage"), dict) else {}
     return {
         "ts": str(row.get("ts", "")),
         "source": str(row.get("source", "")),
@@ -486,10 +605,66 @@ def _llm_request_summary(row: dict[str, Any]) -> dict[str, Any]:
         "tool_count": len(tools) if isinstance(tools, list) else int(row.get("tool_count", 0) or 0),
         "payload_chars": payload_chars,
         "content_chars": content_chars,
-        "estimated_tokens": estimated_tokens,
+        "estimated_tokens": request_tokens,
+        "request_tokens": request_tokens,
+        "payload_tokens": payload_tokens,
+        "message_tokens": int(token_usage.get("messages", 0) or 0),
+        "tool_tokens": int(token_usage.get("tools", 0) or 0),
+        "token_source": str(token_usage.get("source") or ("api_usage" if response_usage else "official_tokenizer")),
+        "response_prompt_tokens": response_usage.get("prompt_tokens"),
+        "response_completion_tokens": response_usage.get("completion_tokens"),
+        "response_total_tokens": response_usage.get("total_tokens"),
+        "tokenizer_engine": str(tokenizer_info.get("engine", "")),
+        "tokenizer_official_files": bool(tokenizer_info.get("official_files", False)),
         "temperature": payload.get("temperature") if isinstance(payload, dict) else None,
         "tool_choice": payload.get("tool_choice") if isinstance(payload, dict) else None,
     }
+
+
+def _mask_api_key(value: str) -> str:
+    text = str(value or "").strip()
+    if len(text) <= 8:
+        return "***" if text else ""
+    return f"{text[:4]}...{text[-4:]}"
+
+
+def _deepseek_api_root() -> str:
+    return _llm.deepseek_api_root
+
+
+def _normalize_model_provider(raw: object = None) -> str:
+    return _llm.normalize_provider(raw)
+
+
+def _model_provider_meta(provider: str = "deepseek") -> dict[str, Any]:
+    return _llm.provider_meta(provider)
+
+
+def _model_providers_payload() -> dict[str, Any]:
+    return _llm.providers_payload()
+
+
+def _fetch_deepseek_balance() -> dict[str, Any]:
+    return _llm.fetch_deepseek_balance(mask_api_key=_mask_api_key)
+
+
+def _model_payload() -> dict[str, Any]:
+    providers_payload = _llm.providers_payload()
+    return {
+        "ok": True,
+        "current_provider": _llm.current_provider,
+        "current_model": _llm.current_model,
+        "available_models": _llm.available_models() or list(_MODEL_CHOICES),
+        "all_models": _llm.available_models(),
+        "providers": providers_payload.get("providers", []),
+    }
+
+
+def _pydantic_to_dict(model: BaseModel) -> dict[str, Any]:
+    dump = getattr(model, "model_dump", None)
+    if callable(dump):
+        return dump()
+    return model.dict()
 _AUTH_OPEN_PATHS = {
     "/",
     "/home",
@@ -500,6 +675,7 @@ _AUTH_OPEN_PATHS = {
     "/settings",
     "/logs",
     "/model-diagnostics",
+    "/model-data",
     "/llm-request",
     "/favicon.ico",
     "/system/version",
@@ -611,6 +787,26 @@ class ChatRequest(BaseModel):
 
 class ModelSwitchRequest(BaseModel):
     model: str
+    provider: str | None = None
+
+
+class ModelProviderUpsertRequest(BaseModel):
+    key: str
+    label: str | None = None
+    name: str | None = None
+    adapter: str = "openai_compatible"
+    base_url: str | None = None
+    chat_path: str | None = None
+    api_key_env: str | None = None
+    api_key: str | None = None
+    enabled: bool = True
+    anthropic_version: str | None = None
+
+
+class ModelAddRequest(BaseModel):
+    provider: str = "deepseek"
+    model_id: str
+    label: str | None = None
 
 
 class SessionCreateRequest(BaseModel):
@@ -691,6 +887,7 @@ class VersionSnapshotCurrentRequest(BaseModel):
 
 class ModelDiagnosticsRequest(BaseModel):
     model: str | None = None
+    provider: str | None = None
     tests: list[str] = Field(default_factory=list)
     image_url: str | None = None
     video_url: str | None = None
@@ -704,7 +901,7 @@ def _normalize_model_choice(raw: str | None) -> str | None:
     key = str(raw or "").strip().lower()
     if not key:
         return None
-    return _MODEL_ALIAS.get(key)
+    return _MODEL_ALIAS.get(key) or str(raw or "").strip()
 
 
 def _sanitize_diagnostic_url(raw: str | None) -> str:
@@ -729,11 +926,10 @@ def _truncate_context_preview(text: str, max_chars: int = 300) -> str:
 
 
 def _estimate_context_usage_length(rows: list[dict]) -> int:
-    from TindaAgent.Process.AI.tokenizer import estimate_tokens
+    from TindaAgent.Process.AI.tokenizer import estimate_request_messages_tokens
 
     llm_roles = {"system", "user", "assistant", "tool"}
-    non_context_entry_types = {"terminal", "tool_marker"}
-    total = 0
+    messages: list[dict] = []
     for row in (rows or []):
         if not isinstance(row, dict):
             continue
@@ -741,12 +937,27 @@ def _estimate_context_usage_length(rows: list[dict]) -> int:
         if role not in llm_roles:
             continue
         entry_type = str(row.get("entry_type", "") or "").strip()
-        if entry_type in non_context_entry_types:
+        if entry_type in {"terminal", "tool_marker"}:
             continue
-        content = str(row.get("content", "") or "")
-        if content.strip():
-            total += estimate_tokens(content)
-    return int(total)
+        content = "" if row.get("content") is None else str(row.get("content", ""))
+        has_tool_calls = isinstance(row.get("tool_calls"), list) and bool(row.get("tool_calls"))
+        if role == "user" and not content.strip():
+            continue
+        if role == "assistant" and not content.strip() and not has_tool_calls and not str(row.get("reasoning_content", "") or "").strip():
+            continue
+        msg = {"role": role, "content": content}
+        if role == "assistant":
+            rc = row.get("reasoning_content")
+            if rc is not None and str(rc).strip():
+                msg["reasoning_content"] = str(rc)
+            if has_tool_calls:
+                msg["tool_calls"] = row.get("tool_calls", [])
+        if role == "tool":
+            tool_call_id = str(row.get("tool_call_id", "") or "").strip()
+            if tool_call_id:
+                msg["tool_call_id"] = tool_call_id
+        messages.append(msg)
+    return int(estimate_request_messages_tokens(messages))
 
 
 def _raw_chat_rows_for_compression(session_id: str, fallback_rows: list[dict] | None = None) -> list[dict]:
@@ -823,6 +1034,135 @@ def _is_duplicate_compression_request(session_id: str, raw_rows: list[dict]) -> 
     return bool(anchor_id and anchor_id == str(meta.get("last_compress_anchor_msg_id", "") or ""))
 
 
+def _build_context_compression_system_substep(result: dict[str, Any]) -> dict[str, Any]:
+    compressed_count = int(result.get("compressed_count", 0) or 0)
+    usage_before = int(result.get("usage_before", result.get("estimated_tokens_before", 0)) or 0)
+    usage_after = int(result.get("usage_after", result.get("estimated_tokens_after", 0)) or 0)
+    max_context_tokens = int(result.get("max_context_tokens", 0) or 0)
+    summary = str(result.get("summary", "") or "").strip()
+    detail_lines = [f"  压缩 {compressed_count} 条历史消息"]
+    if usage_before > 0 and usage_after >= 0:
+        detail_lines.append(f"  token {usage_before} -> {usage_after}")
+    if max_context_tokens > 0:
+        detail_lines.append(f"  阈值 {max_context_tokens}")
+    if summary:
+        summary_lines = summary.splitlines() or [summary]
+        detail_lines.append(f"  摘要: {summary_lines[0]}")
+        detail_lines.extend(f"  {line}" for line in summary_lines[1:])
+    quoted_lines = [
+        "> --正在压缩上下文--",
+        ">",
+        "> 压缩完成:",
+        *[f"> {line}" for line in detail_lines],
+    ]
+    return {
+        "kind": "system",
+        "content": {
+            "kind": "context_compression",
+            "phase": "done",
+            "display": "inline",
+            "context_policy": "exclude",
+            "compressed_count": compressed_count,
+            "usage_before": usage_before,
+            "usage_after": usage_after,
+            "max_context_tokens": max_context_tokens,
+            "summary_message_id": str(result.get("summary_message_id", "") or ""),
+            "anchor_message_id": str(result.get("anchor_message_id", "") or ""),
+            "text": "\n".join(quoted_lines),
+        },
+    }
+
+
+def _refresh_agent_context_after_compression(session_id: str) -> None:
+    sid = str(session_id or "").strip()
+    agent = _sessions.get(sid)
+    if agent is None:
+        return
+    rows = _store.get_context_messages(sid)
+    agent_rows, _filter_stats = _store_to_agent_messages(rows)
+    agent.replace_conversation(agent_rows)
+    agent.max_context_tokens = _effective_context_token_limit(sid)
+
+
+def _maybe_auto_compress_after_llm(session_id: str) -> dict[str, Any]:
+    """Run only after a real LLM request completes and the assistant reply is persisted."""
+    sid = str(session_id or "").strip()
+    rows = _store.get_context_messages(sid)
+    usage_before = int(_estimate_context_usage_length(rows))
+    max_tokens = int(_effective_context_token_limit(sid))
+    raw_rows = _raw_chat_rows_for_compression(sid, rows)
+    chat_count = len(raw_rows)
+    if usage_before <= max_tokens:
+        return {
+            "compressed": False,
+            "reason": "below_threshold",
+            "usage_before": usage_before,
+            "max_context_tokens": max_tokens,
+            "chat_count": chat_count,
+        }
+    if len(raw_rows) < 6:
+        return {
+            "compressed": False,
+            "reason": "insufficient_messages",
+            "usage_before": usage_before,
+            "max_context_tokens": max_tokens,
+            "chat_count": chat_count,
+        }
+    trigger = "token"
+    if _is_duplicate_compression_request(sid, raw_rows):
+        return {
+            "compressed": False,
+            "reason": "already_compressed",
+            "usage_before": usage_before,
+            "max_context_tokens": max_tokens,
+            "chat_count": chat_count,
+        }
+    try:
+        summary_src = _summary_rows_for_compression(sid, raw_rows[:-4])
+        summary = _compress_messages_with_llm(summary_src)
+        if not summary:
+            return {
+                "compressed": False,
+                "reason": "empty_summary",
+                "usage_before": usage_before,
+                "max_context_tokens": max_tokens,
+                "chat_count": chat_count,
+            }
+        result = _store.compress_context(sid, summary, display_target="context")
+        if isinstance(result, dict):
+            result.setdefault("compressed", True)
+        else:
+            result = {"compressed": True}
+        _invalidate_session_index(sid)
+        rows_after = _store.get_context_messages(sid)
+        usage_after = int(_estimate_context_usage_length(rows_after))
+        result.update({
+            "usage_before": usage_before,
+            "usage_after": usage_after,
+            "max_context_tokens": max_tokens,
+            "trigger": trigger,
+            "summary": summary,
+        })
+        _refresh_agent_context_after_compression(sid)
+        return result
+    except Exception as e:
+        logger.warning("auto compress failed: session=%s err=%s", sid, e)
+        return {
+            "compressed": False,
+            "reason": "compress_error",
+            "usage_before": usage_before,
+            "max_context_tokens": max_tokens,
+            "chat_count": chat_count,
+            "error": str(e),
+        }
+
+
+def _maybe_auto_compress(session_id: str, context_rows: list[dict] | None = None) -> dict[str, Any]:
+    """Compatibility wrapper. Auto compression is now only token-threshold based after LLM completion."""
+    _ = context_rows
+    return _maybe_auto_compress_after_llm(session_id)
+
+
 def _require_session_access(session_id: str, *, user: userdata.UserManager | None = None,
                             create: bool = True) -> tuple[str, dict]:
     current = user or _require_login()
@@ -839,8 +1179,12 @@ def _require_session_access(session_id: str, *, user: userdata.UserManager | Non
     else:
         meta = _store.get_session(sid) or {}
     if not meta:
-        if create:
+        if create or bool(getattr(_store, "has_message_file", lambda _sid: False)(sid)):
             meta = {"id": sid, "owner_uid": uid}
+            try:
+                meta = _store.ensure_session(sid, owner_uid=uid)
+            except Exception:
+                pass
         else:
             raise HTTPException(status_code=404, detail="session not found")
     if not isinstance(meta, dict):
@@ -875,6 +1219,7 @@ def _to_diagnostic_fail(test: str, err: Exception) -> dict:
 
 def _run_model_diagnostic_single(
     *,
+    provider: str,
     test_key: str,
     model_name: str,
     image_url: str,
@@ -938,8 +1283,7 @@ def _run_model_diagnostic_single(
             "max_tokens": 120,
             "timeout": 25,
         }
-        record_llm_request(payload, source="model_diagnostics", stream=False)
-        resp = _client._client.chat.completions.create(**payload)
+        resp = _llm.create_completion(payload, provider=provider, purpose="model_diagnostics", stream=False)
         msg = resp.choices[0].message
         content = str(getattr(msg, "content", "") or "").strip()
         reasoning = str(getattr(msg, "reasoning_content", "") or "").strip()
@@ -973,6 +1317,7 @@ def _run_model_diagnostic_single(
 
 def _run_model_diagnostics(
     *,
+    provider: str,
     model_name: str,
     tests: list[str],
     image_url: str,
@@ -984,9 +1329,10 @@ def _run_model_diagnostics(
             "SYSTEM_EXECUTE",
             "_run_model_diagnostics",
             f"model_diag_start test={key}",
-            {"test": key, "model": model_name},
+            {"test": key, "provider": provider, "model": model_name},
         )
         row = _run_model_diagnostic_single(
+            provider=provider,
             test_key=key,
             model_name=model_name,
             image_url=image_url,
@@ -999,6 +1345,7 @@ def _run_model_diagnostics(
             f"model_diag_done test={key} status={row.get('status')}",
             {
                 "test": key,
+                "provider": provider,
                 "model": model_name,
                 "status": row.get("status"),
                 "latency_ms": int(row.get("latency_ms", 0)),
@@ -1750,10 +2097,10 @@ def _get_agent(session_id: str, *, refresh_context: bool = True):
         agent = Agent(
             f"web-bot-{sid}",
             user_perm=current_perm,
-            client=_client,
-            model_name=_client.model,
+            client=_tool_client,
+            model_name=_llm.current_model,
         )
-        model = _client.model
+        model = _llm.current_model
         agent._context_logger = lambda hist, trigger="agent_ready", _sid=sid, _model=model: _write_context_log(
             _sid,
             _serialize_context_messages(hist),
@@ -1764,7 +2111,8 @@ def _get_agent(session_id: str, *, refresh_context: bool = True):
     else:
         # 会话 Agent 需实时跟随当前登录用户权限，避免工具可见性与鉴权失真
         agent = _sessions[sid]
-        model = _client.model
+        agent._client = _tool_client
+        model = _llm.current_model
         agent._context_logger = lambda hist, trigger="agent_ready", _sid=sid, _model=model: _write_context_log(
             _sid,
             _serialize_context_messages(hist),
@@ -1793,7 +2141,7 @@ def _get_agent(session_id: str, *, refresh_context: bool = True):
                 "context_rows": len(rows),
                 "agent_rows": len(agent_rows),
                 "context_filter": filter_stats,
-                "model": _client.model,
+                "model": _llm.current_model,
                 "refresh_context": True,
             },
         )
@@ -1804,17 +2152,11 @@ def _get_agent(session_id: str, *, refresh_context: bool = True):
             f"agent_ready_live session_id={sid}",
             {
                 "session_id": sid,
-                "model": _client.model,
+                "model": _llm.current_model,
                 "refresh_context": False,
             },
         )
-    cfg = _session_config.get(sid, {})
-    mt = cfg.get("max_context_tokens")
-    if isinstance(mt, int) and mt >= 100:
-        _sessions[sid].max_context_tokens = int(mt)
-    else:
-        from TindaAgent.Web.settings_backend import get_context_token_limit
-        _sessions[sid].max_context_tokens = get_context_token_limit()
+    _sessions[sid].max_context_tokens = _effective_context_token_limit(sid)
     return _sessions[sid]
 
 
@@ -1978,6 +2320,7 @@ def _save_chat_messages(
     else:
         items.append(sa.build_assistant_message([{"kind": "text", "content": assistant_text}]))
     _store.append_messages(session_id, items)
+    _invalidate_session_index(session_id)
     _audit_web(
         "PUBLIC_WRITE",
         "_save_chat_messages",
@@ -2067,6 +2410,7 @@ def _tool_call_start_to_substeps(calls: list[dict] | None) -> list[dict]:
             continue
         name = str(call.get("agent_tool", "unknown") or "unknown")
         model_id = str(call.get("tool_call_id", "") or "").strip()
+        marker_id = str(call.get("call_id", "") or call.get("id", "") or model_id).strip()
         args = call.get("arguments", {}) or {}
         stdin = str(args.get("cmd") or args.get("text") or args.get("key") or "") if isinstance(args, dict) else ""
         substeps.append({
@@ -2075,6 +2419,7 @@ def _tool_call_start_to_substeps(calls: list[dict] | None) -> list[dict]:
             "ok": False,
             "stdin": stdin[:500],
             "stdout": "工具调用已开始，等待执行结果...",
+            "id": marker_id.lstrip("tc_"),
             "tool_call_id": model_id,
             "status": "running",
             "arguments": args if isinstance(args, dict) else {},
@@ -2093,18 +2438,22 @@ def _persist_terminal_events(session_id: str, events: list[dict]) -> None:
             kind = "out"
         rows.append(
             {
-                "id": f"m_{uuid.uuid4().hex[:16]}",
-                "role": "assistant",
+                "id": str(e.get("id", "") or f"tool_event_{e.get('seq', '')}" or f"terminal_{uuid.uuid4().hex[:16]}"),
+                "type": "terminal",
+                "display_target": "terminal",
+                "context_policy": "include",
+                "source": "tool_runtime",
+                "source_seq": int(e.get("seq", 0) or 0),
+                "job_id": str(e.get("job_id", "") or ""),
+                "kind": kind,
+                "class": str(e.get("class", "") or "").strip().lower(),
                 "content": str(e.get("text", "")),
-                "entry_type": "terminal",
-                "terminal_kind": kind,
-                "terminal_class": str(e.get("class", "") or "").strip().lower(),
-                "created_at": str(e.get("ts", "")) or _now_iso(),
-                "is_summary": False,
+                "ts": str(e.get("ts", "")) or _now_iso(),
             }
         )
     if rows:
-        _store.append_messages(session_id, rows)
+        _store.append_terminal(session_id, rows)
+        _invalidate_session_index(session_id)
     _audit_web(
         "PUBLIC_WRITE",
         "_persist_terminal_events",
@@ -2414,8 +2763,13 @@ async def home_stats(month: str = Query(default="")):
         selected = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
     events = _load_usage_events(days=370)
-    disk = shutil.disk_usage(get_runtime_root())
+    storage_volumes = _read_storage_volumes()
+    selected_storage = next((item for item in storage_volumes if bool(item.get("is_runtime"))), None)
+    if selected_storage is None:
+        selected_storage = _disk_usage_payload(get_runtime_root(), label="运行", scope="runtime_root", is_runtime=True)
     memory = _read_proc_memory()
+    process_memory = _read_process_memory()
+    load_average = _read_load_average()
     months: list[str] = []
     cursor = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     for _ in range(12):
@@ -2430,14 +2784,12 @@ async def home_stats(month: str = Query(default="")):
             "started_at": datetime.fromtimestamp(_SERVER_STARTED_AT).astimezone().isoformat(timespec="seconds"),
             "uptime_seconds": max(0, int(time.time() - _SERVER_STARTED_AT)),
             "system_time": now.isoformat(timespec="seconds"),
+            "collected_at": now.isoformat(timespec="seconds"),
             "memory": memory,
-            "storage": {
-                "root": str(get_runtime_root()),
-                "total": int(disk.total),
-                "used": int(disk.used),
-                "free": int(disk.free),
-                "percent": _safe_percent(float(disk.used), float(disk.total)),
-            },
+            "process_memory": process_memory,
+            "load_average": load_average,
+            "storage": selected_storage or {},
+            "storages": storage_volumes,
             "usage": {
                 "month": f"{selected.year:04d}-{selected.month:02d}",
                 "months": months,
@@ -2496,8 +2848,27 @@ async def get_web_settings():
 
 @app.put("/web-settings")
 async def put_web_settings(data: dict[str, Any] = Body(...)):
-    _require_admin_user()
+    _require_login()
+    new_limit = 0
+    if "token_limit" in data:
+        ok, parsed, error = validate_context_token_limit(data.get("token_limit"))
+        if not ok:
+            return JSONResponse(
+                {"ok": False, "error": error, "min": 16000, "max": 200000, "default": 16000},
+                status_code=400,
+            )
+        data = dict(data)
+        data["token_limit"] = parsed
+        new_limit = parsed
     save_web_settings(data)
+    if new_limit:
+        for sid, cfg in list(_session_config.items()):
+            cfg["max_context_tokens"] = new_limit
+        for sid, agent in list(_sessions.items()):
+            try:
+                agent.max_context_tokens = new_limit
+            except Exception:
+                pass
     return load_web_settings()
 
 
@@ -2528,11 +2899,16 @@ async def llm_request_page():
     return _HTML_LLM_REQUEST
 
 
+@app.get("/model-data", response_class=HTMLResponse)
+async def model_data_page():
+    return _HTML_LLM_REQUEST
+
+
 @app.get("/llm-request/latest")
 async def get_latest_llm_request():
     current = _require_login()
     if not _has_llm_perm(current):
-        return JSONResponse({"ok": False, "error": "权限不足：当前账户不可查看 LLM 请求体"}, status_code=403)
+        return JSONResponse({"ok": False, "error": "权限不足：当前账户不可查看模型数据"}, status_code=403)
     row = _read_latest_jsonl(_LLM_REQUEST_LOG_FILE)
     if not row:
         return JSONResponse({
@@ -2553,6 +2929,58 @@ async def get_latest_llm_request():
     })
 
 
+@app.get("/model-data/latest")
+async def get_latest_model_data_request():
+    return await get_latest_llm_request()
+
+
+@app.get("/model-data/providers")
+async def get_model_data_providers():
+    current = _require_login()
+    if not _has_llm_perm(current):
+        return JSONResponse({"ok": False, "error": "权限不足：当前账户不可查看模型供应商数据"}, status_code=403)
+    return JSONResponse(_model_providers_payload())
+
+
+@app.post("/model-data/providers")
+async def upsert_model_data_provider(req: ModelProviderUpsertRequest):
+    _require_admin_user()
+    try:
+        payload = _llm.upsert_provider(_pydantic_to_dict(req))
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+    return JSONResponse(payload)
+
+
+@app.post("/model-data/models")
+async def add_model_data_model(req: ModelAddRequest):
+    _require_admin_user()
+    try:
+        payload = _llm.add_model(req.provider, req.model_id, req.label or req.model_id)
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+    return JSONResponse(payload)
+
+
+@app.delete("/model-data/models")
+async def delete_model_data_model(provider: str = Query(default="deepseek"), model_id: str = Query(default="")):
+    _require_admin_user()
+    try:
+        payload = _llm.remove_model(provider, model_id)
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+    return JSONResponse(payload)
+
+
+@app.get("/model-data/balance")
+async def get_model_data_balance(provider: str = Query(default="deepseek")):
+    current = _require_login()
+    if not _has_llm_perm(current):
+        return JSONResponse({"ok": False, "error": "权限不足：当前账户不可查看模型账户数据"}, status_code=403)
+    provider_key = _normalize_model_provider(provider)
+    return JSONResponse(_llm.fetch_balance(provider_key, mask_api_key=_mask_api_key))
+
+
 @app.post("/model-diagnostics/run")
 async def run_model_diagnostics(req: ModelDiagnosticsRequest):
     current = _require_login()
@@ -2570,7 +2998,8 @@ async def run_model_diagnostics(req: ModelDiagnosticsRequest):
         if key not in tests:
             tests.append(key)
 
-    target_model = _normalize_model_choice(req.model) or str(_client.model or "").strip()
+    provider_key = _normalize_model_provider(req.provider)
+    target_model = _normalize_model_choice(req.model) or str(_llm.provider_meta(provider_key).get("current_model") or _llm.current_model or "").strip()
     if not target_model:
         return JSONResponse({"ok": False, "error": "model 无效"}, status_code=400)
 
@@ -2579,6 +3008,7 @@ async def run_model_diagnostics(req: ModelDiagnosticsRequest):
 
     started_at = _now_iso()
     rows = _run_model_diagnostics(
+        provider=provider_key,
         model_name=target_model,
         tests=tests,
         image_url=image_url,
@@ -2587,6 +3017,7 @@ async def run_model_diagnostics(req: ModelDiagnosticsRequest):
     return JSONResponse(
         {
             "ok": True,
+            "provider": provider_key,
             "model": target_model,
             "started_at": started_at,
             "finished_at": _now_iso(),
@@ -3033,7 +3464,7 @@ async def admin_delete_user(uid: str):
 @app.get("/model")
 async def get_model():
     _require_login()
-    return JSONResponse({"current_model": _client.model, "available_models": list(_MODEL_CHOICES)})
+    return JSONResponse(_model_payload())
 
 
 @app.post("/model")
@@ -3045,16 +3476,24 @@ async def switch_model(req: ModelSwitchRequest):
             {
                 "ok": False,
                 "error": "unsupported model",
-                "available_models": list(_MODEL_CHOICES),
+                **_model_payload(),
             },
             status_code=400,
         )
-    _client.model = target
+    provider_key = _normalize_model_provider(req.provider)
+    try:
+        _llm.switch_model(target, provider=provider_key)
+        for agent in list(_sessions.values()):
+            try:
+                agent._client = _tool_client
+            except Exception:
+                pass
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e), **_model_payload()}, status_code=400)
     return JSONResponse(
         {
             "ok": True,
-            "current_model": _client.model,
-            "available_models": list(_MODEL_CHOICES),
+            **_model_payload(),
         }
     )
 
@@ -3096,7 +3535,16 @@ async def patch_session_config(session_id: str, data: dict[str, Any] = Body(...)
     cfg = _session_config.setdefault(sid, {})
     if "max_context_tokens" in data:
         v = data["max_context_tokens"]
-        cfg["max_context_tokens"] = max(100, int(v)) if v is not None else None
+        if v is None:
+            cfg["max_context_tokens"] = None
+        else:
+            ok, parsed, error = validate_context_token_limit(v)
+            if not ok:
+                return JSONResponse(
+                    {"ok": False, "error": error, "min": 16000, "max": 200000, "default": 16000},
+                    status_code=400,
+                )
+            cfg["max_context_tokens"] = parsed
     _audit_web("SYSTEM_WRITE", "patch_session_config",
                f"session_config_updated session_id={sid}",
                {"session_id": sid, "config": dict(cfg)})
@@ -3113,83 +3561,13 @@ async def get_session_config(session_id: str):
     return JSONResponse({"ok": True, "session_id": sid, "config": cfg})
 
 
-def _maybe_auto_compress(session_id: str, context_rows: list[dict]) -> dict:
-    """自动压缩：raw chat 消息数 >= 80 或 tokens 超限时触发。"""
-    sid = str(session_id or "").strip()
-    agent = _sessions.get(sid)
-    if agent is None:
-        return {"compressed": False, "reason": "no_agent"}
-
-    from TindaAgent.Web.settings_backend import get_context_token_limit
-    max_tokens = int(getattr(agent, "max_context_tokens", 0) or get_context_token_limit())
-    tokens_before = int(agent.estimate_current_tokens())
-    raw_rows = _raw_chat_rows_for_compression(sid, context_rows)
-
-    chat_count = len(raw_rows)
-
-    trigger = ""
-    if chat_count >= 80 and tokens_before <= max_tokens:
-        trigger = "raw_chat_count"
-    elif tokens_before > max_tokens:
-        trigger = "token"
-
-    if not trigger:
-        return {
-            "compressed": False,
-            "reason": "below_threshold",
-            "chat_count": chat_count,
-            "estimated_tokens_before": tokens_before,
-            "max_context_tokens": max_tokens,
-        }
-
-    if len(raw_rows) < 6:
-        return {
-            "compressed": False,
-            "reason": "insufficient_messages",
-            "estimated_tokens_before": tokens_before,
-        }
-    if _is_duplicate_compression_request(sid, raw_rows):
-        return {
-            "compressed": False,
-            "reason": "already_compressed",
-            "estimated_tokens_before": tokens_before,
-        }
-
-    summary_src = _summary_rows_for_compression(sid, raw_rows[:-4])
-    try:
-        summary = _compress_messages_with_llm(summary_src)
-        if not summary:
-            return {
-                "compressed": False,
-                "reason": "empty_summary",
-                "estimated_tokens_before": tokens_before,
-            }
-        _store.compress_context(sid, summary)
-        rows = _store.get_context_messages(sid)
-        agent_rows, _filter_stats = _store_to_agent_messages(rows)
-        agent.replace_conversation(agent_rows)
-    except Exception:
-        return {
-            "compressed": False,
-            "reason": "compress_error",
-            "estimated_tokens_before": tokens_before,
-        }
-
-    tokens_after = int(agent.estimate_current_tokens())
-    return {
-        "compressed": True,
-        "trigger": trigger,
-        "estimated_tokens_before": tokens_before,
-        "estimated_tokens_after": tokens_after,
-    }
-
-
 @app.get("/sessions/{session_id}/context-usage")
 async def get_session_context_usage(session_id: str):
     sid, _meta = _require_session_access(session_id, create=False)
     rows = _store.get_context_messages(sid)
     usage_length = _estimate_context_usage_length(rows)
     meta = _store.get_session(sid) or {}
+    max_context_tokens = _effective_context_token_limit(sid)
     _audit_web(
         "SYSTEM_READ",
         "get_session_context_usage",
@@ -3210,7 +3588,7 @@ async def get_session_context_usage(session_id: str):
             "session_id": sid,
             "title": title,
             "usage_length": int(usage_length),
-            "max_context_tokens": _session_config.get(sid, {}).get("max_context_tokens"),
+            "max_context_tokens": int(max_context_tokens),
         }
     )
 
@@ -3223,6 +3601,7 @@ async def delete_session(session_id: str):
     _session_last_access.pop(sid, None)
     _session_config.pop(sid, None)
     _clear_terminal_pending(sid)
+    _invalidate_session_index(sid)
     if not ok:
         return JSONResponse({"ok": False, "error": "session not found"}, status_code=404)
     return JSONResponse({"ok": True, "session_id": sid})
@@ -3249,6 +3628,7 @@ async def delete_all_sessions():
             _session_last_access.pop(sid, None)
             _session_config.pop(sid, None)
             _clear_terminal_pending(sid)
+            _invalidate_session_index(sid)
             deleted += 1
         except Exception:
             pass
@@ -3256,12 +3636,54 @@ async def delete_all_sessions():
 
 
 @app.get("/sessions/{session_id}/messages")
-async def get_session_messages(session_id: str):
+async def get_session_messages(
+    session_id: str,
+    limit: int = Query(default=0),
+    before_seq: int = Query(default=0),
+):
     sid, _meta = _require_session_access(session_id, create=False)
+    requested_limit = max(0, min(int(limit or 0), 500))
+    if requested_limit > 0:
+        try:
+            meta = _store.get_session(sid) or {}
+            if not _sqlite_index.is_session_current(sid, meta):
+                load_effective = getattr(_store, "load_effective_messages", None)
+                current_data = load_effective(sid) if callable(load_effective) else _store.load_messages(sid)
+                _sqlite_index.index_session(sid, meta, current_data)
+            cached = _sqlite_index.get_messages(sid, limit=requested_limit, before_seq=before_seq)
+            if cached is not None:
+                return JSONResponse(cached)
+        except Exception as e:
+            logger.debug("sqlite session index fallback session_id=%s: %s", sid, e)
+
     load_effective = getattr(_store, "load_effective_messages", None)
     data = load_effective(sid) if callable(load_effective) else _store.load_messages(sid)
-    entries = sa.store_dict_to_frontend(data)
-    return JSONResponse({"ok": True, "session_id": sid, "entries": entries})
+    keys = sorted((int(k) for k in data if str(k).isdigit()), key=int)
+    total = len(keys)
+    if before_seq > 0:
+        keys = [k for k in keys if k < before_seq]
+    if requested_limit > 0:
+        keys = keys[-requested_limit:]
+
+    subset = {str(k): data[str(k)] for k in keys if str(k) in data}
+    entries = sa.store_dict_to_frontend(subset)
+    for idx, seq in enumerate(keys):
+        if idx < len(entries) and isinstance(entries[idx], dict):
+            entries[idx]["seq"] = int(seq)
+    oldest_seq = int(keys[0]) if keys else 0
+    newest_seq = int(keys[-1]) if keys else 0
+    has_more = bool(oldest_seq > 1)
+    return JSONResponse({
+        "ok": True,
+        "session_id": sid,
+        "entries": entries,
+        "total": total,
+        "oldest_seq": oldest_seq,
+        "newest_seq": newest_seq,
+        "has_more": has_more,
+        "limit": requested_limit,
+        "source": "json_store",
+    })
 
 
 @app.post("/sessions/{session_id}/title")
@@ -3278,6 +3700,7 @@ async def compress_session_context(session_id: str):
         return JSONResponse({"ok": False, "error": "权限不足：当前账户不可执行上下文压缩"}, status_code=403)
     sid, _meta = _require_session_access(session_id, user=current)
     rows = _store.get_context_messages(sid)
+    usage_before = _estimate_context_usage_length(rows)
     _audit_web(
         "SYSTEM_EXECUTE",
         "compress_session_context",
@@ -3308,6 +3731,11 @@ async def compress_session_context(session_id: str):
         if not summary:
             raise ValueError("摘要为空")
         result = _store.compress_context(sid, summary)
+        _invalidate_session_index(sid)
+        rows_after = _store.get_context_messages(sid)
+        result["usage_before"] = int(usage_before)
+        result["usage_after"] = int(_estimate_context_usage_length(rows_after))
+        result["max_context_tokens"] = int(_effective_context_token_limit(sid))
     except SessionStoreError as e:
         _audit_web("SYSTEM_EXECUTE", "compress_session_context",
                    f"compress_failed session_id={sid} err={e}",
@@ -3383,6 +3811,7 @@ async def chat(req: ChatRequest):
                 },
             ],
         )
+        _invalidate_session_index(sid)
         return JSONResponse(
             {
                 "reply": "> --调用工具中--",
@@ -3451,11 +3880,22 @@ async def chat(req: ChatRequest):
         items.append(sa.build_assistant_message([{"kind": "text", "content": save_reply}]))
     else:
         items.append(sa.build_assistant_message([{"kind": "text", "content": reply}]))
+    saved_messages = False
     try:
         _store.append_messages(sid, items)
+        _invalidate_session_index(sid)
+        saved_messages = True
     except Exception:
         import traceback
         traceback.print_exc()
+    context_compression_payload: dict[str, Any] | None = None
+    if saved_messages and not pending_items:
+        compression_result = _maybe_auto_compress_after_llm(sid)
+        if compression_result.get("compressed") is True:
+            compression_step = _build_context_compression_system_substep(compression_result)
+            if _store.append_to_last_assistant(sid, [compression_step]):
+                _invalidate_session_index(sid)
+                context_compression_payload = compression_step.get("content", {})
     _audit_web(
         "PUBLIC_WRITE",
         "chat",
@@ -3480,6 +3920,7 @@ async def chat(req: ChatRequest):
             "pending_confirmation": len(pending_items) > 0,
             "pending_confirm_count": len(pending_items),
             "pending": pending_items,
+            "context_compression": context_compression_payload,
         }
     )
 
@@ -3580,6 +4021,7 @@ async def chat_stream(
                 },
             ],
         )
+        _invalidate_session_index(sid)
 
         chunks = [
             _sse_event("replace_segment", {"content": ""}),
@@ -3692,6 +4134,15 @@ async def chat_stream(
                             {"session_id": sid, "turn_id": turn_id, "tool_steps": len(done_steps)},
                         )
                     yield _sse_event("tool_step", {"trace": safe_trace})
+                elif et == "tool_heartbeat":
+                    yield _sse_event(
+                        "tool_heartbeat",
+                        {
+                            "elapsed_ms": int(event.get("elapsed_ms", 0) or 0),
+                            "turn_id": turn_id,
+                            "tool": event.get("tool", {}) if isinstance(event.get("tool"), dict) else {},
+                        },
+                    )
                 elif et == "done":
                     done_payload = {
                         "reply": event.get("reply", ""),
@@ -3758,6 +4209,18 @@ async def chat_stream(
                 substeps = [{"kind": "text", "content": final_reply}]
             _store.replace_assistant_by_turn(sid, turn_id=turn_id, substeps=substeps)
             final_saved = True
+            if not pending_items:
+                compression_result = _maybe_auto_compress_after_llm(sid)
+                if compression_result.get("compressed") is True:
+                    compression_step = _build_context_compression_system_substep(compression_result)
+                    if _store.append_to_assistant_by_turn(
+                        sid,
+                        turn_id=turn_id,
+                        substeps=[compression_step],
+                        replace_tool_results=False,
+                    ):
+                        _invalidate_session_index(sid)
+                        done_payload["context_compression"] = compression_step.get("content", {})
             _audit_web(
                 "PUBLIC_WRITE",
                 "chat_stream",
@@ -3869,7 +4332,7 @@ async def terminal_confirm(req: TerminalConfirmRequest):
         _write_context_log(
             sid,
             _serialize_context_messages(agent.history),
-            model=_client.model,
+            model=_llm.current_model,
             trigger="terminal_confirm_recover",
         )
         request_messages = agent._messages_for_llm_request(agent.history)
@@ -3884,7 +4347,7 @@ async def terminal_confirm(req: TerminalConfirmRequest):
         _write_context_log(
             sid,
             _serialize_context_messages(held),
-            model=_client.model,
+            model=_llm.current_model,
             trigger="terminal_confirm_resume",
         )
         result = agent.resume_with_confirmations([decision])
@@ -4000,6 +4463,15 @@ async def terminal_confirm(req: TerminalConfirmRequest):
         dedup_next.append(row)
     _set_terminal_pending(sid, dedup_next)
 
+    context_compression_payload: dict[str, Any] | None = None
+    if not dedup_next:
+        compression_result = _maybe_auto_compress_after_llm(sid)
+        if compression_result.get("compressed") is True:
+            compression_step = _build_context_compression_system_substep(compression_result)
+            if _store.append_to_last_assistant(sid, [compression_step]):
+                _invalidate_session_index(sid)
+                context_compression_payload = compression_step.get("content", {})
+
     # 回传原始 turn_id 以便前端合并气泡
     return JSONResponse(
         {
@@ -4018,6 +4490,7 @@ async def terminal_confirm(req: TerminalConfirmRequest):
             "pending_confirmation": len(dedup_next) > 0,
             "pending_confirm_count": len(dedup_next),
             "pending": dedup_next,
+            "context_compression": context_compression_payload,
         }
     )
 
@@ -4033,6 +4506,7 @@ async def reset_chat(req: ResetRequest):
     _session_last_access.pop(sid, None)
     _session_config.pop(sid, None)
     _clear_terminal_pending(sid)
+    _invalidate_session_index(sid)
     return JSONResponse({"ok": True, **result})
 
 
@@ -4059,6 +4533,10 @@ async def session_events(req: SessionEventsRequest):
         if entry_type == "terminal":
             # Terminal entries go to separate file
             term_rows.append({
+                "id": f"terminal_{uuid.uuid4().hex[:16]}",
+                "type": "terminal",
+                "display_target": "terminal",
+                "context_policy": "include",
                 "kind": str(it.get("terminal_kind", "out")).strip() or "out",
                 "class": str(it.get("terminal_class", "") or "").strip().lower(),
                 "content": content_text,
@@ -4068,17 +4546,32 @@ async def session_events(req: SessionEventsRequest):
             # Chat entries go to session file
             if entry_type == "notice":
                 msg = sa.build_system_message(content_text)
+                msg["type"] = "system_notice"
+                msg["display_target"] = "chat"
+                msg["context_policy"] = "exclude"
             elif role not in {"user", "assistant", "system"}:
                 role = "assistant"
                 msg = {"role": "assistant", "id": sa.make_message_id(),
+                       "type": "assistant_message",
+                       "display_target": "chat",
+                       "context_policy": "include",
                        "content": {"1": {"text": content_text}}}
             elif role == "system":
                 msg = sa.build_system_message(content_text)
+                msg["type"] = "system_notice"
+                msg["display_target"] = "chat"
+                msg["context_policy"] = "exclude"
             elif role == "assistant":
                 msg = {"role": "assistant", "id": sa.make_message_id(),
+                       "type": "assistant_message",
+                       "display_target": "chat",
+                       "context_policy": "include",
                        "content": {"1": {"text": content_text}}}
             elif role == "user":
                 msg = {"role": "user", "id": sa.make_message_id(),
+                       "type": "user_message",
+                       "display_target": "chat",
+                       "context_policy": "include",
                        "content": {"1": {"text": content_text}}}
             chat_rows.append(msg)
 
@@ -4086,6 +4579,7 @@ async def session_events(req: SessionEventsRequest):
     if chat_rows:
         try:
             result["chat_saved"] = _store.append_messages(sid, chat_rows)
+            _invalidate_session_index(sid)
         except SessionStoreError as e:
             return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
     if term_rows:
@@ -4097,7 +4591,7 @@ async def session_events(req: SessionEventsRequest):
 async def get_session_terminal(session_id: str):
     sid, _meta = _require_session_access(session_id, create=False)
     entries = _store.load_terminal(sid)
-    return JSONResponse({"ok": True, "session_id": sid, "entries": entries})
+    return JSONResponse({"ok": True, "session_id": sid, "entries": sa.terminal_entries_to_frontend(entries)})
 
 
 @app.post("/sessions/{session_id}/tool-jobs")

@@ -202,9 +202,62 @@
 
     .grid {
       display: grid;
-      grid-template-columns: 1.2fr 1fr 1fr;
+      grid-template-columns: 1fr 1.2fr 1fr 1fr;
       gap: 10px;
       margin-bottom: 10px;
+    }
+
+    .manager-grid {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid var(--border);
+    }
+
+    .manager-grid .wide { grid-column: span 2; }
+
+    .model-list {
+      margin-top: 10px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .model-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      max-width: 240px;
+      min-height: 28px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: var(--surface-2);
+      color: var(--text);
+      padding: 3px 9px;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .model-pill span {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .model-pill button {
+      width: 18px;
+      height: 18px;
+      border: 0;
+      border-radius: 999px;
+      background: rgba(255, 110, 180, 0.12);
+      color: var(--accent-deep);
+      cursor: pointer;
+      font-weight: 900;
+      line-height: 18px;
+      padding: 0;
     }
 
     label {
@@ -378,6 +431,8 @@
 
     @media (max-width: 900px) {
       .grid { grid-template-columns: 1fr; }
+      .manager-grid { grid-template-columns: 1fr; }
+      .manager-grid .wide { grid-column: auto; }
       .top { flex-direction: column; align-items: flex-start; }
       .run-head { flex-direction: column; align-items: flex-start; }
     }
@@ -402,6 +457,10 @@
     <div class="card">
       <div class="grid">
         <div>
+          <label for="providerSelect">模型提供商</label>
+          <select id="providerSelect"></select>
+        </div>
+        <div>
           <label for="modelSelect">目标模型</label>
           <select id="modelSelect"></select>
         </div>
@@ -424,6 +483,54 @@
       </div>
 
       <div id="statusLine" class="status">就绪</div>
+
+      <div class="manager-grid" aria-label="模型提供商管理">
+        <div>
+          <label for="providerKey">Provider Key</label>
+          <input id="providerKey" placeholder="custom-openai" />
+        </div>
+        <div>
+          <label for="providerLabel">显示名称</label>
+          <input id="providerLabel" placeholder="Custom" />
+        </div>
+        <div>
+          <label for="providerAdapter">调用链路</label>
+          <select id="providerAdapter">
+            <option value="openai_compatible">OpenAI-compatible</option>
+            <option value="google_generate_content">Google Gemini</option>
+            <option value="anthropic_messages">Anthropic Messages</option>
+          </select>
+        </div>
+        <div class="wide">
+          <label for="providerBaseUrl">Base URL</label>
+          <input id="providerBaseUrl" placeholder="https://api.example.com/v1" />
+        </div>
+        <div>
+          <label for="providerChatPath">路径</label>
+          <input id="providerChatPath" placeholder="/chat/completions 或 /v1/messages 或 /models/{model}:generateContent" />
+        </div>
+        <div>
+          <label for="providerApiKeyEnv">Key 环境变量</label>
+          <input id="providerApiKeyEnv" placeholder="OPENAI_API_KEY" />
+        </div>
+        <div>
+          <label for="providerApiKey">Key（可选）</label>
+          <input id="providerApiKey" placeholder="留空则用环境变量" />
+        </div>
+        <div>
+          <label for="newModelId">模型 ID</label>
+          <input id="newModelId" placeholder="模型真实 ID" />
+        </div>
+        <div>
+          <label for="newModelLabel">模型命名</label>
+          <input id="newModelLabel" placeholder="前端显示名" />
+        </div>
+        <div class="actions">
+          <button class="btn" type="button" onclick="saveProvider()">保存提供商</button>
+          <button class="btn" type="button" onclick="addModel()">添加模型</button>
+        </div>
+      </div>
+      <div id="modelList" class="model-list"></div>
     </div>
 
     <div id="historyWrap" class="history">
@@ -440,14 +547,27 @@
       { id: "deepseek-v4-flash", label: "deepseek-v4-flash" },
     ];
 
+    const providerSelectEl = document.getElementById("providerSelect");
     const modelSelectEl = document.getElementById("modelSelect");
     const imageUrlEl = document.getElementById("imageUrl");
     const videoUrlEl = document.getElementById("videoUrl");
     const statusLineEl = document.getElementById("statusLine");
     const historyWrapEl = document.getElementById("historyWrap");
     const btnRunAllEl = document.getElementById("btnRunAll");
+    const modelListEl = document.getElementById("modelList");
+    const providerKeyEl = document.getElementById("providerKey");
+    const providerLabelEl = document.getElementById("providerLabel");
+    const providerAdapterEl = document.getElementById("providerAdapter");
+    const providerBaseUrlEl = document.getElementById("providerBaseUrl");
+    const providerChatPathEl = document.getElementById("providerChatPath");
+    const providerApiKeyEnvEl = document.getElementById("providerApiKeyEnv");
+    const providerApiKeyEl = document.getElementById("providerApiKey");
+    const newModelIdEl = document.getElementById("newModelId");
+    const newModelLabelEl = document.getElementById("newModelLabel");
 
     const runHistory = [];
+    let providerRows = [];
+    let currentProvider = "deepseek";
 
     function getAuthToken() {
       const current = String(sessionStorage.getItem(AUTH_TOKEN_KEY) || "").trim();
@@ -488,6 +608,60 @@
         image: "图片测试",
         video: "视频测试",
       }[String(key)] || key;
+    }
+
+    function providerLabel(provider) {
+      return String(provider?.label || provider?.name || provider?.key || "Provider");
+    }
+
+    function selectedProvider() {
+      const key = String(providerSelectEl?.value || currentProvider || "deepseek").trim();
+      return providerRows.find((item) => String(item?.key || "") === key) || providerRows[0] || null;
+    }
+
+    function fillProviderForm(provider) {
+      const row = provider || selectedProvider() || {};
+      providerKeyEl.value = String(row.key || "");
+      providerLabelEl.value = String(row.label || row.name || "");
+      providerAdapterEl.value = String(row.adapter || "openai_compatible");
+      providerBaseUrlEl.value = String(row.base_url || "");
+      providerChatPathEl.value = String(row.chat_path || "");
+      providerApiKeyEnvEl.value = String(row.api_key_env || "");
+      providerApiKeyEl.value = "";
+    }
+
+    function renderProviders() {
+      const rows = providerRows.length ? providerRows : [{ key: "deepseek", label: "DPSK", models: MODEL_FALLBACK }];
+      providerSelectEl.innerHTML = rows.map((provider) => {
+        const key = String(provider?.key || "");
+        return `<option value="${escapeHtml(key)}">${escapeHtml(providerLabel(provider))}</option>`;
+      }).join("");
+      if (currentProvider) providerSelectEl.value = currentProvider;
+      if (!providerSelectEl.value && rows[0]) providerSelectEl.value = String(rows[0].key || "deepseek");
+      currentProvider = providerSelectEl.value || "deepseek";
+      fillProviderForm(selectedProvider());
+      renderModels();
+    }
+
+    function renderModels() {
+      const provider = selectedProvider();
+      const rows = Array.isArray(provider?.models) && provider.models.length ? provider.models : (provider?.key === "deepseek" ? MODEL_FALLBACK : []);
+      modelSelectEl.innerHTML = rows.length
+        ? rows.map((x) => {
+            const id = String(x?.id || "").trim();
+            const label = String(x?.label || id || "").trim();
+            return `<option value="${escapeHtml(id)}">${escapeHtml(label)}</option>`;
+          }).join("")
+        : `<option value="">请先添加模型</option>`;
+      const current = String(provider?.current_model || provider?.model || "").trim();
+      if (current) modelSelectEl.value = current;
+      modelListEl.innerHTML = rows.length
+        ? rows.map((x) => {
+            const id = String(x?.id || "").trim();
+            const label = String(x?.label || id);
+            return `<span class="model-pill" title="${escapeHtml(id)}"><span>${escapeHtml(label)}</span><button type="button" data-remove-model="${escapeHtml(id)}">×</button></span>`;
+          }).join("")
+        : `<span class="muted">当前提供商还没有模型，输入模型 ID 后添加。</span>`;
     }
 
     function escapeHtml(raw) {
@@ -612,20 +786,95 @@
         const res = await apiFetch("/model");
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
-        const rows = Array.isArray(data?.available_models) && data.available_models.length > 0
-          ? data.available_models
-          : MODEL_FALLBACK;
-        modelSelectEl.innerHTML = rows.map((x) => {
-          const id = String(x?.id || "").trim();
-          const label = String(x?.label || id || "").trim();
-          return `<option value="${escapeHtml(id)}">${escapeHtml(label)}</option>`;
-        }).join("");
-        const current = String(data?.current_model || "").trim();
-        if (current) modelSelectEl.value = current;
+        providerRows = Array.isArray(data?.providers) ? data.providers : [];
+        currentProvider = String(data?.current_provider || providerRows[0]?.key || "deepseek");
+        renderProviders();
       } catch (e) {
-        modelSelectEl.innerHTML = MODEL_FALLBACK
-          .map((x) => `<option value="${escapeHtml(x.id)}">${escapeHtml(x.label)}</option>`)
-          .join("");
+        providerRows = [{ key: "deepseek", label: "DPSK", models: MODEL_FALLBACK }];
+        currentProvider = "deepseek";
+        renderProviders();
+      }
+    }
+
+    async function saveProvider() {
+      if (!(await ensureAllowed())) return;
+      const key = String(providerKeyEl.value || "").trim();
+      if (!key) {
+        setStatus("Provider Key 不能为空");
+        return;
+      }
+      try {
+        const payload = {
+          key,
+          label: String(providerLabelEl.value || key).trim(),
+          name: String(providerLabelEl.value || key).trim(),
+          adapter: String(providerAdapterEl.value || "openai_compatible").trim(),
+          base_url: String(providerBaseUrlEl.value || "").trim(),
+          chat_path: String(providerChatPathEl.value || "").trim(),
+          api_key_env: String(providerApiKeyEnvEl.value || "").trim(),
+          api_key: String(providerApiKeyEl.value || "").trim(),
+          enabled: true,
+        };
+        const res = await apiFetch("/model-data/providers", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (!res.ok || data?.ok === false) throw new Error(String(data?.error || `HTTP ${res.status}`));
+        providerRows = Array.isArray(data?.providers) ? data.providers : providerRows;
+        currentProvider = key;
+        renderProviders();
+        setStatus(`已保存提供商：${key}`);
+      } catch (e) {
+        setStatus(`保存提供商失败：${String(e?.message || e)}`);
+      }
+    }
+
+    async function addModel() {
+      if (!(await ensureAllowed())) return;
+      const provider = String(providerSelectEl.value || providerKeyEl.value || "deepseek").trim();
+      const modelId = String(newModelIdEl.value || "").trim();
+      const label = String(newModelLabelEl.value || modelId).trim();
+      if (!modelId) {
+        setStatus("模型 ID 不能为空");
+        return;
+      }
+      try {
+        const res = await apiFetch("/model-data/models", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ provider, model_id: modelId, label }),
+        });
+        const data = await res.json();
+        if (!res.ok || data?.ok === false) throw new Error(String(data?.error || `HTTP ${res.status}`));
+        providerRows = Array.isArray(data?.providers) ? data.providers : providerRows;
+        currentProvider = provider;
+        newModelIdEl.value = "";
+        newModelLabelEl.value = "";
+        renderProviders();
+        modelSelectEl.value = modelId;
+        setStatus(`已添加模型：${modelId}`);
+      } catch (e) {
+        setStatus(`添加模型失败：${String(e?.message || e)}`);
+      }
+    }
+
+    async function removeModel(modelId) {
+      const provider = String(providerSelectEl.value || "deepseek").trim();
+      if (!modelId || !(await ensureAllowed())) return;
+      try {
+        const res = await apiFetch(`/model-data/models?provider=${encodeURIComponent(provider)}&model_id=${encodeURIComponent(modelId)}`, {
+          method: "DELETE",
+        });
+        const data = await res.json();
+        if (!res.ok || data?.ok === false) throw new Error(String(data?.error || `HTTP ${res.status}`));
+        providerRows = Array.isArray(data?.providers) ? data.providers : providerRows;
+        currentProvider = provider;
+        renderProviders();
+        setStatus(`已删除模型：${modelId}`);
+      } catch (e) {
+        setStatus(`删除模型失败：${String(e?.message || e)}`);
       }
     }
 
@@ -638,6 +887,7 @@
 
       try {
         const payload = {
+          provider: String(providerSelectEl.value || currentProvider || "deepseek").trim(),
           model: String(modelSelectEl.value || "").trim(),
           tests,
           image_url: String(imageUrlEl.value || "").trim(),
@@ -654,6 +904,7 @@
         }
 
         runHistory.unshift({
+          provider: String(data?.provider || payload.provider || ""),
           model: String(data?.model || payload.model || ""),
           tests: tests.slice(),
           started_at: String(data?.started_at || ""),
@@ -679,6 +930,18 @@
     async function runSingle(key) {
       await runByTests([String(key || "")]);
     }
+
+    providerSelectEl.addEventListener("change", () => {
+      currentProvider = String(providerSelectEl.value || "deepseek");
+      fillProviderForm(selectedProvider());
+      renderModels();
+    });
+
+    modelListEl.addEventListener("click", (event) => {
+      const btn = event.target?.closest?.("button[data-remove-model]");
+      if (!btn) return;
+      removeModel(btn.getAttribute("data-remove-model") || "");
+    });
 
     (async () => {
       await loadModels();

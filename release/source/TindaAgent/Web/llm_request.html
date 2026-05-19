@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>TindaAgent · LLM 请求体</title>
+  <title>TindaAgent · 模型数据面板</title>
   <script>
     (function () {
       try {
@@ -52,9 +52,32 @@
       background: var(--bg);
       animation: pageIn 0.42s cubic-bezier(0.18, 0.92, 0.18, 1) both;
     }
+    body.model-data-leaving {
+      pointer-events: none;
+    }
     @keyframes pageIn {
       from { opacity: 0; transform: translateY(10px) scale(0.99); }
       to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    @keyframes modelPanelIn {
+      from { opacity: 0; transform: translateY(18px) scale(0.985); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    @keyframes modelPanelOut {
+      from { opacity: 1; transform: translateY(0) scale(1); }
+      to { opacity: 0; transform: translateY(12px) scale(0.985); }
+    }
+    @keyframes modelRightIn {
+      from { opacity: 0; transform: translateX(18px); }
+      to { opacity: 1; transform: translateX(0); }
+    }
+    @keyframes balanceItemIn {
+      from { opacity: 0; transform: translateY(-12px) scale(0.985); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    @keyframes balanceItemOut {
+      from { opacity: 1; transform: translateY(0) scale(1); }
+      to { opacity: 0; transform: translateY(-10px) scale(0.985); }
     }
     header {
       position: sticky;
@@ -110,7 +133,17 @@
       backdrop-filter: blur(24px);
       -webkit-backdrop-filter: blur(24px);
       overflow: hidden;
+      animation: modelPanelIn 520ms cubic-bezier(0.18, 0.92, 0.18, 1) both;
     }
+    .panel:nth-of-type(1) { animation-delay: 40ms; }
+    .panel:nth-of-type(2) { animation-delay: 110ms; }
+    .panel:nth-of-type(3) { animation-delay: 180ms; }
+    body.model-data-leaving .panel {
+      animation: modelPanelOut 260ms cubic-bezier(0.44, 0, 0.72, 0.18) both;
+    }
+    body.model-data-leaving .panel:nth-of-type(1) { animation-delay: 90ms; }
+    body.model-data-leaving .panel:nth-of-type(2) { animation-delay: 45ms; }
+    body.model-data-leaving .panel:nth-of-type(3) { animation-delay: 0ms; }
     .panel-head {
       display: flex;
       align-items: center;
@@ -121,6 +154,136 @@
     }
     .panel-title { font-size: 16px; font-weight: 900; }
     .muted { color: var(--text-dim); font-size: 12px; font-weight: 700; }
+    .provider-tabs {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 14px 18px 0;
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+    .provider-tabs::-webkit-scrollbar { display: none; }
+    .provider-tab {
+      min-width: 76px;
+      height: 34px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: color-mix(in srgb, var(--surface-2) 82%, transparent);
+      color: var(--text-dim);
+      font: inherit;
+      font-size: 12px;
+      font-weight: 900;
+      cursor: pointer;
+      transition: transform 0.2s ease, background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+    }
+    .provider-tab:hover { transform: translateY(-1px); color: var(--text); }
+    .provider-tab.active {
+      color: var(--accent-deep);
+      background: color-mix(in srgb, var(--surface) 86%, transparent);
+      border-color: rgba(255, 110, 180, 0.42);
+    }
+    .provider-meta {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      padding: 14px 18px 0;
+    }
+    .provider-meta-item {
+      min-width: 0;
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      background: color-mix(in srgb, var(--surface-2) 72%, transparent);
+      padding: 10px 12px;
+    }
+    .provider-meta-label {
+      color: var(--text-dim);
+      font-size: 10.5px;
+      font-weight: 900;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .provider-meta-value {
+      margin-top: 4px;
+      color: var(--text);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .provider-form {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 10px;
+      padding: 14px 18px 0;
+    }
+    .provider-form .wide { grid-column: span 2; }
+    .provider-form label {
+      display: block;
+      color: var(--text-dim);
+      font-size: 10.5px;
+      font-weight: 900;
+      margin: 0 0 5px;
+    }
+    .provider-form input,
+    .provider-form select {
+      width: 100%;
+      height: 34px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: color-mix(in srgb, var(--surface-2) 82%, transparent);
+      color: var(--text);
+      padding: 0 10px;
+      font: inherit;
+      font-size: 12px;
+      font-weight: 800;
+      outline: none;
+    }
+    .provider-form .form-actions {
+      display: flex;
+      align-items: end;
+      gap: 8px;
+    }
+    .model-pills {
+      padding: 12px 18px 0;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .model-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      max-width: 260px;
+      min-height: 28px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: color-mix(in srgb, var(--surface-2) 76%, transparent);
+      padding: 3px 9px;
+      color: var(--text);
+      font-size: 12px;
+      font-weight: 900;
+    }
+    .model-pill span {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .model-pill button {
+      width: 18px;
+      height: 18px;
+      border: 0;
+      border-radius: 999px;
+      background: rgba(255, 110, 180, 0.12);
+      color: var(--accent-deep);
+      cursor: pointer;
+      font-weight: 900;
+      line-height: 18px;
+      padding: 0;
+    }
     .stats {
       display: grid;
       grid-template-columns: repeat(6, minmax(0, 1fr));
@@ -133,14 +296,90 @@
       border-radius: 16px;
       background: var(--surface-2);
       padding: 12px;
+      display: grid;
+      align-content: center;
+      min-height: 66px;
     }
-    .stat-label { color: var(--text-dim); font-size: 11px; font-weight: 800; }
+    .stat-label {
+      color: var(--text-dim);
+      font-size: 11px;
+      font-weight: 800;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
     .stat-value {
       margin-top: 4px;
       font-family: 'JetBrains Mono', monospace;
       font-size: 13px;
       font-weight: 600;
-      word-break: break-all;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .balance-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.8fr);
+      gap: 12px;
+      padding: 16px 18px;
+    }
+    .balance-card {
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      background: var(--surface-2);
+      padding: 14px;
+      min-width: 0;
+      animation: modelRightIn 460ms cubic-bezier(0.18, 0.92, 0.18, 1) both;
+    }
+    .balance-card:nth-child(1) { animation-delay: 120ms; }
+    .balance-card:nth-child(2) { animation-delay: 180ms; }
+    .balance-card .big {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 24px;
+      font-weight: 800;
+      margin-top: 6px;
+    }
+    .balance-list {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .balance-item {
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: color-mix(in srgb, var(--surface) 42%, transparent);
+      padding: 0 10px;
+      min-width: 0;
+      height: 86px;
+      display: grid;
+      grid-template-rows: 1fr auto 9px auto 1fr;
+      text-align: center;
+      animation: balanceItemIn 420ms cubic-bezier(0.18, 0.92, 0.18, 1) both;
+      animation-delay: var(--balance-delay, 220ms);
+    }
+    body.model-data-leaving .balance-card,
+    body.model-data-leaving .balance-item {
+      animation: balanceItemOut 180ms cubic-bezier(0.44, 0, 0.72, 0.18) both;
+    }
+    .balance-item-label {
+      grid-row: 2;
+      color: var(--text-dim);
+      font-size: 11px;
+      font-weight: 900;
+      line-height: 1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .balance-item-value {
+      grid-row: 4;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: clamp(16px, 1.8vw, 22px);
+      font-weight: 800;
+      line-height: 1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
     pre {
       margin: 0;
@@ -164,6 +403,11 @@
     }
     @media (max-width: 900px) {
       .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .balance-grid { grid-template-columns: 1fr; }
+      .balance-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .provider-meta { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .provider-form { grid-template-columns: 1fr; }
+      .provider-form .wide { grid-column: auto; }
       header { padding: 12px 14px; }
       main { width: min(100vw - 20px, 1180px); }
     }
@@ -171,7 +415,7 @@
 </head>
 <body>
   <header>
-    <div class="brand"><span class="brand-dot"></span><span>LLM 请求体</span></div>
+    <div class="brand"><span class="brand-dot"></span><span>模型数据面板</span></div>
     <div class="actions">
       <button class="btn" id="refreshBtn" type="button">刷新</button>
       <button class="btn" id="copyBtn" type="button">复制 JSON</button>
@@ -179,6 +423,74 @@
     </div>
   </header>
   <main>
+    <section class="panel">
+      <div class="panel-head">
+        <div>
+          <div class="panel-title" id="balanceTitle">模型账户余额</div>
+          <div class="muted" id="balanceMeta">等待查询...</div>
+        </div>
+        <div class="muted" id="balanceState">未加载</div>
+      </div>
+      <div class="provider-tabs" id="providerTabs" aria-label="模型供应商"></div>
+      <div class="provider-meta" id="providerMeta"></div>
+      <div class="provider-form">
+        <div>
+          <label for="providerKey">Provider Key</label>
+          <input id="providerKey" placeholder="custom-openai" />
+        </div>
+        <div>
+          <label for="providerLabel">显示名称</label>
+          <input id="providerLabel" placeholder="Custom" />
+        </div>
+        <div>
+          <label for="providerAdapter">调用链路</label>
+          <select id="providerAdapter">
+            <option value="openai_compatible">OpenAI-compatible</option>
+            <option value="google_generate_content">Google Gemini</option>
+            <option value="anthropic_messages">Anthropic Messages</option>
+          </select>
+        </div>
+        <div class="wide">
+          <label for="providerBaseUrl">Base URL</label>
+          <input id="providerBaseUrl" placeholder="https://api.example.com/v1" />
+        </div>
+        <div>
+          <label for="providerChatPath">路径</label>
+          <input id="providerChatPath" placeholder="/chat/completions 或 /v1/messages 或 /models/{model}:generateContent" />
+        </div>
+        <div>
+          <label for="providerApiKeyEnv">Key 环境变量</label>
+          <input id="providerApiKeyEnv" placeholder="OPENAI_API_KEY" />
+        </div>
+        <div>
+          <label for="providerApiKey">Key（可选）</label>
+          <input id="providerApiKey" placeholder="留空则用环境变量" />
+        </div>
+        <div>
+          <label for="newModelId">模型 ID</label>
+          <input id="newModelId" placeholder="模型真实 ID" />
+        </div>
+        <div>
+          <label for="newModelLabel">模型命名</label>
+          <input id="newModelLabel" placeholder="前端显示名" />
+        </div>
+        <div class="form-actions">
+          <button class="btn" id="saveProviderBtn" type="button">保存</button>
+          <button class="btn" id="addModelBtn" type="button">添加模型</button>
+        </div>
+      </div>
+      <div class="model-pills" id="modelPills"></div>
+      <div class="balance-grid">
+        <div class="balance-card">
+          <div class="stat-label">账户状态</div>
+          <div class="big" id="balanceAvailable">-</div>
+          <div class="muted" id="balanceKey">-</div>
+        </div>
+        <div class="balance-card">
+          <div class="balance-list" id="balanceList"></div>
+        </div>
+      </div>
+    </section>
     <section class="panel">
       <div class="panel-head">
         <div>
@@ -192,7 +504,7 @@
     <section class="panel">
       <div class="panel-head">
         <div class="panel-title">Payload JSON</div>
-        <div class="muted">包含实际写入 LLM 请求的 messages/tools/extra_body</div>
+        <div class="muted">包含实际写入 LLM 请求的 messages/tools/thinking</div>
       </div>
       <pre id="payloadView">正在加载...</pre>
     </section>
@@ -200,6 +512,8 @@
   <script>
     const AUTH_TOKEN_KEY = "ta_auth_token";
     let latestPayloadText = "";
+    let currentProvider = "deepseek";
+    let providerRows = [];
 
     function getAuthToken() {
       const current = String(sessionStorage.getItem(AUTH_TOKEN_KEY) || "").trim();
@@ -219,6 +533,167 @@
       return fetch(url, { ...options, headers });
     }
 
+    function providerLabel(provider) {
+      return String(provider?.label || provider?.name || provider?.key || "DPSK");
+    }
+
+    function currentProviderRow() {
+      return providerRows.find((item) => item?.key === currentProvider) || providerRows[0] || {};
+    }
+
+    function renderProviderTabs() {
+      const tabs = document.getElementById("providerTabs");
+      if (!tabs) return;
+      const rows = providerRows.length ? providerRows : [{ key: "deepseek", label: "DPSK", name: "DeepSeek" }];
+      tabs.innerHTML = rows.map((provider) => {
+        const key = String(provider?.key || "deepseek");
+        const active = key === currentProvider ? " active" : "";
+        return `<button class="provider-tab${active}" type="button" data-provider="${escapeHtml(key)}">${escapeHtml(providerLabel(provider))}</button>`;
+      }).join("");
+    }
+
+    function fillProviderForm(provider) {
+      const row = provider || currentProviderRow();
+      const set = (id, value) => {
+        const node = document.getElementById(id);
+        if (node) node.value = String(value || "");
+      };
+      set("providerKey", row.key || "");
+      set("providerLabel", row.label || row.name || "");
+      set("providerAdapter", row.adapter || "openai_compatible");
+      set("providerBaseUrl", row.base_url || "");
+      set("providerChatPath", row.chat_path || "");
+      set("providerApiKeyEnv", row.api_key_env || "");
+      set("providerApiKey", "");
+    }
+
+    function renderModelPills(provider) {
+      const wrap = document.getElementById("modelPills");
+      if (!wrap) return;
+      const rows = Array.isArray(provider?.models) ? provider.models : [];
+      if (!rows.length) {
+        wrap.innerHTML = `<span class="muted">当前提供商还没有模型。</span>`;
+        return;
+      }
+      wrap.innerHTML = rows.map((model) => {
+        const id = String(model?.id || "").trim();
+        const label = String(model?.label || id);
+        return `<span class="model-pill" title="${escapeHtml(id)}"><span>${escapeHtml(label)}</span><button type="button" data-remove-model="${escapeHtml(id)}">×</button></span>`;
+      }).join("");
+    }
+
+    function renderProviderMeta(provider) {
+      const meta = document.getElementById("providerMeta");
+      const title = document.getElementById("balanceTitle");
+      if (!meta) return;
+      const row = provider || providerRows.find((item) => item?.key === currentProvider) || {};
+      if (title) title.textContent = `${providerLabel(row)} 账户余额`;
+      const cells = [
+        ["供应商", row.name || providerLabel(row)],
+        ["当前模型", row.model || "-"],
+        ["API Root", row.api_root || "-"],
+        ["余额能力", row.balance_supported ? "支持" : "不支持"],
+      ];
+      meta.innerHTML = cells.map(([label, value]) => (
+        `<div class="provider-meta-item"><div class="provider-meta-label">${escapeHtml(label)}</div><div class="provider-meta-value" title="${escapeHtml(value)}">${escapeHtml(value)}</div></div>`
+      )).join("");
+      fillProviderForm(row);
+      renderModelPills(row);
+    }
+
+    async function loadProviders() {
+      try {
+        const res = await apiFetch("/model-data/providers");
+        const data = await res.json();
+        if (!res.ok || data?.ok === false) throw new Error(String(data?.error || `HTTP ${res.status}`));
+        providerRows = Array.isArray(data.providers) ? data.providers : [];
+        currentProvider = String(data.current_provider || providerRows[0]?.key || "deepseek");
+      } catch {
+        providerRows = [{ key: "deepseek", label: "DPSK", name: "DeepSeek", balance_supported: true }];
+        currentProvider = "deepseek";
+      }
+      renderProviderTabs();
+      renderProviderMeta(providerRows.find((item) => item?.key === currentProvider));
+    }
+
+    async function saveProvider() {
+      const key = String(document.getElementById("providerKey")?.value || "").trim();
+      if (!key) {
+        document.getElementById("balanceState").textContent = "Provider Key 不能为空";
+        return;
+      }
+      const payload = {
+        key,
+        label: String(document.getElementById("providerLabel")?.value || key).trim(),
+        name: String(document.getElementById("providerLabel")?.value || key).trim(),
+        adapter: String(document.getElementById("providerAdapter")?.value || "openai_compatible").trim(),
+        base_url: String(document.getElementById("providerBaseUrl")?.value || "").trim(),
+        chat_path: String(document.getElementById("providerChatPath")?.value || "").trim(),
+        api_key_env: String(document.getElementById("providerApiKeyEnv")?.value || "").trim(),
+        api_key: String(document.getElementById("providerApiKey")?.value || "").trim(),
+        enabled: true,
+      };
+      try {
+        const res = await apiFetch("/model-data/providers", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (!res.ok || data?.ok === false) throw new Error(String(data?.error || `HTTP ${res.status}`));
+        providerRows = Array.isArray(data.providers) ? data.providers : providerRows;
+        currentProvider = key;
+        renderProviderTabs();
+        renderProviderMeta(currentProviderRow());
+        document.getElementById("balanceState").textContent = "已保存";
+      } catch (e) {
+        document.getElementById("balanceState").textContent = `保存失败：${String(e?.message || e)}`;
+      }
+    }
+
+    async function addModel() {
+      const modelId = String(document.getElementById("newModelId")?.value || "").trim();
+      const label = String(document.getElementById("newModelLabel")?.value || modelId).trim();
+      if (!modelId) {
+        document.getElementById("balanceState").textContent = "模型 ID 不能为空";
+        return;
+      }
+      try {
+        const res = await apiFetch("/model-data/models", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ provider: currentProvider, model_id: modelId, label }),
+        });
+        const data = await res.json();
+        if (!res.ok || data?.ok === false) throw new Error(String(data?.error || `HTTP ${res.status}`));
+        providerRows = Array.isArray(data.providers) ? data.providers : providerRows;
+        document.getElementById("newModelId").value = "";
+        document.getElementById("newModelLabel").value = "";
+        renderProviderTabs();
+        renderProviderMeta(currentProviderRow());
+        document.getElementById("balanceState").textContent = "已添加模型";
+      } catch (e) {
+        document.getElementById("balanceState").textContent = `添加失败：${String(e?.message || e)}`;
+      }
+    }
+
+    async function removeModel(modelId) {
+      if (!modelId) return;
+      try {
+        const res = await apiFetch(`/model-data/models?provider=${encodeURIComponent(currentProvider)}&model_id=${encodeURIComponent(modelId)}`, {
+          method: "DELETE",
+        });
+        const data = await res.json();
+        if (!res.ok || data?.ok === false) throw new Error(String(data?.error || `HTTP ${res.status}`));
+        providerRows = Array.isArray(data.providers) ? data.providers : providerRows;
+        renderProviderTabs();
+        renderProviderMeta(currentProviderRow());
+        document.getElementById("balanceState").textContent = "已删除模型";
+      } catch (e) {
+        document.getElementById("balanceState").textContent = `删除失败：${String(e?.message || e)}`;
+      }
+    }
+
     function setStats(summary) {
       const rows = [
         ["模型", summary.model || "-"],
@@ -228,13 +703,57 @@
         ["工具数", summary.tool_count ?? 0],
         ["Payload 字符", summary.payload_chars ?? 0],
         ["内容字符", summary.content_chars ?? 0],
-        ["估算 token", summary.estimated_tokens ?? 0],
+        ["上下文 token", summary.request_tokens ?? summary.estimated_tokens ?? 0],
+        ["Payload token", summary.payload_tokens ?? 0],
+        ["消息 token", summary.message_tokens ?? 0],
+        ["工具 token", summary.tool_tokens ?? 0],
+        ["计数来源", summary.token_source || "-"],
+        ["输出 token", summary.response_completion_tokens ?? "-"],
+        ["总 token", summary.response_total_tokens ?? "-"],
+        ["计数器", summary.tokenizer_engine || "-"],
+        ["官方文件", summary.tokenizer_official_files ? "true" : "false"],
         ["温度", summary.temperature ?? "-"],
         ["工具策略", summary.tool_choice ?? "-"],
         ["时间", summary.ts || "-"],
       ];
       document.getElementById("stats").innerHTML = rows.map(([label, value]) => (
         `<div class="stat"><div class="stat-label">${escapeHtml(label)}</div><div class="stat-value">${escapeHtml(String(value))}</div></div>`
+      )).join("");
+    }
+
+    function setBalance(data) {
+      const state = document.getElementById("balanceState");
+      const meta = document.getElementById("balanceMeta");
+      const available = document.getElementById("balanceAvailable");
+      const key = document.getElementById("balanceKey");
+      const list = document.getElementById("balanceList");
+      renderProviderMeta(data);
+      if (!data || data.ok === false) {
+        state.textContent = "失败";
+        meta.textContent = data?.api_root || "";
+        available.textContent = "不可用";
+        key.textContent = data?.key_masked ? `Key ${data.key_masked}` : "-";
+        list.innerHTML = `<div class="muted">${escapeHtml(String(data?.error || "余额查询失败"))}</div>`;
+        return;
+      }
+      state.textContent = "已加载";
+      meta.textContent = data.api_root || "";
+      available.textContent = data.is_available ? "可用" : "不可用";
+      key.textContent = data.key_masked ? `Key ${data.key_masked}` : "-";
+      const infos = Array.isArray(data.balance_infos) ? data.balance_infos : [];
+      if (!infos.length) {
+        list.innerHTML = `<div class="muted">暂无余额明细</div>`;
+        return;
+      }
+      const info = infos[0] || {};
+      const rows = [
+        ["币种", info?.currency ?? "-"],
+        ["总额", info?.total_balance ?? "-"],
+        ["赠金", info?.granted_balance ?? "-"],
+        ["充值", info?.topped_up_balance ?? "-"],
+      ];
+      list.innerHTML = rows.map(([label, value], index) => (
+        `<div class="balance-item" style="--balance-delay:${220 + index * 70}ms"><div class="balance-item-label">${escapeHtml(label)}</div><div class="balance-item-value">${escapeHtml(value)}</div></div>`
       )).join("");
     }
 
@@ -254,7 +773,7 @@
       const logPath = document.getElementById("logPath");
       state.textContent = "加载中...";
       try {
-        const res = await apiFetch("/llm-request/latest");
+        const res = await apiFetch("/model-data/latest");
         const data = await res.json();
         if (!res.ok || data?.ok === false) throw new Error(String(data?.error || `HTTP ${res.status}`));
         logPath.textContent = data.log_file || "";
@@ -276,7 +795,38 @@
       }
     }
 
-    document.getElementById("refreshBtn").addEventListener("click", loadLatest);
+    async function loadBalance() {
+      const state = document.getElementById("balanceState");
+      state.textContent = "查询中...";
+      try {
+        const res = await apiFetch(`/model-data/balance?provider=${encodeURIComponent(currentProvider)}`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(String(data?.error || `HTTP ${res.status}`));
+        setBalance(data);
+      } catch (e) {
+        setBalance({ ok: false, error: String(e?.message || e) });
+      }
+    }
+
+    document.getElementById("refreshBtn").addEventListener("click", () => {
+      loadLatest();
+      loadProviders().then(loadBalance);
+    });
+    document.getElementById("providerTabs")?.addEventListener("click", (event) => {
+      const btn = event.target?.closest?.("button[data-provider]");
+      if (!btn) return;
+      currentProvider = String(btn.dataset.provider || "deepseek");
+      renderProviderTabs();
+      renderProviderMeta(providerRows.find((item) => item?.key === currentProvider));
+      loadBalance();
+    });
+    document.getElementById("saveProviderBtn")?.addEventListener("click", saveProvider);
+    document.getElementById("addModelBtn")?.addEventListener("click", addModel);
+    document.getElementById("modelPills")?.addEventListener("click", (event) => {
+      const btn = event.target?.closest?.("button[data-remove-model]");
+      if (!btn) return;
+      removeModel(btn.getAttribute("data-remove-model") || "");
+    });
     document.getElementById("copyBtn").addEventListener("click", async () => {
       if (!latestPayloadText) return;
       try {
@@ -286,7 +836,17 @@
         document.getElementById("loadState").textContent = "复制失败";
       }
     });
+    document.querySelectorAll('a[href="/app"]').forEach((link) => {
+      link.addEventListener("click", (event) => {
+        event.preventDefault();
+        document.body.classList.add("model-data-leaving");
+        window.setTimeout(() => {
+          window.location.href = link.getAttribute("href") || "/app";
+        }, 340);
+      });
+    });
     loadLatest();
+    loadProviders().then(loadBalance);
   </script>
   <script src="/theme_toggle.js"></script>
 </body>
