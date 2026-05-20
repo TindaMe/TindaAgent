@@ -12,6 +12,7 @@ from openai import OpenAI
 
 from TindaAgent.Process.AI.client import (
     LLMClient,
+    _build_tool_limit_system_message,
     _parse_json,
     _result_has_pending_confirmation,
     _tool_failed,
@@ -20,7 +21,9 @@ from TindaAgent.Process.AI.client import (
     record_llm_response_usage,
 )
 from TindaAgent.Process.AI.providers import (
+    MAX_TOOL_STEPS_LIMIT,
     load_llm_provider_config,
+    provider_request_params,
     public_provider,
     remove_model,
     resolve_api_key,
@@ -159,15 +162,15 @@ class MultiProviderToolClient:
     def model(self) -> str:
         return self._dispatcher.current_model
 
-    def chat(self, messages: list[dict], temperature: float = 0.7) -> str:
+    def chat(self, messages: list[dict], temperature: float | None = None) -> str:
         return self._dispatcher.chat(messages, temperature=temperature)
 
     def chat_with_tools(
         self,
         messages: list[dict],
         user_perm: int,
-        temperature: float = 0.7,
-        max_tool_steps: int = 6,
+        temperature: float | None = None,
+        max_tool_steps: int | None = None,
         session_id: str = "",
     ) -> dict:
         provider = self._dispatcher.current_provider
@@ -195,8 +198,8 @@ class MultiProviderToolClient:
         self,
         messages: list[dict],
         user_perm: int,
-        temperature: float = 0.7,
-        max_tool_steps: int = 6,
+        temperature: float | None = None,
+        max_tool_steps: int | None = None,
         session_id: str = "",
     ):
         provider = self._dispatcher.current_provider
@@ -227,8 +230,8 @@ class MultiProviderToolClient:
         self,
         messages: list[dict],
         user_perm: int,
-        temperature: float,
-        max_tool_steps: int,
+        temperature: float | None,
+        max_tool_steps: int | None,
         base_len: int,
         func: str,
         *,
@@ -237,13 +240,13 @@ class MultiProviderToolClient:
         msgs = [m.copy() if isinstance(m, dict) else m for m in messages]
         trace: list[dict] = []
         steps = 0
+        max_tool_steps = self._dispatcher.effective_max_tool_steps(max_tool_steps)
         while True:
-            force_finalize = steps >= max_tool_steps - 1 and len(trace) > 0
             text, calls, reasoning, usage = self._provider_tool_completion(
                 msgs,
                 user_perm=user_perm,
                 temperature=temperature,
-                force_finalize=force_finalize,
+                force_finalize=False,
                 func=func,
             )
             if not calls:
@@ -254,6 +257,24 @@ class MultiProviderToolClient:
                 if return_working:
                     return text, msgs, steps, trace
                 return text, msgs[base_len:], steps, trace
+
+            if steps >= max_tool_steps:
+                msgs.append(_build_tool_limit_system_message(trace))
+                final_text, _final_calls, final_reasoning, _usage = self._provider_tool_completion(
+                    msgs,
+                    user_perm=user_perm,
+                    temperature=temperature,
+                    force_finalize=True,
+                    func=f"{func}.tool_limit_finalize",
+                )
+                final_text = str(final_text or "").strip() or _build_tool_limit_fallback(trace)
+                msg_out = {"role": "assistant", "content": final_text}
+                if final_reasoning:
+                    msg_out["reasoning_content"] = final_reasoning
+                msgs.append(msg_out)
+                if return_working:
+                    return final_text, msgs, steps, trace
+                return final_text, msgs[base_len:], steps, trace
 
             normalized_calls = []
             for idx, call in enumerate(calls):
@@ -282,12 +303,6 @@ class MultiProviderToolClient:
                 if return_working:
                     return pending_reply, msgs, steps, trace
                 return pending_reply, msgs[base_len:], steps, trace
-            if steps >= max_tool_steps:
-                fallback = _build_tool_limit_fallback(trace)
-                msgs.append({"role": "assistant", "content": fallback})
-                if return_working:
-                    return fallback, msgs, steps, trace
-                return fallback, msgs[base_len:], steps, trace
 
     def _run_tools(self, tool_calls: list[dict], user_perm: int, msgs: list[dict], trace: list[dict], func: str) -> tuple[list[dict], bool]:
         steps: list[dict] = []
@@ -334,7 +349,7 @@ class MultiProviderToolClient:
         msgs: list[dict],
         *,
         user_perm: int,
-        temperature: float,
+        temperature: float | None,
         force_finalize: bool,
         func: str,
     ) -> tuple[str, list[dict], str, Any]:
@@ -354,7 +369,7 @@ class MultiProviderToolClient:
         msgs: list[dict],
         *,
         user_perm: int,
-        temperature: float,
+        temperature: float | None,
         force_finalize: bool,
         func: str,
     ) -> tuple[str, list[dict], str, Any]:
@@ -397,7 +412,7 @@ class MultiProviderToolClient:
         msgs: list[dict],
         *,
         user_perm: int,
-        temperature: float,
+        temperature: float | None,
         force_finalize: bool,
         func: str,
     ) -> tuple[str, list[dict], str, Any]:
@@ -437,7 +452,7 @@ class MultiProviderToolClient:
                     })
         return "\n".join(x for x in text_parts if x).strip(), calls, "", usage
 
-    def _anthropic_messages_body(self, provider: dict[str, Any], msgs: list[dict], *, temperature: float, tools: list[dict]) -> dict[str, Any]:
+    def _anthropic_messages_body(self, provider: dict[str, Any], msgs: list[dict], *, temperature: float | None, tools: list[dict]) -> dict[str, Any]:
         system_parts: list[str] = []
         out_messages: list[dict[str, Any]] = []
         for msg in msgs:
@@ -461,12 +476,15 @@ class MultiProviderToolClient:
                         "content": str(msg.get("content", "")),
                     }],
                 })
+        params = self._dispatcher.request_params_for_provider(provider)
         body: dict[str, Any] = {
             "model": str(provider.get("current_model") or provider.get("default_model") or ""),
             "messages": out_messages,
-            "max_tokens": 1200,
-            "temperature": float(temperature),
+            "max_tokens": int(params.get("max_tokens") or 1200),
+            "temperature": self._dispatcher.effective_temperature(temperature, provider=provider),
         }
+        if params.get("top_p") is not None:
+            body["top_p"] = float(params.get("top_p"))
         if system_parts:
             body["system"] = "\n\n".join(system_parts)
         if tools:
@@ -495,7 +513,7 @@ class MultiProviderToolClient:
         msgs: list[dict],
         *,
         user_perm: int,
-        temperature: float,
+        temperature: float | None,
         force_finalize: bool,
     ) -> dict[str, Any]:
         contents: list[dict[str, Any]] = []
@@ -535,12 +553,16 @@ class MultiProviderToolClient:
                 })
             if parts:
                 contents.append({"role": "model" if role == "assistant" else "user", "parts": parts})
+        params = self._dispatcher.request_params_for_provider(provider)
+        generation_config: dict[str, Any] = {
+            "temperature": self._dispatcher.effective_temperature(temperature, provider=provider),
+            "maxOutputTokens": int(params.get("max_tokens") or 1200),
+        }
+        if params.get("top_p") is not None:
+            generation_config["topP"] = float(params.get("top_p"))
         body: dict[str, Any] = {
             "contents": contents,
-            "generationConfig": {
-                "temperature": float(temperature),
-                "maxOutputTokens": 1200,
-            },
+            "generationConfig": generation_config,
         }
         if not force_finalize:
             body["tools"] = [{"functionDeclarations": self._google_function_declarations(user_perm)}]
@@ -615,6 +637,7 @@ class LlmDispatcher:
             self._primary_client.api_key = self.api_key
             self._primary_client.base_url = self.base_url
             self._primary_client.model = self._deepseek_model
+            self._primary_client.configure_request_params(provider_request_params(deepseek))
 
     @staticmethod
     def normalize_provider(raw: object = None) -> str:
@@ -636,10 +659,12 @@ class LlmDispatcher:
     @property
     def primary_client(self) -> LLMClient:
         if self._primary_client is None:
+            deepseek = self._provider("deepseek")
             self._primary_client = LLMClient(
                 api_key=self.api_key,
                 base_url=self.base_url,
                 model=self._deepseek_model,
+                request_params=provider_request_params(deepseek),
             )
         return self._primary_client
 
@@ -708,8 +733,43 @@ class LlmDispatcher:
                 api_key=api_key,
                 base_url=base_url,
                 model=target_model,
+                request_params=provider_request_params(row),
             )
-        return self._clients[cache_key]
+        client = self._clients[cache_key]
+        client.configure_request_params(provider_request_params(row))
+        return client
+
+    def request_params_for_provider(self, provider: str | dict[str, Any] | None = None) -> dict[str, Any]:
+        row = provider if isinstance(provider, dict) else self._provider(provider or self._current_provider)
+        return provider_request_params(row)
+
+    def effective_temperature(self, value: float | None = None, *, provider: str | dict[str, Any] | None = None) -> float:
+        if value is not None:
+            try:
+                parsed = float(value)
+                if 0 <= parsed <= 2:
+                    return parsed
+            except Exception:
+                pass
+        params = self.request_params_for_provider(provider)
+        try:
+            return float(params.get("temperature"))
+        except Exception:
+            return 0.7
+
+    def effective_max_tool_steps(self, value: int | None = None, *, provider: str | dict[str, Any] | None = None) -> int:
+        if value is not None:
+            try:
+                parsed = int(value)
+                if 1 <= parsed <= MAX_TOOL_STEPS_LIMIT:
+                    return parsed
+            except Exception:
+                pass
+        params = self.request_params_for_provider(provider)
+        try:
+            return int(params.get("max_tool_steps") or 6)
+        except Exception:
+            return 6
 
     def switch_model(self, model: str, *, provider: str = "deepseek") -> LLMClient:
         provider_key = self.normalize_provider(provider)
@@ -734,7 +794,7 @@ class LlmDispatcher:
         model: str | None = None,
         provider: str = "deepseek",
         purpose: str = "chat",
-        temperature: float = 0.7,
+        temperature: float | None = None,
     ) -> str:
         return self.get_client(model=model, provider=provider, purpose=purpose).chat(messages, temperature=temperature)
 
@@ -754,6 +814,7 @@ class LlmDispatcher:
         if not target_model:
             raise ValueError("missing llm model")
         request_payload["model"] = target_model
+        self._apply_provider_request_defaults(row, request_payload, stream=stream)
         if adapter == "openai_compatible":
             return self._create_openai_compatible(row, request_payload, purpose=purpose, stream=stream)
         if adapter == "anthropic_messages":
@@ -761,6 +822,25 @@ class LlmDispatcher:
         if adapter == "google_generate_content":
             return self._create_google(row, request_payload, purpose=purpose)
         raise ValueError(f"unsupported llm adapter: {adapter}")
+
+    def _apply_provider_request_defaults(self, provider: dict[str, Any], payload: dict[str, Any], *, stream: bool = False) -> dict[str, Any]:
+        params = self.request_params_for_provider(provider)
+        payload.setdefault("temperature", self.effective_temperature(None, provider=provider))
+        for key in ("top_p", "presence_penalty", "frequency_penalty", "max_tokens", "seed"):
+            value = params.get(key)
+            if value is not None:
+                payload.setdefault(key, value)
+        if params.get("timeout"):
+            payload.setdefault("timeout", int(params.get("timeout")))
+        tools = payload.get("tools")
+        if params.get("tool_choice") and isinstance(tools, list) and tools:
+            payload.setdefault("tool_choice", params.get("tool_choice"))
+        if params.get("reasoning_effort"):
+            payload.setdefault("reasoning_effort", params.get("reasoning_effort"))
+        extra_body = params.get("extra_body")
+        if isinstance(extra_body, dict) and extra_body:
+            payload.setdefault("extra_body", extra_body)
+        return payload
 
     def _create_openai_compatible(self, provider: dict[str, Any], payload: dict[str, Any], *, purpose: str, stream: bool) -> Any:
         api_key = resolve_api_key(provider)

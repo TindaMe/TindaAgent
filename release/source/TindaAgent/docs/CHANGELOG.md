@@ -12,19 +12,30 @@
 - **工具跳过后端接口** — 新增 `POST /sessions/{sid}/tool-calls/{tool_call_id}/skip`，前端 `toolskip:` 动作统一转发到后端，由当前会话的 Agent/LLM client 消费跳过请求。
 - **工具执行进程可取消** — `run_terminal` 从阻塞式 `subprocess.run()` 调整为 `subprocess.Popen()` 执行，工具 call_id 与运行中进程绑定；用户跳过时向进程发送终止信号并返回结构化 `user_skipped` 结果。
 - **会话级工具调度上下文** — Agent、LLMClient 与 MultiProviderToolClient 支持透传 `session_id`，工具跳过、heartbeat 和工具执行状态可按会话隔离，避免不同会话工具状态串扰。
+- **模型调用参数面板** — 模型数据面板新增可编辑调用参数区，支持 `temperature`、`top_p`、presence/frequency penalty、`max_tokens`、`seed`、`timeout`、`tool_choice`、`max_tool_steps`、Thinking 与 Reasoning Effort，保存后写入 provider 配置并影响后续真实 LLM 请求。
+- **模型数据悬浮提示** — 供应商标签、provider 配置项、模型胶囊、调用参数、余额明细和最近请求统计项增加 hover title，截断名称可查看完整值与字段作用。
 
 ### Changed
 
 - **版本提升** — 项目版本从 `1.8.3` 提升到 `1.9.0`，同步更新 Web 版本徽章、设置页 fallback、Chat fallback 和主题脚本标识。
 - **长工具调用交互策略** — 长工具调用不再依赖固定超时或前端拦截，改为“heartbeat/progress 持续反馈 + 用户显式跳过”的控制模型，保留长任务能力同时给用户可见进度和退出手段。
 - **工具循环跳过收束** — LLM 工具循环消费到 `user_skipped` 后会优雅结束当前工具链路，并向会话写入“工具调用已被用户跳过”的 assistant fallback，避免继续等待已取消工具。
+- **标准 Agent 工具轮回** — 工具循环改为模型主导：LLM 返回 `tool_calls` 就执行工具并回填结果，LLM 不再返回 `tool_calls` 才结束；不再用 `max_tool_steps - 1` 提前禁工具。
+- **工具上限语义调整** — `max_tool_steps` 表示可完整执行的工具轮次；只有执行满上限后模型仍继续请求工具时，后端才注入上限说明并以 `tool_choice=none` 做最终总结。
+- **工具轮次上限放宽** — provider 配置、OpenAI-compatible client、dispatcher 与模型数据面板统一支持 `max_tool_steps` 范围 `1~900`，避免 900 被前端或后端截断为 20/6。
+- **Provider 参数贯通** — Web Chat 主链路默认读取 provider 级调用参数；DeepSeek 默认保留 Thinking enabled 与 Reasoning max，CLI 显式温度调用保持兼容。
 
 ### Fixed
 
 - **context-usage 首轮 404 竞态** — 修复真实 session 刚创建但 meta 尚未落盘时 `/sessions/{sid}/context-usage` 返回 404 的问题；live agent 存在时后端会兜底返回空 usage，前端首轮创建阶段也会跳过过早轮询。
 - **工具跳过 ID 映射** — 工具模型侧 `tool_call_id` 与内部审计 `call_id` 建立 alias 绑定，前端跳过动作可在工具开始前、执行中或 ID 刚生成后正确命中同一次工具调用。
 - **工具跳过渲染安全** — Markdown 渲染器允许 `toolskip:` 作为受控安全链接，由 document click 统一拦截处理，避免把跳过动作当普通外链或危险协议渲染。
+- **运行中工具跳过假生效** — 修复 skip 只更新前端状态、不打断后端工具等待的问题；流式工具 runner 现在会立即写入 `user_skipped` tool result，让 LLM 收到跳过事实后继续换方案或总结。
+- **跳过后后台结果覆盖** — 跳过执行中的工具后，后台线程返回的 late result 会被标记废弃，不再覆盖会话消息、工具 trace 或继续执行同一轮剩余工具。
+- **工具上限提前收工** — 修复工具循环在接近上限时提前关闭工具的问题；`max_tool_steps=1` 也会完整执行一轮工具，只有下一轮模型继续请求工具时才触发上限收束。
+- **请求摘要参数缺失** — 最近一次真实 SDK 请求摘要补充展示 `top_p`、`max_tokens`、Thinking 类型和 Reasoning Effort，便于核对模型参数是否真实写入。
 - **自动化覆盖** — 增加 context-usage live session 兜底测试和 tool skip 消费测试，并补充长终端跳过 smoke 验证，覆盖本轮 Agent 集群工具控制链路。
+- **工具循环自动化覆盖** — 增加运行中 skip 立即返回、provider 参数 900 上限保留、工具预算完整使用后再 finalize 的回归测试。
 
 ## v1.8.3 - 2026-05-17
 

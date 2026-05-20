@@ -157,7 +157,7 @@ class Agent:
             self._client = LLMClient()
         return self._client
 
-    def _chat_with_tools(self, messages: list[dict], user_perm: int, temperature: float = 0.7) -> dict:
+    def _chat_with_tools(self, messages: list[dict], user_perm: int, temperature: float | None = None) -> dict:
         client = self._ensure_client()
         kwargs = {
             "user_perm": user_perm,
@@ -174,7 +174,7 @@ class Agent:
             kwargs.pop("session_id", None)
             return client.chat_with_tools(messages, **kwargs)
 
-    def _stream_chat_with_tools(self, messages: list[dict], user_perm: int, temperature: float = 0.7) -> Iterator[dict]:
+    def _stream_chat_with_tools(self, messages: list[dict], user_perm: int, temperature: float | None = None) -> Iterator[dict]:
         client = self._ensure_client()
         kwargs = {
             "user_perm": user_perm,
@@ -205,7 +205,7 @@ class Agent:
             return True
         return False
 
-    def chat(self, user_message: str, temperature: float = 0.7) -> str:
+    def chat(self, user_message: str, temperature: float | None = None) -> str:
         """
         用处： 发起一次多轮对话，自动维护历史
 
@@ -230,7 +230,7 @@ class Agent:
         self._trim_history()
         return reply
 
-    def chat_with_meta(self, user_message: str, temperature: float = 0.7) -> dict:
+    def chat_with_meta(self, user_message: str, temperature: float | None = None) -> dict:
         """
         用处：发起对话并返回回复 + 工具轨迹元信息（给 Web 层调试展示）
         """
@@ -271,7 +271,7 @@ class Agent:
             "pending_confirmation": self._held_messages is not None,
         }
 
-    def stream_chat_events(self, user_message: str, temperature: float = 0.7) -> Iterator[dict]:
+    def stream_chat_events(self, user_message: str, temperature: float | None = None) -> Iterator[dict]:
         """
         用处：流式返回本轮对话事件，并在结束时写回历史
         """
@@ -398,7 +398,7 @@ class Agent:
         result = self._chat_with_tools(
             request_messages,
             user_perm=self._held_perm,
-            temperature=0.7,
+            temperature=None,
         )
         msgs.pop()
         delta = result.get("history_delta", [])

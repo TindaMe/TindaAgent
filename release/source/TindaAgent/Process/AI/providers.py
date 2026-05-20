@@ -12,6 +12,7 @@ from TindaAgent.Process.Architecture.paths import get_system_root
 
 _CONFIG_FILE = get_system_root() / "llm_providers.json"
 _LOCK = threading.Lock()
+MAX_TOOL_STEPS_LIMIT = 900
 
 _DEFAULT_MODELS = [
     {"id": "deepseek-chat", "label": "deepseek-chat"},
@@ -40,6 +41,17 @@ _DEFAULT_CONFIG: dict[str, Any] = {
             "request_log_supported": True,
             "tool_call_supported": True,
             "tokenizer": "deepseek_official",
+            "temperature": 0.7,
+            "top_p": None,
+            "presence_penalty": None,
+            "frequency_penalty": None,
+            "max_tokens": None,
+            "seed": None,
+            "timeout": 25,
+            "tool_choice": "auto",
+            "max_tool_steps": 6,
+            "thinking_enabled": True,
+            "thinking_type": "enabled",
             "reasoning_effort": "max",
             "extra_body": {"thinking": {"type": "enabled"}},
             "models": deepcopy(_DEFAULT_MODELS),
@@ -60,6 +72,19 @@ _DEFAULT_CONFIG: dict[str, Any] = {
             "request_log_supported": True,
             "tool_call_supported": True,
             "tokenizer": "provider",
+            "temperature": 0.7,
+            "top_p": None,
+            "presence_penalty": None,
+            "frequency_penalty": None,
+            "max_tokens": None,
+            "seed": None,
+            "timeout": 25,
+            "tool_choice": "auto",
+            "max_tool_steps": 6,
+            "thinking_enabled": False,
+            "thinking_type": "",
+            "reasoning_effort": "",
+            "extra_body": {},
             "models": [],
         },
         "google": {
@@ -79,6 +104,19 @@ _DEFAULT_CONFIG: dict[str, Any] = {
             "request_log_supported": True,
             "tool_call_supported": True,
             "tokenizer": "provider",
+            "temperature": 0.7,
+            "top_p": None,
+            "presence_penalty": None,
+            "frequency_penalty": None,
+            "max_tokens": None,
+            "seed": None,
+            "timeout": 25,
+            "tool_choice": "auto",
+            "max_tool_steps": 6,
+            "thinking_enabled": False,
+            "thinking_type": "",
+            "reasoning_effort": "",
+            "extra_body": {},
             "models": [],
         },
         "anthropic": {
@@ -98,6 +136,19 @@ _DEFAULT_CONFIG: dict[str, Any] = {
             "request_log_supported": True,
             "tool_call_supported": True,
             "tokenizer": "provider",
+            "temperature": 0.7,
+            "top_p": None,
+            "presence_penalty": None,
+            "frequency_penalty": None,
+            "max_tokens": None,
+            "seed": None,
+            "timeout": 25,
+            "tool_choice": "auto",
+            "max_tool_steps": 6,
+            "thinking_enabled": False,
+            "thinking_type": "",
+            "reasoning_effort": "",
+            "extra_body": {},
             "models": [],
         },
     },
@@ -108,6 +159,49 @@ _SUPPORTED_ADAPTERS = {
     "google_generate_content",
     "anthropic_messages",
 }
+_SUPPORTED_TOOL_CHOICES = {"auto", "none", "required"}
+_SUPPORTED_REASONING_EFFORTS = {"", "low", "medium", "high", "max"}
+
+
+def _safe_float(value: object, default: float | None = None, *,
+                min_value: float | None = None, max_value: float | None = None) -> float | None:
+    if value is None or value == "":
+        return default
+    try:
+        parsed = float(value)
+    except Exception:
+        return default
+    if min_value is not None and parsed < min_value:
+        return default
+    if max_value is not None and parsed > max_value:
+        return default
+    return parsed
+
+
+def _safe_int(value: object, default: int | None = None, *,
+              min_value: int | None = None, max_value: int | None = None) -> int | None:
+    if value is None or value == "":
+        return default
+    try:
+        parsed = int(value)
+    except Exception:
+        return default
+    if min_value is not None and parsed < min_value:
+        return default
+    if max_value is not None and parsed > max_value:
+        return default
+    return parsed
+
+
+def _safe_bool(value: object, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    text = str(value or "").strip().lower()
+    if text in {"1", "true", "yes", "on", "enabled"}:
+        return True
+    if text in {"0", "false", "no", "off", "disabled"}:
+        return False
+    return bool(default)
 
 
 def _normalize_key(value: object, *, fallback: str = "") -> str:
@@ -119,6 +213,50 @@ def _normalize_key(value: object, *, fallback: str = "") -> str:
 def _safe_str(value: object, default: str = "") -> str:
     text = str(value or "").strip()
     return text if text else default
+
+
+def _normalize_request_params(provider: dict[str, Any], default: dict[str, Any]) -> None:
+    provider["temperature"] = _safe_float(
+        provider.get("temperature"),
+        _safe_float(default.get("temperature"), 0.7, min_value=0.0, max_value=2.0),
+        min_value=0.0,
+        max_value=2.0,
+    )
+    provider["top_p"] = _safe_float(provider.get("top_p"), default.get("top_p"), min_value=0.0, max_value=1.0)
+    provider["presence_penalty"] = _safe_float(provider.get("presence_penalty"), default.get("presence_penalty"),
+                                               min_value=-2.0, max_value=2.0)
+    provider["frequency_penalty"] = _safe_float(provider.get("frequency_penalty"), default.get("frequency_penalty"),
+                                                min_value=-2.0, max_value=2.0)
+    provider["max_tokens"] = _safe_int(provider.get("max_tokens"), default.get("max_tokens"),
+                                       min_value=1, max_value=200000)
+    provider["seed"] = _safe_int(provider.get("seed"), default.get("seed"), min_value=0, max_value=4294967295)
+    provider["timeout"] = _safe_int(provider.get("timeout"), default.get("timeout", 25),
+                                    min_value=1, max_value=600)
+    provider["max_tool_steps"] = _safe_int(provider.get("max_tool_steps"), default.get("max_tool_steps", 6),
+                                           min_value=1, max_value=MAX_TOOL_STEPS_LIMIT)
+
+    tool_choice = _safe_str(provider.get("tool_choice"), _safe_str(default.get("tool_choice"), "auto")).lower()
+    provider["tool_choice"] = tool_choice if tool_choice in _SUPPORTED_TOOL_CHOICES else "auto"
+
+    reasoning = _safe_str(provider.get("reasoning_effort"), _safe_str(default.get("reasoning_effort"), "")).lower()
+    provider["reasoning_effort"] = reasoning if reasoning in _SUPPORTED_REASONING_EFFORTS else ""
+
+    thinking_default = _safe_bool(default.get("thinking_enabled"), False)
+    if "thinking_enabled" in provider:
+        thinking_enabled = _safe_bool(provider.get("thinking_enabled"), thinking_default)
+    else:
+        extra = provider.get("extra_body")
+        thinking_enabled = bool(isinstance(extra, dict) and isinstance(extra.get("thinking"), dict)) or thinking_default
+    provider["thinking_enabled"] = bool(thinking_enabled)
+    provider["thinking_type"] = "enabled" if provider["thinking_enabled"] else ""
+
+    extra_body = provider.get("extra_body") if isinstance(provider.get("extra_body"), dict) else {}
+    extra_body = deepcopy(extra_body)
+    if provider["thinking_enabled"]:
+        extra_body["thinking"] = {"type": "enabled"}
+    else:
+        extra_body.pop("thinking", None)
+    provider["extra_body"] = extra_body
 
 
 def _merge_provider(default: dict[str, Any], saved: dict[str, Any] | None) -> dict[str, Any]:
@@ -137,6 +275,7 @@ def _merge_provider(default: dict[str, Any], saved: dict[str, Any] | None) -> di
     merged["models"] = _normalize_models(merged.get("models", []))
     if not _safe_str(merged.get("current_model")) and merged["models"]:
         merged["current_model"] = str(merged["models"][0]["id"])
+    _normalize_request_params(merged, default)
     return merged
 
 
@@ -190,6 +329,19 @@ def _normalize_config(raw: dict[str, Any] | None = None) -> dict[str, Any]:
             "request_log_supported": True,
             "tool_call_supported": True,
             "tokenizer": "provider",
+            "temperature": 0.7,
+            "top_p": None,
+            "presence_penalty": None,
+            "frequency_penalty": None,
+            "max_tokens": None,
+            "seed": None,
+            "timeout": 25,
+            "tool_choice": "auto",
+            "max_tool_steps": 6,
+            "thinking_enabled": False,
+            "thinking_type": "",
+            "reasoning_effort": "",
+            "extra_body": {},
             "models": [],
         }
         providers[provider_key] = _merge_provider(custom_default, saved_provider)
@@ -247,7 +399,39 @@ def public_provider(provider: dict[str, Any], *, current_provider: str = "") -> 
         "request_log_supported": bool(provider.get("request_log_supported", True)),
         "tool_call_supported": bool(provider.get("tool_call_supported", True)),
         "tokenizer": str(provider.get("tokenizer", "provider")),
+        "temperature": provider.get("temperature"),
+        "top_p": provider.get("top_p"),
+        "presence_penalty": provider.get("presence_penalty"),
+        "frequency_penalty": provider.get("frequency_penalty"),
+        "max_tokens": provider.get("max_tokens"),
+        "seed": provider.get("seed"),
+        "timeout": provider.get("timeout"),
+        "tool_choice": str(provider.get("tool_choice", "auto") or "auto"),
+        "max_tool_steps": provider.get("max_tool_steps"),
+        "thinking_enabled": bool(provider.get("thinking_enabled", False)),
+        "thinking_type": str(provider.get("thinking_type", "") or ""),
+        "reasoning_effort": str(provider.get("reasoning_effort", "") or ""),
+        "extra_body": deepcopy(provider.get("extra_body")) if isinstance(provider.get("extra_body"), dict) else {},
         "is_current": str(provider.get("key", "")) == str(current_provider or ""),
+    }
+
+
+def provider_request_params(provider: dict[str, Any]) -> dict[str, Any]:
+    """Return normalized request defaults for a provider."""
+    return {
+        "temperature": provider.get("temperature"),
+        "top_p": provider.get("top_p"),
+        "presence_penalty": provider.get("presence_penalty"),
+        "frequency_penalty": provider.get("frequency_penalty"),
+        "max_tokens": provider.get("max_tokens"),
+        "seed": provider.get("seed"),
+        "timeout": provider.get("timeout"),
+        "tool_choice": str(provider.get("tool_choice", "auto") or "auto"),
+        "max_tool_steps": provider.get("max_tool_steps"),
+        "thinking_enabled": bool(provider.get("thinking_enabled", False)),
+        "thinking_type": str(provider.get("thinking_type", "") or ""),
+        "reasoning_effort": str(provider.get("reasoning_effort", "") or ""),
+        "extra_body": deepcopy(provider.get("extra_body")) if isinstance(provider.get("extra_body"), dict) else {},
     }
 
 
@@ -284,6 +468,13 @@ def upsert_provider(config: dict[str, Any], data: dict[str, Any]) -> dict[str, A
         "request_log_supported": True,
         "tokenizer": _safe_str(data.get("tokenizer"), provider.get("tokenizer", "provider")),
     })
+    for param_key in (
+        "temperature", "top_p", "presence_penalty", "frequency_penalty", "max_tokens",
+        "seed", "timeout", "tool_choice", "max_tool_steps", "thinking_enabled",
+        "reasoning_effort",
+    ):
+        if param_key in data:
+            provider[param_key] = data.get(param_key)
     if "anthropic_version" in data:
         provider["anthropic_version"] = _safe_str(data.get("anthropic_version"), "2023-06-01")
     elif provider.get("adapter") == "anthropic_messages":

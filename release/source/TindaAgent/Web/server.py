@@ -621,6 +621,14 @@ def _llm_request_summary(row: dict[str, Any]) -> dict[str, Any]:
         "tokenizer_engine": str(tokenizer_info.get("engine", "")),
         "tokenizer_official_files": bool(tokenizer_info.get("official_files", False)),
         "temperature": payload.get("temperature") if isinstance(payload, dict) else None,
+        "top_p": payload.get("top_p") if isinstance(payload, dict) else None,
+        "max_tokens": payload.get("max_tokens") if isinstance(payload, dict) else None,
+        "thinking_type": (
+            payload.get("thinking", {}).get("type")
+            if isinstance(payload, dict) and isinstance(payload.get("thinking"), dict)
+            else None
+        ),
+        "reasoning_effort": payload.get("reasoning_effort") if isinstance(payload, dict) else None,
         "tool_choice": payload.get("tool_choice") if isinstance(payload, dict) else None,
     }
 
@@ -805,6 +813,17 @@ class ModelProviderUpsertRequest(BaseModel):
     api_key: str | None = None
     enabled: bool = True
     anthropic_version: str | None = None
+    temperature: float | None = None
+    top_p: float | None = None
+    presence_penalty: float | None = None
+    frequency_penalty: float | None = None
+    max_tokens: int | None = None
+    seed: int | None = None
+    timeout: int | None = None
+    tool_choice: str | None = None
+    max_tool_steps: int | None = None
+    thinking_enabled: bool | None = None
+    reasoning_effort: str | None = None
 
 
 class ModelAddRequest(BaseModel):
@@ -4373,7 +4392,7 @@ async def terminal_confirm(req: TerminalConfirmRequest):
             trigger="terminal_confirm_recover",
         )
         request_messages = agent._messages_for_llm_request(agent.history)
-        result = agent._ensure_client().chat_with_tools(request_messages, user_perm=agent.perm, temperature=0.7)
+        result = agent._ensure_client().chat_with_tools(request_messages, user_perm=agent.perm, temperature=None)
     else:
         decision = {
             "approval": approval,

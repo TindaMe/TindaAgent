@@ -5,6 +5,8 @@ import json
 import os
 import tempfile
 import asyncio
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -18,6 +20,7 @@ from TindaAgent.Web import server
 from TindaAgent.Web import settings_backend
 from TindaAgent.Web.session_store import SessionStore
 from TindaAgent.Process.AI import client as ai_client
+from TindaAgent.Process.AI import providers as ai_providers
 from TindaAgent.Process.Architecture import paths as arch_paths
 from TindaAgent.Process.Observability import audit as audit_mod
 from TindaAgent.Process.Observability.audit import GlobalAuditEngine
@@ -75,6 +78,107 @@ class LogArchiveEventLookupTests(unittest.TestCase):
         self.assertIn("assume tool outputs", prompt)
         self.assertIn("Fabrication", prompt)
         self.assertIn("strictly forbidden", prompt)
+
+    def test_provider_request_params_normalize_and_preserve_zero_temperature(self) -> None:
+        cfg = ai_providers._normalize_config({
+            "providers": {
+                "deepseek": {
+                    "temperature": 0,
+                    "top_p": 0.82,
+                    "presence_penalty": 0.1,
+                    "frequency_penalty": -0.2,
+                    "max_tokens": 4096,
+                    "seed": 42,
+                    "timeout": 33,
+                    "tool_choice": "required",
+                    "max_tool_steps": 900,
+                    "thinking_enabled": False,
+                    "reasoning_effort": "high",
+                }
+            }
+        })
+        row = cfg["providers"]["deepseek"]
+        self.assertEqual(row["temperature"], 0)
+        self.assertEqual(row["top_p"], 0.82)
+        self.assertEqual(row["tool_choice"], "required")
+        self.assertEqual(row["max_tool_steps"], 900)
+        self.assertFalse(row["thinking_enabled"])
+        self.assertNotIn("thinking", row["extra_body"])
+        self.assertEqual(row["reasoning_effort"], "high")
+
+    def test_llm_client_applies_provider_request_params_to_payload(self) -> None:
+        client = ai_client.LLMClient(api_key="sk-test", request_params={
+            "temperature": 0,
+            "top_p": 0.9,
+            "presence_penalty": 0.2,
+            "frequency_penalty": 0.3,
+            "max_tokens": 123,
+            "seed": 7,
+            "timeout": 11,
+            "tool_choice": "none",
+            "max_tool_steps": 900,
+            "thinking_enabled": True,
+            "reasoning_effort": "max",
+            "extra_body": {"thinking": {"type": "enabled"}},
+        })
+        payload = client._apply_request_params({"model": "m", "messages": []}, temperature=None)
+        self.assertEqual(payload["temperature"], 0)
+        self.assertEqual(payload["top_p"], 0.9)
+        self.assertEqual(payload["presence_penalty"], 0.2)
+        self.assertEqual(payload["frequency_penalty"], 0.3)
+        self.assertEqual(payload["max_tokens"], 123)
+        self.assertEqual(payload["seed"], 7)
+        self.assertEqual(payload["timeout"], 11)
+        self.assertEqual(payload["reasoning_effort"], "max")
+        self.assertEqual(payload["extra_body"]["thinking"]["type"], "enabled")
+        self.assertEqual(client._tool_choice_for_request(), "none")
+        self.assertEqual(client._effective_max_tool_steps(None), 900)
+        self.assertEqual(client._effective_max_tool_steps(901), 900)
+
+    def test_llm_tool_loop_uses_full_budget_before_finalizing(self) -> None:
+        client = ai_client.LLMClient(api_key="sk-test", request_params={
+            "tool_choice": "auto",
+            "max_tool_steps": 1,
+        })
+        calls: list[dict] = []
+
+        def tool_call_response(call_id: str) -> SimpleNamespace:
+            fn = SimpleNamespace(name="echo", arguments=json.dumps({"text": "hi"}, ensure_ascii=False))
+            message = SimpleNamespace(content="", reasoning_content="", tool_calls=[
+                SimpleNamespace(id=call_id, type="function", function=fn)
+            ])
+            return SimpleNamespace(choices=[SimpleNamespace(message=message)], usage=None)
+
+        def final_response(text: str) -> SimpleNamespace:
+            message = SimpleNamespace(content=text, reasoning_content="", tool_calls=[])
+            return SimpleNamespace(choices=[SimpleNamespace(message=message)], usage=None)
+
+        def fake_create(**payload):
+            calls.append(payload)
+            if len(calls) == 1:
+                return tool_call_response("call_first")
+            if len(calls) == 2:
+                return tool_call_response("call_over_limit")
+            return final_response("final after limit")
+
+        client._client = SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=fake_create))
+        )
+
+        with patch.object(tool, "run_agent_tool", return_value=json.dumps({"ok": True, "output": "hi"}, ensure_ascii=False)):
+            result = client.chat_with_tools(
+                [{"role": "user", "content": "use tool"}],
+                user_perm=511,
+                max_tool_steps=1,
+            )
+
+        self.assertEqual(str(result.get("reply", "")), "final after limit")
+        self.assertEqual(int(result.get("tool_steps", 0)), 1)
+        self.assertEqual(len(result.get("tool_trace", [])), 1)
+        self.assertEqual(calls[0].get("tool_choice"), "auto")
+        self.assertEqual(calls[1].get("tool_choice"), "auto")
+        self.assertEqual(calls[2].get("tool_choice"), "none")
+        self.assertTrue(any(str(m.get("role", "")) == "system" and "maximum tool-call iterations" in str(m.get("content", "")) for m in calls[2].get("messages", [])))
 
     def test_run_terminal_redacts_secret_output(self) -> None:
         # v1.7.15 后:_confirmed 已删,改为 _approval
@@ -964,6 +1068,66 @@ class LogArchiveEventLookupTests(unittest.TestCase):
         _raw, step = ai_client._build_skipped_tool_result("run_terminal", call_id, model_id, {"cmd": "sleep 30"})
         self.assertTrue(ai_client._tool_skipped(step))
         self.assertEqual(str(step.get("result", {}).get("error_code", "")), "user_skipped")
+
+    def test_stream_tool_skip_returns_immediately_while_tool_is_running(self) -> None:
+        from TindaAgent.Process.AI.client import LLMClient
+
+        client = object.__new__(LLMClient)
+        sid = "s_skip_running_unit"
+        tool_call_id = "call_skip_running_unit"
+        tool_calls = [{
+            "id": tool_call_id,
+            "type": "function",
+            "function": {
+                "name": "run_terminal",
+                "arguments": json.dumps({"cmd": "sleep 10"}, ensure_ascii=False),
+            },
+        }]
+        msgs = [{"role": "assistant", "content": "", "tool_calls": tool_calls}]
+        trace: list[dict] = []
+        started = threading.Event()
+        release = threading.Event()
+
+        def fake_run_agent_tool(name, user_perm, args, call_id=""):
+            started.set()
+            release.wait(timeout=2.0)
+            return json.dumps({"ok": True, "output": "late result"}, ensure_ascii=False)
+
+        with patch.object(tool, "run_agent_tool", side_effect=fake_run_agent_tool), \
+             patch.object(tool, "skip_running_tool", return_value=True):
+            iterator = client._run_tools_iter(
+                tool_calls,
+                511,
+                msgs,
+                trace,
+                "unit",
+                heartbeat_interval=0.02,
+                session_id=sid,
+            )
+            deadline = time.monotonic() + 1.0
+            while not started.is_set() and time.monotonic() < deadline:
+                event = next(iterator)
+                self.assertEqual(str(event.get("type", "")), "tool_heartbeat")
+            self.assertTrue(started.is_set())
+            self.assertTrue(ai_client.request_tool_skip(sid, tool_call_id=tool_call_id))
+            deadline = time.monotonic() + 1.0
+            result = None
+            while time.monotonic() < deadline:
+                event = next(iterator)
+                if event.get("type") == "tool_result":
+                    result = event
+                    break
+            release.set()
+            time.sleep(0.05)
+
+        self.assertIsNotNone(result)
+        steps = result.get("steps", []) if isinstance(result, dict) else []
+        self.assertEqual(len(steps), 1)
+        self.assertTrue(ai_client._tool_skipped(steps[0]))
+        tool_msgs = [m for m in msgs if str(m.get("role", "")) == "tool"]
+        self.assertEqual(len(tool_msgs), 1)
+        self.assertEqual(str(tool_msgs[0].get("tool_call_id", "")), tool_call_id)
+        self.assertEqual(trace, steps)
 
     def test_chat_html_no_random_confirm_id_fallback_for_pending(self) -> None:
         chat_html = Path(__file__).resolve().parents[1] / "Web" / "chat.html"

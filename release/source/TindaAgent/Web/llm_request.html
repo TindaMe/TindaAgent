@@ -138,12 +138,14 @@
     .panel:nth-of-type(1) { animation-delay: 40ms; }
     .panel:nth-of-type(2) { animation-delay: 110ms; }
     .panel:nth-of-type(3) { animation-delay: 180ms; }
+    .panel:nth-of-type(4) { animation-delay: 250ms; }
     body.model-data-leaving .panel {
       animation: modelPanelOut 260ms cubic-bezier(0.44, 0, 0.72, 0.18) both;
     }
-    body.model-data-leaving .panel:nth-of-type(1) { animation-delay: 90ms; }
-    body.model-data-leaving .panel:nth-of-type(2) { animation-delay: 45ms; }
-    body.model-data-leaving .panel:nth-of-type(3) { animation-delay: 0ms; }
+    body.model-data-leaving .panel:nth-of-type(1) { animation-delay: 135ms; }
+    body.model-data-leaving .panel:nth-of-type(2) { animation-delay: 90ms; }
+    body.model-data-leaving .panel:nth-of-type(3) { animation-delay: 45ms; }
+    body.model-data-leaving .panel:nth-of-type(4) { animation-delay: 0ms; }
     .panel-head {
       display: flex;
       align-items: center;
@@ -227,6 +229,19 @@
       font-weight: 900;
       margin: 0 0 5px;
     }
+    .provider-form label[title],
+    .provider-meta-label[title],
+    .provider-meta-value[title],
+    .call-param label[title],
+    .call-param-help[title],
+    .stat-label[title],
+    .stat-value[title],
+    .balance-item-label[title],
+    .balance-item-value[title],
+    .model-pill[title],
+    .provider-tab[title] {
+      cursor: help;
+    }
     .provider-form input,
     .provider-form select {
       width: 100%;
@@ -245,6 +260,69 @@
       display: flex;
       align-items: end;
       gap: 8px;
+    }
+    .call-param-grid {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 10px;
+      padding: 16px 18px;
+    }
+    .call-param {
+      min-width: 0;
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      background: color-mix(in srgb, var(--surface-2) 76%, transparent);
+      padding: 10px 12px;
+      display: grid;
+      gap: 7px;
+    }
+    .call-param.wide { grid-column: span 2; }
+    .call-param label {
+      color: var(--text-dim);
+      font-size: 10.5px;
+      font-weight: 900;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .call-param input,
+    .call-param select {
+      width: 100%;
+      height: 34px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: color-mix(in srgb, var(--surface) 58%, transparent);
+      color: var(--text);
+      padding: 0 10px;
+      font: inherit;
+      font-size: 12px;
+      font-weight: 800;
+      outline: none;
+    }
+    .call-param input[type="checkbox"] {
+      width: 18px;
+      height: 18px;
+      accent-color: var(--accent);
+    }
+    .call-param .check-row {
+      min-height: 34px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--text);
+      font-size: 12px;
+      font-weight: 900;
+    }
+    .call-param-help {
+      color: var(--text-dim);
+      font-size: 11px;
+      line-height: 1.45;
+    }
+    .call-param-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+      padding: 0 18px 16px;
     }
     .model-pills {
       padding: 12px 18px 0;
@@ -408,6 +486,8 @@
       .provider-meta { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .provider-form { grid-template-columns: 1fr; }
       .provider-form .wide { grid-column: auto; }
+      .call-param-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .call-param.wide { grid-column: span 2; }
       header { padding: 12px 14px; }
       main { width: min(100vw - 20px, 1180px); }
     }
@@ -435,44 +515,44 @@
       <div class="provider-meta" id="providerMeta"></div>
       <div class="provider-form">
         <div>
-          <label for="providerKey">Provider Key</label>
-          <input id="providerKey" placeholder="custom-openai" />
+          <label for="providerKey" title="供应商唯一标识，保存配置、切换供应商和请求路由都会使用它。">Provider Key</label>
+          <input id="providerKey" placeholder="custom-openai" title="例如 custom-openai；建议只使用小写字母、数字、短横线。" />
         </div>
         <div>
-          <label for="providerLabel">显示名称</label>
-          <input id="providerLabel" placeholder="Custom" />
+          <label for="providerLabel" title="前端显示用名称，不影响真实 API 调用。">显示名称</label>
+          <input id="providerLabel" placeholder="Custom" title="显示在供应商标签、余额标题等位置。" />
         </div>
         <div>
-          <label for="providerAdapter">调用链路</label>
-          <select id="providerAdapter">
+          <label for="providerAdapter" title="决定后端用哪种协议组装请求，目前支持 OpenAI 兼容、Google Gemini、Anthropic Messages。">调用链路</label>
+          <select id="providerAdapter" title="选择与目标模型服务兼容的调用协议。">
             <option value="openai_compatible">OpenAI-compatible</option>
             <option value="google_generate_content">Google Gemini</option>
             <option value="anthropic_messages">Anthropic Messages</option>
           </select>
         </div>
         <div class="wide">
-          <label for="providerBaseUrl">Base URL</label>
-          <input id="providerBaseUrl" placeholder="https://api.example.com/v1" />
+          <label for="providerBaseUrl" title="API 根地址，会和路径一起组成最终请求地址。">Base URL</label>
+          <input id="providerBaseUrl" placeholder="https://api.example.com/v1" title="例如 https://api.deepseek.com 或 https://api.openai.com/v1。" />
         </div>
         <div>
-          <label for="providerChatPath">路径</label>
-          <input id="providerChatPath" placeholder="/chat/completions 或 /v1/messages 或 /models/{model}:generateContent" />
+          <label for="providerChatPath" title="Base URL 后面的接口路径，支持在路径里使用 {model}。">路径</label>
+          <input id="providerChatPath" placeholder="/chat/completions 或 /v1/messages 或 /models/{model}:generateContent" title="例如 /chat/completions、/v1/messages、/models/{model}:generateContent。" />
         </div>
         <div>
-          <label for="providerApiKeyEnv">Key 环境变量</label>
-          <input id="providerApiKeyEnv" placeholder="OPENAI_API_KEY" />
+          <label for="providerApiKeyEnv" title="后端优先读取的 API Key 环境变量名。">Key 环境变量</label>
+          <input id="providerApiKeyEnv" placeholder="OPENAI_API_KEY" title="例如 DEEPSEEK_API_KEY、OPENAI_API_KEY。" />
         </div>
         <div>
-          <label for="providerApiKey">Key（可选）</label>
-          <input id="providerApiKey" placeholder="留空则用环境变量" />
+          <label for="providerApiKey" title="临时写入或更新该供应商的 API Key；留空则继续使用环境变量或已有配置。">Key（可选）</label>
+          <input id="providerApiKey" placeholder="留空则用环境变量" title="敏感信息，只有需要更新 Key 时再填写。" />
         </div>
         <div>
-          <label for="newModelId">模型 ID</label>
-          <input id="newModelId" placeholder="模型真实 ID" />
+          <label for="newModelId" title="实际传给模型供应商的模型 ID。">模型 ID</label>
+          <input id="newModelId" placeholder="模型真实 ID" title="例如 deepseek-chat、gpt-4.1、claude-sonnet-4-5。" />
         </div>
         <div>
-          <label for="newModelLabel">模型命名</label>
-          <input id="newModelLabel" placeholder="前端显示名" />
+          <label for="newModelLabel" title="前端展示名称，方便给真实模型 ID 起一个好认的名字。">模型命名</label>
+          <input id="newModelLabel" placeholder="前端显示名" title="不影响真实请求的 model 字段。" />
         </div>
         <div class="form-actions">
           <button class="btn" id="saveProviderBtn" type="button">保存</button>
@@ -489,6 +569,93 @@
         <div class="balance-card">
           <div class="balance-list" id="balanceList"></div>
         </div>
+      </div>
+    </section>
+    <section class="panel">
+      <div class="panel-head">
+        <div>
+          <div class="panel-title">调用参数</div>
+          <div class="muted" id="paramMeta">影响后续真实 LLM 请求，不改历史请求体</div>
+        </div>
+        <div class="muted" id="paramState">未加载</div>
+      </div>
+      <div class="call-param-grid">
+        <div class="call-param">
+          <label for="paramTemperature" title="控制采样随机性，0 更稳定，2 更发散。">Temperature</label>
+          <input id="paramTemperature" type="number" min="0" max="2" step="0.01" placeholder="0.7" title="保存后写入 provider 配置，并影响下一次真实 LLM 请求。" />
+          <div class="call-param-help" title="建议默认 0.7；需要稳定输出可降低。">采样随机性，0 更稳定，2 更发散。</div>
+        </div>
+        <div class="call-param">
+          <label for="paramTopP" title="核采样范围，只从累计概率 Top P 的候选 token 中采样。">Top P</label>
+          <input id="paramTopP" type="number" min="0" max="1" step="0.01" placeholder="留空默认" title="留空则不写入请求体，交给 provider 默认值。" />
+          <div class="call-param-help" title="通常不要和 Temperature 同时大幅调整。">核采样范围，留空不写入请求。</div>
+        </div>
+        <div class="call-param">
+          <label for="paramPresencePenalty" title="根据 token 是否已出现来施加惩罚，提高展开新话题的倾向。">Presence Penalty</label>
+          <input id="paramPresencePenalty" type="number" min="-2" max="2" step="0.01" placeholder="留空默认" title="provider 支持时才会生效；留空不写入请求体。" />
+          <div class="call-param-help" title="兼容 provider 时生效，不兼容时后端会尽量忽略。">提高新话题倾向，兼容 provider 时生效。</div>
+        </div>
+        <div class="call-param">
+          <label for="paramFrequencyPenalty" title="根据 token 重复频率施加惩罚，降低重复词句概率。">Frequency Penalty</label>
+          <input id="paramFrequencyPenalty" type="number" min="-2" max="2" step="0.01" placeholder="留空默认" title="provider 支持时才会生效；留空不写入请求体。" />
+          <div class="call-param-help" title="适合处理模型重复输出，但过高会影响表达稳定性。">降低重复词句概率，兼容 provider 时生效。</div>
+        </div>
+        <div class="call-param">
+          <label for="paramMaxTokens" title="限制本次回复最多生成多少 token。">Max Tokens</label>
+          <input id="paramMaxTokens" type="number" min="1" max="200000" step="1" placeholder="留空默认" title="上限仍以当前 provider 和模型实际限制为准。" />
+          <div class="call-param-help" title="只限制输出，不等于上下文窗口大小。">限制输出 token，上限按 provider 自身为准。</div>
+        </div>
+        <div class="call-param">
+          <label for="paramSeed" title="随机种子，provider 支持时可提高输出可复现性。">Seed</label>
+          <input id="paramSeed" type="number" min="0" step="1" placeholder="留空默认" title="留空则不写入请求体。" />
+          <div class="call-param-help" title="不是所有模型都会保证完全可复现。">可复现随机种子，provider 支持时生效。</div>
+        </div>
+        <div class="call-param">
+          <label for="paramToolChoice" title="控制模型是否可以或必须调用工具。">Tool Choice</label>
+          <select id="paramToolChoice" title="auto=模型自行决定；none=禁用工具；required=要求调用工具。">
+            <option value="auto">auto</option>
+            <option value="none">none</option>
+            <option value="required">required</option>
+          </select>
+          <div class="call-param-help" title="主聊天工具链读取该配置后写入真实请求。">工具调用策略，主聊天工具链会读取。</div>
+        </div>
+        <div class="call-param">
+          <label for="paramMaxToolSteps" title="单轮用户请求内最多允许多少次工具调用循环，允许 1 到 900。">Max Tool Steps</label>
+          <input id="paramMaxToolSteps" type="number" min="1" max="900" step="1" placeholder="6" title="用于避免工具链无限循环；默认推荐 6，最高 900。" />
+          <div class="call-param-help" title="达到上限后会停止继续工具循环。">单轮最多工具循环次数，范围 1~900。</div>
+        </div>
+        <div class="call-param">
+          <label for="paramTimeout" title="非流式或直连 provider 请求的超时秒数。">Timeout</label>
+          <input id="paramTimeout" type="number" min="1" max="600" step="1" placeholder="25" title="长工具执行不靠这里强行截断，主要用于模型 HTTP 请求。" />
+          <div class="call-param-help" title="单位为秒。">非流式/直连请求超时秒数。</div>
+        </div>
+        <div class="call-param">
+          <label for="paramThinkingEnabled" title="是否向支持的 provider 写入思考模式请求字段。">Thinking</label>
+          <div class="check-row" title="启用后 DeepSeek 会写入 thinking: {type: enabled}。">
+            <input id="paramThinkingEnabled" type="checkbox" />
+            <span>启用思考载荷</span>
+          </div>
+          <div class="call-param-help" title="仅对支持该字段的 provider 生效。">DeepSeek 写入 `thinking: {type: enabled}`。</div>
+        </div>
+        <div class="call-param">
+          <label for="paramReasoningEffort" title="推理强度，影响支持 reasoning effort 的模型。">Reasoning Effort</label>
+          <select id="paramReasoningEffort" title="DeepSeek 当前推荐 max；其它 provider 可按自身兼容性选择。">
+            <option value="">provider 默认</option>
+            <option value="low">low</option>
+            <option value="medium">medium</option>
+            <option value="high">high</option>
+            <option value="max">max</option>
+          </select>
+          <div class="call-param-help" title="留空则不覆盖 provider 默认值。">推理强度，DeepSeek 当前默认 max。</div>
+        </div>
+        <div class="call-param wide">
+          <label title="当前表单将写入 provider 配置的关键请求参数预览。">真实写入口径</label>
+          <div class="call-param-help" id="paramPreview" title="保存后会写入 provider 配置，并影响下一次请求体。">保存后会写入 provider 配置，并影响下一次请求体。</div>
+        </div>
+      </div>
+      <div class="call-param-actions">
+        <button class="btn" id="resetParamsBtn" type="button">恢复推荐</button>
+        <button class="btn" id="saveParamsBtn" type="button">保存参数</button>
       </div>
     </section>
     <section class="panel">
@@ -537,6 +704,10 @@
       return String(provider?.label || provider?.name || provider?.key || "DPSK");
     }
 
+    function attrTitle(value) {
+      return ` title="${escapeHtml(value)}"`;
+    }
+
     function currentProviderRow() {
       return providerRows.find((item) => item?.key === currentProvider) || providerRows[0] || {};
     }
@@ -548,7 +719,13 @@
       tabs.innerHTML = rows.map((provider) => {
         const key = String(provider?.key || "deepseek");
         const active = key === currentProvider ? " active" : "";
-        return `<button class="provider-tab${active}" type="button" data-provider="${escapeHtml(key)}">${escapeHtml(providerLabel(provider))}</button>`;
+        const tip = [
+          `显示名称：${providerLabel(provider)}`,
+          `Provider Key：${key}`,
+          `调用链路：${provider?.adapter || "openai_compatible"}`,
+          `当前模型：${provider?.model || "-"}`,
+        ].join("\n");
+        return `<button class="provider-tab${active}" type="button" data-provider="${escapeHtml(key)}"${attrTitle(tip)}>${escapeHtml(providerLabel(provider))}</button>`;
       }).join("");
     }
 
@@ -578,7 +755,8 @@
       wrap.innerHTML = rows.map((model) => {
         const id = String(model?.id || "").trim();
         const label = String(model?.label || id);
-        return `<span class="model-pill" title="${escapeHtml(id)}"><span>${escapeHtml(label)}</span><button type="button" data-remove-model="${escapeHtml(id)}">×</button></span>`;
+        const tip = `显示名称：${label}\n模型 ID：${id}`;
+        return `<span class="model-pill"${attrTitle(tip)}><span>${escapeHtml(label)}</span><button type="button" data-remove-model="${escapeHtml(id)}" title="删除模型 ${escapeHtml(label)}">×</button></span>`;
       }).join("");
     }
 
@@ -589,16 +767,104 @@
       const row = provider || providerRows.find((item) => item?.key === currentProvider) || {};
       if (title) title.textContent = `${providerLabel(row)} 账户余额`;
       const cells = [
-        ["供应商", row.name || providerLabel(row)],
-        ["当前模型", row.model || "-"],
-        ["API Root", row.api_root || "-"],
-        ["余额能力", row.balance_supported ? "支持" : "不支持"],
+        ["供应商", row.name || providerLabel(row), "供应商内部名称。"],
+        ["当前模型", row.model || "-", "当前 provider 默认使用的模型 ID。"],
+        ["API Root", row.api_root || "-", "最终请求使用的 API 根地址。"],
+        ["余额能力", row.balance_supported ? "支持" : "不支持", "该 provider 是否支持账户余额查询。"],
       ];
-      meta.innerHTML = cells.map(([label, value]) => (
-        `<div class="provider-meta-item"><div class="provider-meta-label">${escapeHtml(label)}</div><div class="provider-meta-value" title="${escapeHtml(value)}">${escapeHtml(value)}</div></div>`
+      meta.innerHTML = cells.map(([label, value, help]) => (
+        `<div class="provider-meta-item"${attrTitle(`${label}：${value}\n${help}`)}><div class="provider-meta-label"${attrTitle(help)}>${escapeHtml(label)}</div><div class="provider-meta-value"${attrTitle(value)}>${escapeHtml(value)}</div></div>`
       )).join("");
       fillProviderForm(row);
       renderModelPills(row);
+      fillCallParams(row);
+    }
+
+    function setInputValue(id, value) {
+      const node = document.getElementById(id);
+      if (!node) return;
+      node.value = value === null || value === undefined ? "" : String(value);
+    }
+
+    function setSelectValue(id, value, fallback = "") {
+      const node = document.getElementById(id);
+      if (!node) return;
+      node.value = String(value ?? fallback);
+    }
+
+    function fillCallParams(provider) {
+      const row = provider || currentProviderRow();
+      setInputValue("paramTemperature", row.temperature ?? 0.7);
+      setInputValue("paramTopP", row.top_p);
+      setInputValue("paramPresencePenalty", row.presence_penalty);
+      setInputValue("paramFrequencyPenalty", row.frequency_penalty);
+      setInputValue("paramMaxTokens", row.max_tokens);
+      setInputValue("paramSeed", row.seed);
+      setInputValue("paramTimeout", row.timeout ?? 25);
+      setInputValue("paramMaxToolSteps", row.max_tool_steps ?? 6);
+      setSelectValue("paramToolChoice", row.tool_choice || "auto", "auto");
+      setSelectValue("paramReasoningEffort", row.reasoning_effort || "", "");
+      const thinking = document.getElementById("paramThinkingEnabled");
+      if (thinking) thinking.checked = !!row.thinking_enabled;
+      const state = document.getElementById("paramState");
+      if (state) state.textContent = "已加载";
+      updateParamPreview();
+    }
+
+    function readFloatInput(id) {
+      const raw = String(document.getElementById(id)?.value || "").trim();
+      if (!raw) return null;
+      const value = Number(raw);
+      return Number.isFinite(value) ? value : null;
+    }
+
+    function readIntInput(id) {
+      const raw = String(document.getElementById(id)?.value || "").trim();
+      if (!raw) return null;
+      const value = Number.parseInt(raw, 10);
+      return Number.isFinite(value) ? value : null;
+    }
+
+    function buildProviderPayloadFromForm({ includeApiKey = true } = {}) {
+      const key = String(document.getElementById("providerKey")?.value || currentProvider || "").trim();
+      const payload = {
+        key,
+        label: String(document.getElementById("providerLabel")?.value || key).trim(),
+        name: String(document.getElementById("providerLabel")?.value || key).trim(),
+        adapter: String(document.getElementById("providerAdapter")?.value || "openai_compatible").trim(),
+        base_url: String(document.getElementById("providerBaseUrl")?.value || "").trim(),
+        chat_path: String(document.getElementById("providerChatPath")?.value || "").trim(),
+        api_key_env: String(document.getElementById("providerApiKeyEnv")?.value || "").trim(),
+        enabled: true,
+        temperature: readFloatInput("paramTemperature"),
+        top_p: readFloatInput("paramTopP"),
+        presence_penalty: readFloatInput("paramPresencePenalty"),
+        frequency_penalty: readFloatInput("paramFrequencyPenalty"),
+        max_tokens: readIntInput("paramMaxTokens"),
+        seed: readIntInput("paramSeed"),
+        timeout: readIntInput("paramTimeout"),
+        tool_choice: String(document.getElementById("paramToolChoice")?.value || "auto"),
+        max_tool_steps: readIntInput("paramMaxToolSteps"),
+        thinking_enabled: !!document.getElementById("paramThinkingEnabled")?.checked,
+        reasoning_effort: String(document.getElementById("paramReasoningEffort")?.value || ""),
+      };
+      const apiKey = String(document.getElementById("providerApiKey")?.value || "").trim();
+      if (includeApiKey && apiKey) payload.api_key = apiKey;
+      return payload;
+    }
+
+    function updateParamPreview() {
+      const preview = document.getElementById("paramPreview");
+      if (!preview) return;
+      const payload = buildProviderPayloadFromForm({ includeApiKey: false });
+      const parts = [
+        `temperature=${payload.temperature ?? "-"}`,
+        `tool_choice=${payload.tool_choice || "auto"}`,
+        `max_tool_steps=${payload.max_tool_steps ?? "-"}`,
+        `thinking=${payload.thinking_enabled ? "enabled" : "off"}`,
+        `effort=${payload.reasoning_effort || "-"}`,
+      ];
+      preview.textContent = parts.join(" · ");
     }
 
     async function loadProviders() {
@@ -622,17 +888,7 @@
         document.getElementById("balanceState").textContent = "Provider Key 不能为空";
         return;
       }
-      const payload = {
-        key,
-        label: String(document.getElementById("providerLabel")?.value || key).trim(),
-        name: String(document.getElementById("providerLabel")?.value || key).trim(),
-        adapter: String(document.getElementById("providerAdapter")?.value || "openai_compatible").trim(),
-        base_url: String(document.getElementById("providerBaseUrl")?.value || "").trim(),
-        chat_path: String(document.getElementById("providerChatPath")?.value || "").trim(),
-        api_key_env: String(document.getElementById("providerApiKeyEnv")?.value || "").trim(),
-        api_key: String(document.getElementById("providerApiKey")?.value || "").trim(),
-        enabled: true,
-      };
+      const payload = buildProviderPayloadFromForm();
       try {
         const res = await apiFetch("/model-data/providers", {
           method: "POST",
@@ -646,9 +902,56 @@
         renderProviderTabs();
         renderProviderMeta(currentProviderRow());
         document.getElementById("balanceState").textContent = "已保存";
+        document.getElementById("paramState").textContent = "已保存";
       } catch (e) {
         document.getElementById("balanceState").textContent = `保存失败：${String(e?.message || e)}`;
+        document.getElementById("paramState").textContent = `保存失败`;
       }
+    }
+
+    async function saveCallParams() {
+      const state = document.getElementById("paramState");
+      const payload = buildProviderPayloadFromForm({ includeApiKey: true });
+      if (!payload.key) {
+        if (state) state.textContent = "Provider Key 不能为空";
+        return;
+      }
+      if (state) state.textContent = "保存中...";
+      try {
+        const res = await apiFetch("/model-data/providers", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (!res.ok || data?.ok === false) throw new Error(String(data?.error || `HTTP ${res.status}`));
+        providerRows = Array.isArray(data.providers) ? data.providers : providerRows;
+        currentProvider = payload.key;
+        renderProviderTabs();
+        renderProviderMeta(currentProviderRow());
+        if (state) state.textContent = "已保存";
+      } catch (e) {
+        if (state) state.textContent = `保存失败：${String(e?.message || e)}`;
+      }
+    }
+
+    function resetCallParams() {
+      const isDeepSeek = String(currentProvider || "deepseek") === "deepseek";
+      setInputValue("paramTemperature", 0.7);
+      setInputValue("paramTopP", "");
+      setInputValue("paramPresencePenalty", "");
+      setInputValue("paramFrequencyPenalty", "");
+      setInputValue("paramMaxTokens", "");
+      setInputValue("paramSeed", "");
+      setInputValue("paramTimeout", 25);
+      setInputValue("paramMaxToolSteps", 6);
+      setSelectValue("paramToolChoice", "auto", "auto");
+      setSelectValue("paramReasoningEffort", isDeepSeek ? "max" : "", "");
+      const thinking = document.getElementById("paramThinkingEnabled");
+      if (thinking) thinking.checked = isDeepSeek;
+      const state = document.getElementById("paramState");
+      if (state) state.textContent = "已恢复推荐，记得保存";
+      updateParamPreview();
     }
 
     async function addModel() {
@@ -696,28 +999,32 @@
 
     function setStats(summary) {
       const rows = [
-        ["模型", summary.model || "-"],
-        ["来源", summary.source || "-"],
-        ["流式", summary.stream ? "true" : "false"],
-        ["消息数", summary.message_count ?? 0],
-        ["工具数", summary.tool_count ?? 0],
-        ["Payload 字符", summary.payload_chars ?? 0],
-        ["内容字符", summary.content_chars ?? 0],
-        ["上下文 token", summary.request_tokens ?? summary.estimated_tokens ?? 0],
-        ["Payload token", summary.payload_tokens ?? 0],
-        ["消息 token", summary.message_tokens ?? 0],
-        ["工具 token", summary.tool_tokens ?? 0],
-        ["计数来源", summary.token_source || "-"],
-        ["输出 token", summary.response_completion_tokens ?? "-"],
-        ["总 token", summary.response_total_tokens ?? "-"],
-        ["计数器", summary.tokenizer_engine || "-"],
-        ["官方文件", summary.tokenizer_official_files ? "true" : "false"],
-        ["温度", summary.temperature ?? "-"],
-        ["工具策略", summary.tool_choice ?? "-"],
-        ["时间", summary.ts || "-"],
+        ["模型", summary.model || "-", "本次真实 SDK 请求写入的 model 字段。"],
+        ["来源", summary.source || "-", "请求体记录来源。"],
+        ["流式", summary.stream ? "true" : "false", "本次请求是否使用流式输出。"],
+        ["消息数", summary.message_count ?? 0, "写入 LLM 请求体的 messages 数量。"],
+        ["工具数", summary.tool_count ?? 0, "写入 LLM 请求体的 tools 数量。"],
+        ["Payload 字符", summary.payload_chars ?? 0, "完整请求体 JSON 字符数。"],
+        ["内容字符", summary.content_chars ?? 0, "messages 内容字符数，不包含工具定义。"],
+        ["上下文 token", summary.request_tokens ?? summary.estimated_tokens ?? 0, "写入 LLM 请求上下文的 token 数。"],
+        ["Payload token", summary.payload_tokens ?? 0, "完整请求体 JSON 的 token 数。"],
+        ["消息 token", summary.message_tokens ?? 0, "messages 部分的 token 数。"],
+        ["工具 token", summary.tool_tokens ?? 0, "tools 定义部分的 token 数。"],
+        ["计数来源", summary.token_source || "-", "token 数来自官方 usage、官方 tokenizer 或离线 tokenizer。"],
+        ["输出 token", summary.response_completion_tokens ?? "-", "provider 返回的 completion/output token。"],
+        ["总 token", summary.response_total_tokens ?? "-", "provider 返回的 total token。"],
+        ["计数器", summary.tokenizer_engine || "-", "当前使用的 tokenizer 引擎。"],
+        ["官方文件", summary.tokenizer_official_files ? "true" : "false", "是否使用官方 tokenizer 文件。"],
+        ["温度", summary.temperature ?? "-", "本次请求写入的 temperature。"],
+        ["Top P", summary.top_p ?? "-", "本次请求写入的 top_p。"],
+        ["Max Tokens", summary.max_tokens ?? "-", "本次请求写入的最大输出 token 限制。"],
+        ["Thinking", summary.thinking_type ?? "-", "本次请求写入的 thinking 类型。"],
+        ["Reasoning", summary.reasoning_effort ?? "-", "本次请求写入的 reasoning effort。"],
+        ["工具策略", summary.tool_choice ?? "-", "本次请求写入的工具调用策略。"],
+        ["时间", summary.ts || "-", "请求体记录时间。"],
       ];
-      document.getElementById("stats").innerHTML = rows.map(([label, value]) => (
-        `<div class="stat"><div class="stat-label">${escapeHtml(label)}</div><div class="stat-value">${escapeHtml(String(value))}</div></div>`
+      document.getElementById("stats").innerHTML = rows.map(([label, value, help]) => (
+        `<div class="stat"${attrTitle(`${label}：${String(value)}\n${help}`)}><div class="stat-label"${attrTitle(help)}>${escapeHtml(label)}</div><div class="stat-value"${attrTitle(String(value))}>${escapeHtml(String(value))}</div></div>`
       )).join("");
     }
 
@@ -747,13 +1054,13 @@
       }
       const info = infos[0] || {};
       const rows = [
-        ["币种", info?.currency ?? "-"],
-        ["总额", info?.total_balance ?? "-"],
-        ["赠金", info?.granted_balance ?? "-"],
-        ["充值", info?.topped_up_balance ?? "-"],
+        ["币种", info?.currency ?? "-", "账户余额币种。"],
+        ["总额", info?.total_balance ?? "-", "当前账户总余额。"],
+        ["赠金", info?.granted_balance ?? "-", "平台赠送余额。"],
+        ["充值", info?.topped_up_balance ?? "-", "用户充值余额。"],
       ];
-      list.innerHTML = rows.map(([label, value], index) => (
-        `<div class="balance-item" style="--balance-delay:${220 + index * 70}ms"><div class="balance-item-label">${escapeHtml(label)}</div><div class="balance-item-value">${escapeHtml(value)}</div></div>`
+      list.innerHTML = rows.map(([label, value, help], index) => (
+        `<div class="balance-item" style="--balance-delay:${220 + index * 70}ms"${attrTitle(`${label}：${String(value)}\n${help}`)}><div class="balance-item-label"${attrTitle(help)}>${escapeHtml(label)}</div><div class="balance-item-value"${attrTitle(String(value))}>${escapeHtml(value)}</div></div>`
       )).join("");
     }
 
@@ -821,6 +1128,12 @@
       loadBalance();
     });
     document.getElementById("saveProviderBtn")?.addEventListener("click", saveProvider);
+    document.getElementById("saveParamsBtn")?.addEventListener("click", saveCallParams);
+    document.getElementById("resetParamsBtn")?.addEventListener("click", resetCallParams);
+    document.querySelectorAll(".call-param input, .call-param select").forEach((node) => {
+      node.addEventListener("input", updateParamPreview);
+      node.addEventListener("change", updateParamPreview);
+    });
     document.getElementById("addModelBtn")?.addEventListener("click", addModel);
     document.getElementById("modelPills")?.addEventListener("click", (event) => {
       const btn = event.target?.closest?.("button[data-remove-model]");
