@@ -7,6 +7,8 @@ import re
 import subprocess
 import shutil
 import gzip
+import signal
+import threading
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
@@ -31,6 +33,8 @@ SYSTEM_TOOL: dict[str, dict[str, Any]] = {}
 # 备用工具注册表 {func_name: {"des": str, "perm": int, "func": function}}
 SPARE_TOOL: dict[str, dict[str, Any]] = {}
 _TOOL_SCHEMA_CACHE: dict[int, list[dict[str, Any]]] = {}
+_RUNNING_TOOL_CONTEXTS: dict[str, dict[str, Any]] = {}
+_RUNNING_TOOL_LOCK = threading.RLock()
 
 MAX_TEXT_LEN = 8000
 DEFAULT_TIMEZONE = "Asia/Shanghai"
@@ -153,6 +157,49 @@ def _save_memory_payload(payload: dict[str, Any]) -> dict[str, Any]:
     normalized["updated_at"] = _now_iso()
     _atomic_write_json(_MEMORY_FILE, normalized)
     return normalized
+
+
+def register_running_tool(call_id: str, handle: Any) -> None:
+    cid = str(call_id or "").strip()
+    if not cid:
+        return
+    with _RUNNING_TOOL_LOCK:
+        _RUNNING_TOOL_CONTEXTS[cid] = {"handle": handle, "ts": _now_iso()}
+
+
+def clear_running_tool(call_id: str) -> None:
+    cid = str(call_id or "").strip()
+    if not cid:
+        return
+    with _RUNNING_TOOL_LOCK:
+        _RUNNING_TOOL_CONTEXTS.pop(cid, None)
+
+
+def skip_running_tool(call_id: str) -> bool:
+    cid = str(call_id or "").strip()
+    if not cid:
+        return False
+    with _RUNNING_TOOL_LOCK:
+        ctx = _RUNNING_TOOL_CONTEXTS.get(cid)
+    if not isinstance(ctx, dict):
+        return False
+    handle = ctx.get("handle")
+    try:
+        if isinstance(handle, subprocess.Popen):
+            try:
+                if hasattr(os, "killpg") and hasattr(handle, "pid") and int(handle.pid or 0) > 0:
+                    os.killpg(handle.pid, signal.SIGTERM)
+                else:
+                    handle.terminate()
+            except Exception:
+                try:
+                    handle.terminate()
+                except Exception:
+                    pass
+            return True
+    except Exception:
+        pass
+    return False
 
 
 def tool(tool_perm: int, tool_des: str, must: bool = False) -> Callable:
@@ -382,6 +429,7 @@ def run_agent_tool(
     arguments: dict[str, Any] | None,
     *,
     call_id: str | None = None,
+    skip_token: Any = None,
 ) -> str:
     """
     Execute a tool on behalf of the LLM agent. Returns JSON string.
@@ -389,6 +437,19 @@ def run_agent_tool(
     """
     payload = arguments if isinstance(arguments, dict) else {}
     call_id_text = str(call_id or "").strip()
+    skip_token_text = str(skip_token or "").strip()
+
+    if skip_token_text:
+        out = {
+            "ok": False,
+            "tool_name": str(agent_tool_name or "").strip(),
+            "error": "tool skipped",
+            "error_code": "user_skipped",
+            "pending_confirmation": False,
+        }
+        if call_id_text:
+            out["call_id"] = call_id_text
+        return json.dumps(out, ensure_ascii=False)
 
     tool_name = str(agent_tool_name or "").strip()
     if not find_tool(tool_name):
@@ -412,6 +473,18 @@ def run_agent_tool(
         if clean_key == "args":
             continue  # already handled above
         call_kwargs[clean_key] = str(value)
+    if call_id_text:
+        try:
+            import inspect as _inspect
+            info = find_tool(tool_name)
+            sig = _inspect.signature(info["func"]) if info else None
+            if sig and (
+                "call_id" in sig.parameters
+                or any(p.kind == _inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
+            ):
+                call_kwargs.setdefault("call_id", call_id_text)
+        except Exception:
+            pass
 
     capture = io.StringIO()
     try:
@@ -830,6 +903,7 @@ def run_terminal(
                 "message": f"Command '{command}' is waiting for user confirmation.",
             }
 
+    proc: subprocess.Popen[str] | None = None
     try:
         work_dir = str(cwd).strip() if cwd else None
         if work_dir and not Path(work_dir).is_dir():
@@ -837,17 +911,20 @@ def run_terminal(
             work_dir = None
         exec_cwd = work_dir or os.getcwd()
         shell_path = shutil.which("bash") or "/bin/sh"
-        result = subprocess.run(
+        proc = subprocess.Popen(
             command,
             shell=True,
             executable=shell_path,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
             cwd=work_dir,
             env={**_safe_env(), "PYTHONUNBUFFERED": "1"},
+            start_new_session=True,
         )
-        stdout_raw = result.stdout or ""
-        stderr_raw = result.stderr or ""
+        register_running_tool(call_id, proc)
+        stdout_raw, stderr_raw = proc.communicate()
+        returncode = proc.returncode if proc.returncode is not None else 0
         out = stdout_raw + stderr_raw
         if len(out) > 8000:
             out = out[:8000] + "\n...(output truncated)"
@@ -855,26 +932,28 @@ def run_terminal(
         safe_stderr = redact_sensitive_text(stderr_raw)
         safe_output = redact_sensitive_text(out.strip() or "(no output)")
         ret = {
-            "ok": result.returncode == 0,
-            "success": result.returncode == 0,
+            "ok": returncode == 0,
+            "success": returncode == 0,
             "cmd": command,
             "note": note_text,
             "cwd": exec_cwd,
             "shell": shell_path,
             "stdout": safe_stdout,
             "stderr": safe_stderr,
-            "returncode": result.returncode,
+            "returncode": returncode,
             "output": safe_output,
             "pending_confirmation": False,
             "approval": True if approval is True else approval,
         }
-        if result.returncode != 0:
-            ret["error"] = f"Command failed with exit code {result.returncode}"
+        if returncode != 0:
+            ret["error"] = f"Command failed with exit code {returncode}"
         if cwd_info:
             ret["cwd_note"] = cwd_info
         return ret
     except Exception as e:
         return {"ok": False, "error": str(e), "cmd": command[:120], "note": note_text}
+    finally:
+        clear_running_tool(call_id)
 
 
 def _parse_event_id(raw: str | int | None) -> int | None:

@@ -214,6 +214,16 @@
       color: #ffadc9;
       border-bottom-color: rgba(255, 173, 207, 0.42);
     }
+    [data-theme="dark"] .msg.bot .bubble.md a[href^="toolskip:"] {
+      background: rgba(216, 92, 149, 0.16);
+      border-color: rgba(255, 137, 190, 0.24);
+      color: #ffadc9;
+      box-shadow: inset 0 1px 0 rgba(255, 196, 220, 0.08);
+    }
+    [data-theme="dark"] .msg.bot .bubble.md a[href^="toolskip:"]:hover {
+      background: rgba(216, 92, 149, 0.24);
+      border-color: rgba(255, 137, 190, 0.34);
+    }
     [data-theme="dark"] .msg.bot .bubble.md th {
       background: rgba(39, 31, 49, 0.72);
       color: #ded2df;
@@ -1388,6 +1398,29 @@
     .msg.bot .bubble.md td:last-child { border-right: none; }
     .msg.bot .bubble.md a { color: var(--accent); text-decoration: none; border-bottom: 1.5px dotted var(--accent-2); }
     .msg.bot .bubble.md a:hover { border-bottom-style: solid; }
+    .msg.bot .bubble.md a[href^="toolskip:"] {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 22px;
+      margin-top: 4px;
+      padding: 1px 9px;
+      border: 1px solid rgba(255, 110, 180, 0.28);
+      border-radius: 999px;
+      background: rgba(255, 110, 180, 0.10);
+      color: var(--accent-deep);
+      font-size: 11px;
+      font-weight: 700;
+      line-height: 1.35;
+      text-decoration: none;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.36);
+      transition: transform 0.16s var(--ease-smooth), background 0.16s var(--ease-smooth), border-color 0.16s var(--ease-smooth);
+    }
+    .msg.bot .bubble.md a[href^="toolskip:"]:hover {
+      transform: translateY(-1px);
+      background: rgba(255, 110, 180, 0.16);
+      border-color: rgba(255, 110, 180, 0.42);
+    }
 
     /* System pill */
 	    .sys-notice {
@@ -3015,7 +3048,7 @@
   <div class="brand">
     <div class="brand-logo" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"></circle><path d="M12 2.8v4.2M12 17v4.2M2.8 12h4.2M17 12h4.2M5.3 5.3l3 3M15.7 15.7l3 3M18.7 5.3l-3 3M8.3 15.7l-3 3"></path></svg></div>
     <span class="brand-name">TindaAgent</span>
-    <button id="versionBadgeBtn" class="version-badge version-btn" onclick="showVersionTip()" title="版本信息">v1.8.3</button>
+    <button id="versionBadgeBtn" class="version-badge version-btn" onclick="showVersionTip()" title="版本信息">v1.9.0</button>
     <button id="accountBtn" class="icon-btn account-btn" onclick="showAccountPopup()" title="切换账户" aria-label="切换账户">
       <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 21a8 8 0 0 0-16 0"></path><circle cx="12" cy="8" r="3.2"></circle></svg>
     </button>
@@ -3248,7 +3281,7 @@
   };
   const USER_ADMIN_PERM = 511;
   const AUTH_TOKEN_KEY = "ta_auth_token";
-  const VERSION_FALLBACK = "v1.8.3";
+  const VERSION_FALLBACK = "v1.9.0";
   const CONTEXT_TOKEN_DEFAULT = 16000;
   const CONTEXT_TOKEN_MIN = 16000;
   const CONTEXT_TOKEN_MAX = 200000;
@@ -4352,11 +4385,11 @@
     if (existing && !isDraftSessionId(existing)) return existing;
 
     const sid = genSessionId();
-    setActiveSession(sid, { title: "新对话", silent: true });
+    setActiveSession(sid, { title: "新对话", silent: true, skipContextUsage: true });
     return sid;
   }
 
-  function setActiveSession(sessionId, { title = "新对话", silent = false } = {}) {
+  function setActiveSession(sessionId, { title = "新对话", silent = false, skipContextUsage = false } = {}) {
     const sid = String(sessionId || "").trim();
     if (!sid) return;
     setStoredSessionId(sid);
@@ -4368,7 +4401,7 @@
     }).catch(() => {});
     activeSessionTitle = String(title || "新对话");
     renderHeaderStatus();
-    if (!isDraftSessionId(sid)) refreshContextUsageLength(sid).catch(() => {});
+    if (!skipContextUsage && !isDraftSessionId(sid)) refreshContextUsageLength(sid).catch(() => {});
     if (!silent) showToast(`已切换会话：${activeSessionTitle}`);
     toolLastSeq = 0;
     processedTerminalSeq.clear();
@@ -4884,6 +4917,36 @@
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     return Array.isArray(data.entries) ? data.entries : [];
+  }
+
+  async function skipRunningToolCall(rawUrl) {
+    const sid = String(getSessionId() || "").trim();
+    if (!sid || isDraftSessionId(sid)) {
+      showToast("当前没有可跳过的工具调用", "warn");
+      return;
+    }
+    const raw = String(rawUrl || "");
+    const query = raw.startsWith("toolskip:") ? raw.slice("toolskip:".length) : raw;
+    const params = new URLSearchParams(query);
+    const toolCallId = String(params.get("tool_call_id") || "").trim();
+    const callId = String(params.get("call_id") || "").trim();
+    const targetId = toolCallId || callId;
+    if (!targetId) {
+      showToast("工具调用 ID 缺失，无法跳过", "warn");
+      return;
+    }
+    try {
+      const res = await apiFetch(`/sessions/${encodeURIComponent(sid)}/tool-calls/${encodeURIComponent(targetId)}/skip`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ call_id: callId, tool_call_id: toolCallId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data?.ok === false) throw new Error(String(data?.error || `HTTP ${res.status}`));
+      showToast("已请求跳过当前工具", "ok");
+    } catch (e) {
+      showToast(`跳过失败：${String(e?.message || e)}`, "error");
+    }
   }
 
   function removeHistoryLoadMoreControl() {
@@ -6146,11 +6209,11 @@
         let streamRenderLastAt = 0;
         let streamRenderPending = "";
 
-        function toolBlockMarkdown(name, cid, done, progress) {
+        function toolBlockMarkdown(name, cid, done, progress, toolCallId = "") {
           if (window.ChatBubbleRenderer?.renderToolMarkerMarkdown) {
             return window.ChatBubbleRenderer.renderToolMarkerMarkdown(
-              { name: name || "unknown", id: cid || "", progress: progress || "" },
-              { done: !!done, progress: progress || "" }
+              { name: name || "unknown", id: cid || "", tool_call_id: toolCallId || "", progress: progress || "" },
+              { done: !!done, progress: progress || "", tool_call_id: toolCallId || "" }
             );
           }
           return "";
@@ -6195,7 +6258,8 @@
         function upsertToolBlock(payload, done, progress) {
           if (!payload || typeof payload !== "object") return false;
           const name = normalizeToolCallKey(payload.agent_tool || payload.name || payload.tool_name) || "unknown";
-          const cid = normalizeToolCallKey(payload.call_id || payload.id || "").replace(/^tc_/, "");
+          const cid = normalizeToolCallKey(payload.call_id || payload.id || "");
+          const toolCallId = normalizeToolCallKey(payload.tool_call_id || payload.toolCallId || "");
           const progressText = normalizeToolCallKey(progress || payload.progress || "");
           const keys = toolKeysFromPayload(payload);
           const idx = findToolBlockIndex(keys, name);
@@ -6203,23 +6267,36 @@
             type: "tool",
             name,
             cid,
+            toolCallId,
             done: !!done,
             progress: progressText,
-            block: toolBlockMarkdown(name, cid, !!done, progressText),
+            block: window.ChatBubbleRenderer?.renderToolMarkerMarkdown
+              ? window.ChatBubbleRenderer.renderToolMarkerMarkdown(
+                  { name, id: cid, tool_call_id: toolCallId, progress: progressText },
+                  { done: !!done, progress: progressText, tool_call_id: toolCallId }
+                )
+              : toolBlockMarkdown(name, cid, !!done, progressText, toolCallId),
           };
           if (idx >= 0) {
             const prev = streamParts[idx] || {};
             const nextDone = prev.done || nextBlock.done;
             const nextName = prev.name || nextBlock.name;
             const nextCid = nextBlock.cid || prev.cid || "";
+            const nextToolCallId = nextBlock.toolCallId || prev.toolCallId || "";
             const nextProgress = nextDone ? "" : (nextBlock.progress || prev.progress || "");
             streamParts[idx] = {
               type: "tool",
               name: nextName,
               cid: nextCid,
+              toolCallId: nextToolCallId,
               done: nextDone,
               progress: nextProgress,
-              block: toolBlockMarkdown(nextName, nextCid, nextDone, nextProgress),
+              block: window.ChatBubbleRenderer?.renderToolMarkerMarkdown
+                ? window.ChatBubbleRenderer.renderToolMarkerMarkdown(
+                    { name: nextName, id: nextCid, tool_call_id: nextToolCallId, progress: nextProgress },
+                    { done: nextDone, progress: nextProgress, tool_call_id: nextToolCallId }
+                  )
+                : toolBlockMarkdown(nextName, nextCid, nextDone, nextProgress, nextToolCallId),
             };
             rememberToolBlockKeys(idx, keys);
           } else {
@@ -6653,6 +6730,13 @@
   document.addEventListener("click", (e) => {
     const target = e.target;
     if (!(target instanceof Node)) return;
+    const link = target instanceof Element ? target.closest('a[href^="toolskip:"]') : null;
+    if (link) {
+      e.preventDefault();
+      e.stopPropagation();
+      skipRunningToolCall(link.getAttribute("href") || "");
+      return;
+    }
     if (timeModePanelEl && timeModeBtnEl) {
       if (!(timeModePanelEl.contains(target) || timeModeBtnEl.contains(target))) {
         closeTimePanel();

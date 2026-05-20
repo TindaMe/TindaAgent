@@ -239,6 +239,8 @@
     if (typeof d !== "object") d = {};
     var name = d.name || d.tool_name || d.agent_tool || options.name || "unknown";
     var cid = d.id || d.call_id || options.id || options.callId || "";
+    var displayCid = String(cid || "").replace(/^tc_/, "");
+    var toolCallId = d.tool_call_id || d.toolCallId || options.tool_call_id || options.toolCallId || "";
     var status = String(d.status || options.status || "").trim().toLowerCase();
     var progressText = String(d.progress || options.progress || "").trim();
     var elapsedMs = Number(d.elapsed_ms || d.elapsedMs || options.elapsed_ms || options.elapsedMs || 0);
@@ -257,8 +259,14 @@
     if (!done && progressText) {
       lines.push("> **状态**: " + progressText);
     }
+    if (!done && (toolCallId || cid)) {
+      var params = new URLSearchParams();
+      if (toolCallId) params.set("tool_call_id", String(toolCallId));
+      if (cid) params.set("call_id", String(cid));
+      lines.push("> [" + "跳过" + "](toolskip:" + params.toString() + ")");
+    }
     if (done) {
-      lines.push("> **已调用工具**: " + name + (cid ? " #" + cid : ""));
+      lines.push("> **已调用工具**: " + name + (displayCid ? " #" + displayCid : ""));
     }
     return lines.join("\n") + (options.trailingNewline === false ? "" : "\n");
   }

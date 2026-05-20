@@ -518,6 +518,34 @@ class LogArchiveEventLookupTests(unittest.TestCase):
         self.assertEqual(str(payload.get("title", "")), "新对话")
         title_mock.assert_called_once_with(sid)
 
+    def test_get_session_context_usage_api_recovers_missing_meta_for_live_session(self) -> None:
+        sid = "s_context_usage_live_missing_meta"
+
+        class _FakeAgent:
+            perm = 511
+
+        class _FakeStore:
+            def ensure_session(self, _sid: str, owner_uid: str | None = None) -> dict:
+                return {"id": _sid, "title": "新对话", "owner_uid": owner_uid or ""}
+
+            def get_context_messages(self, _sid: str) -> list[dict]:
+                return []
+
+            def get_session(self, _sid: str) -> dict | None:
+                return None
+
+        with patch.object(server, "_store", _FakeStore()), \
+             patch.object(server, "_require_login", return_value=object()), \
+             patch.dict(server._sessions, {sid: _FakeAgent()}, clear=True), \
+             patch.object(server, "_generate_title_from_first_round") as title_mock:
+            resp = asyncio.run(server.get_session_context_usage(sid))
+
+        payload = json.loads(resp.body.decode("utf-8"))
+        self.assertTrue(bool(payload.get("ok")))
+        self.assertEqual(str(payload.get("session_id", "")), sid)
+        self.assertEqual(int(payload.get("usage_length", -1)), 0)
+        title_mock.assert_not_called()
+
     def test_auto_compress_skips_by_raw_chat_count_when_token_not_over_limit(self) -> None:
         sid = "s_auto_compress_row_trigger"
         raw_rows: list[dict] = []
@@ -922,6 +950,20 @@ class LogArchiveEventLookupTests(unittest.TestCase):
         self.assertEqual(str(out.get("reply", "")), "ok")
         self.assertIn("content", fake_client._tool_msg)
         self.assertIsInstance(fake_client._tool_msg.get("content"), str)
+
+    def test_request_tool_skip_is_consumed_as_user_skipped_result(self) -> None:
+        from TindaAgent.Process.AI import client as ai_client
+
+        sid = "s_skip_unit"
+        model_id = "call_skip_unit"
+        call_id = "tc_skip_unit"
+        self.assertTrue(ai_client.request_tool_skip(sid, tool_call_id=model_id))
+        ai_client._bind_tool_skip_alias(sid, model_id, call_id)
+        payload = ai_client._consume_tool_skip(sid, model_id, call_id)
+        self.assertIsInstance(payload, dict)
+        _raw, step = ai_client._build_skipped_tool_result("run_terminal", call_id, model_id, {"cmd": "sleep 30"})
+        self.assertTrue(ai_client._tool_skipped(step))
+        self.assertEqual(str(step.get("result", {}).get("error_code", "")), "user_skipped")
 
     def test_chat_html_no_random_confirm_id_fallback_for_pending(self) -> None:
         chat_html = Path(__file__).resolve().parents[1] / "Web" / "chat.html"

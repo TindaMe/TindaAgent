@@ -22,6 +22,8 @@ load_dotenv(dotenv_path=_ENV_PATH)
 _THIS_FILE = str(Path(__file__).resolve())
 _LLM_REQUEST_LOG = Path(os.getenv("TINDA_LLM_REQUEST_LOG", str(get_log_root() / "llm_request.jsonl")))
 _last_llm_request_row: dict[str, Any] | None = None
+_TOOL_SKIP_LOCK = threading.RLock()
+_TOOL_SKIP_REQUESTS: dict[str, dict[str, Any]] = {}
 
 
 def _parse_args(raw: str | None) -> dict[str, Any]:
@@ -41,6 +43,97 @@ def _parse_json(raw: str | None) -> Any:
         return json.loads(raw)
     except (TypeError, json.JSONDecodeError):
         return None
+
+
+def request_tool_skip(session_id: str, tool_call_id: str = "", call_id: str = "") -> bool:
+    sid = str(session_id or "").strip()
+    model_id = str(tool_call_id or "").strip()
+    internal_id = str(call_id or "").strip()
+    if not sid or (not model_id and not internal_id):
+        return False
+    key = model_id or internal_id
+    with _TOOL_SKIP_LOCK:
+        bucket = _TOOL_SKIP_REQUESTS.setdefault(sid, {})
+        bucket[key] = {"tool_call_id": model_id, "call_id": internal_id, "ts": time.time()}
+        if model_id and internal_id:
+            bucket[internal_id] = bucket[key]
+    try:
+        tool_registry.skip_running_tool(internal_id or model_id)
+    except Exception:
+        pass
+    return True
+
+
+def _bind_tool_skip_alias(session_id: str, tool_call_id: str, call_id: str) -> None:
+    sid = str(session_id or "").strip()
+    model_id = str(tool_call_id or "").strip()
+    internal_id = str(call_id or "").strip()
+    if not sid or not model_id or not internal_id:
+        return
+    with _TOOL_SKIP_LOCK:
+        bucket = _TOOL_SKIP_REQUESTS.get(sid, {})
+        payload = bucket.get(model_id) or bucket.get(internal_id)
+        if isinstance(payload, dict):
+            payload["tool_call_id"] = model_id
+            payload["call_id"] = internal_id
+            bucket[model_id] = payload
+            bucket[internal_id] = payload
+    if _peek_tool_skip(sid, model_id, internal_id):
+        try:
+            tool_registry.skip_running_tool(internal_id)
+        except Exception:
+            pass
+
+
+def _consume_tool_skip(session_id: str, tool_call_id: str = "", call_id: str = "") -> dict[str, Any] | None:
+    sid = str(session_id or "").strip()
+    if not sid:
+        return None
+    keys = [str(tool_call_id or "").strip(), str(call_id or "").strip()]
+    with _TOOL_SKIP_LOCK:
+        bucket = _TOOL_SKIP_REQUESTS.get(sid, {})
+        for key in keys:
+            if key and key in bucket:
+                payload = bucket.pop(key)
+                for other in keys:
+                    if other:
+                        bucket.pop(other, None)
+                if not bucket:
+                    _TOOL_SKIP_REQUESTS.pop(sid, None)
+                return payload
+    return None
+
+
+def _peek_tool_skip(session_id: str, tool_call_id: str = "", call_id: str = "") -> bool:
+    sid = str(session_id or "").strip()
+    if not sid:
+        return False
+    keys = {str(tool_call_id or "").strip(), str(call_id or "").strip()}
+    with _TOOL_SKIP_LOCK:
+        bucket = _TOOL_SKIP_REQUESTS.get(sid, {})
+        return any(key and key in bucket for key in keys)
+
+
+def _build_skipped_tool_result(name: str, call_id: str, model_id: str, args: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    payload = {
+        "ok": False,
+        "tool_name": str(name or "unknown"),
+        "call_id": str(call_id or ""),
+        "error": "用户已跳过该工具调用",
+        "error_code": "user_skipped",
+        "status": "skipped",
+        "pending_confirmation": False,
+    }
+    raw = json.dumps(payload, ensure_ascii=False)
+    step = {
+        "agent_tool": str(name or "unknown"),
+        "call_id": str(call_id or ""),
+        "tool_call_id": str(model_id or ""),
+        "arguments": args if isinstance(args, dict) else {},
+        "result": dict(payload),
+        "raw_result": raw,
+    }
+    return raw, step
 
 
 def _extract_api_error(exc: Exception) -> str:
@@ -469,6 +562,17 @@ def _tool_failed(step: dict) -> bool:
     return False
 
 
+def _tool_skipped(step: dict) -> bool:
+    r = step.get("result", {})
+    if isinstance(r, dict):
+        if r.get("error_code") == "user_skipped" or r.get("status") == "skipped":
+            return True
+        inner = r.get("result")
+        if isinstance(inner, dict):
+            return inner.get("error_code") == "user_skipped" or inner.get("status") == "skipped"
+    return False
+
+
 def _tool_error(step: dict) -> str:
     """提取工具步骤的错误信息。"""
     r = step.get("result", {})
@@ -537,7 +641,8 @@ class LLMClient:
             raise
 
     def _run_tools(self, tool_calls: list[dict], user_perm: int,
-                   msgs: list[dict], trace: list[dict], func: str) -> tuple[list[dict], bool]:
+                   msgs: list[dict], trace: list[dict], func: str,
+                   session_id: str = "") -> tuple[list[dict], bool]:
         """执行工具调用，写入消息历史与轨迹。"""
         steps = []
         has_pending_confirmation = False
@@ -548,6 +653,13 @@ class LLMClient:
             event_id = audit_event("TOOL_EXECUTE", "ai", func, _THIS_FILE, f"tool_start tool={name}",
                                     extra={"tool_name": name, "has_arguments": bool(args), "model_id": model_id})
             call_id = f"tc_{event_id:010d}"
+            _bind_tool_skip_alias(session_id, model_id, call_id)
+            if _consume_tool_skip(session_id, model_id, call_id):
+                raw, skipped_step = _build_skipped_tool_result(name, call_id, model_id, args)
+                trace.append(skipped_step)
+                steps.append(skipped_step)
+                msgs.append({"role": "tool", "tool_call_id": call["id"], "content": raw})
+                continue
             raw = tool_registry.run_agent_tool(name, user_perm, args, call_id=call_id)
             parsed = _parse_json(raw)
 
@@ -590,6 +702,7 @@ class LLMClient:
             func: str,
             *,
             heartbeat_interval: float = 1.0,
+            session_id: str = "",
     ) -> Iterator[dict]:
         """Run blocking tools in a worker thread and emit heartbeats while waiting."""
         q: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=1)
@@ -608,7 +721,24 @@ class LLMClient:
                                             extra={"tool_name": name, "has_arguments": bool(args), "model_id": model_id})
                     call_id = f"tc_{event_id:010d}"
                     current["call_id"] = call_id
+                    _bind_tool_skip_alias(session_id, model_id, call_id)
+                    if _consume_tool_skip(session_id, model_id, call_id):
+                        raw, skipped_step = _build_skipped_tool_result(name, call_id, model_id, args)
+                        trace.append(skipped_step)
+                        steps.append(skipped_step)
+                        msgs.append({"role": "tool", "tool_call_id": call["id"], "content": raw})
+                        audit_event("TOOL_EXECUTE", "ai", func, _THIS_FILE, f"tool_skipped_before_run tool={name}",
+                                    extra={"tool_name": name, "call_id": call_id, "model_id": model_id})
+                        continue
                     raw = tool_registry.run_agent_tool(name, user_perm, args, call_id=call_id)
+                    if _consume_tool_skip(session_id, model_id, call_id):
+                        raw, skipped_step = _build_skipped_tool_result(name, call_id, model_id, args)
+                        trace.append(skipped_step)
+                        steps.append(skipped_step)
+                        msgs.append({"role": "tool", "tool_call_id": call["id"], "content": raw})
+                        audit_event("TOOL_EXECUTE", "ai", func, _THIS_FILE, f"tool_skipped_after_run tool={name}",
+                                    extra={"tool_name": name, "call_id": call_id, "model_id": model_id})
+                        continue
                     parsed = _parse_json(raw)
 
                     user_safe = parsed
@@ -652,10 +782,21 @@ class LLMClient:
             try:
                 item = q.get(timeout=max(0.2, float(heartbeat_interval)))
             except queue.Empty:
+                cur = dict(current)
+                cur["skippable"] = bool(
+                    cur.get("tool_call_id")
+                    or cur.get("call_id")
+                    or cur.get("name")
+                )
+                cur["skip_requested"] = _peek_tool_skip(
+                    session_id,
+                    str(cur.get("tool_call_id", "") or ""),
+                    str(cur.get("call_id", "") or ""),
+                )
                 yield {
                     "type": "tool_heartbeat",
                     "elapsed_ms": int((time.monotonic() - started) * 1000),
-                    "tool": dict(current),
+                    "tool": cur,
                 }
                 continue
             if item.get("type") == "error":
@@ -669,7 +810,7 @@ class LLMClient:
 
     def _process_tool_loop(self, messages: list[dict], user_perm: int, temperature: float,
                            max_tool_steps: int, stream: bool, base_len: int,
-                           func: str) -> tuple[str, list[dict], int, list[dict]]:
+                           func: str, *, session_id: str = "") -> tuple[str, list[dict], int, list[dict]]:
         """核心工具调用循环（同步与流式共用）。"""
         msgs = [m.copy() for m in messages]
         tools = tool_registry.build_agent_tool_schemas(user_perm)
@@ -715,9 +856,20 @@ class LLMClient:
             msg_out = _attach_reasoning(
                 {"role": "assistant", "content": content_for_history, "tool_calls": calls}, rc)
             msgs.append(msg_out)
-            step_trace, has_pending_confirmation = self._run_tools(calls, user_perm, msgs, trace, func)
+            step_trace, has_pending_confirmation = self._run_tools(
+                calls,
+                user_perm,
+                msgs,
+                trace,
+                func,
+                session_id=session_id,
+            )
 
             steps += 1
+            if any(_tool_skipped(s) for s in step_trace):
+                fallback = "工具调用已被用户跳过。"
+                msgs.append({"role": "assistant", "content": fallback})
+                return fallback, msgs[base_len:], steps, trace
             # 所有工具均失败 → 继续循环，让 LLM 根据 tool role 的错误信息自行决定下一步
             if step_trace and all(_tool_failed(s) for s in step_trace):
                 continue
@@ -730,18 +882,21 @@ class LLMClient:
                 return fallback, msgs[base_len:], steps, trace
 
     def chat_with_tools(self, messages: list[dict], user_perm: int,
-                        temperature: float = 0.7, max_tool_steps: int = 6) -> dict:
+                        temperature: float = 0.7, max_tool_steps: int = 6,
+                        session_id: str = "") -> dict:
         """支持工具调用的对话，自动纠正模型假调用。"""
         base_len = len(messages)
         reply, delta, steps, trace = self._process_tool_loop(
-            messages, user_perm, temperature, max_tool_steps, False, base_len, "LLMClient.chat_with_tools")
+            messages, user_perm, temperature, max_tool_steps, False, base_len, "LLMClient.chat_with_tools",
+            session_id=session_id)
         audit_event("SYSTEM_EXECUTE", "ai", "LLMClient.chat_with_tools", _THIS_FILE, "chat_with_tools_done",
                      extra={"model": self.model, "tool_steps": steps, "tool_trace_len": len(trace),
                             "reply_len": len(reply)})
         return {"reply": reply, "history_delta": delta, "tool_steps": steps, "tool_trace": trace}
 
     def stream_chat_with_tools(self, messages: list[dict], user_perm: int,
-                               temperature: float = 0.7, max_tool_steps: int = 6) -> Iterator[dict]:
+                               temperature: float = 0.7, max_tool_steps: int = 6,
+                               session_id: str = "") -> Iterator[dict]:
         """流式对话（支持工具调用循环），自动纠正模型假调用。"""
         msgs = [m.copy() for m in messages]
         tools = tool_registry.build_agent_tool_schemas(user_perm)
@@ -877,6 +1032,7 @@ class LLMClient:
                     msgs,
                     trace,
                     "LLMClient.stream_chat_with_tools",
+                    session_id=session_id,
             ):
                 if tool_event.get("type") == "tool_heartbeat":
                     yield {
@@ -892,6 +1048,20 @@ class LLMClient:
                 yield {"type": "tool_step", "trace": step_trace}
 
             steps += 1
+            if any(_tool_skipped(s) for s in step_trace):
+                fallback = "工具调用已被用户跳过。"
+                msgs.append({"role": "assistant", "content": fallback})
+                yield {"type": "delta", "content": fallback}
+                yield {"type": "done", **(_build_done(fallback, msgs, base_len, steps, trace))}
+                audit_event(
+                    "SYSTEM_EXECUTE",
+                    "ai",
+                    "LLMClient.stream_chat_with_tools",
+                    _THIS_FILE,
+                    "stream_tool_skipped",
+                    extra={"model": self.model, "tool_steps": steps, "tool_trace_len": len(trace)},
+                )
+                return
             if step_trace and all(_tool_failed(s) for s in step_trace):
                 continue
             if has_pending_confirmation:

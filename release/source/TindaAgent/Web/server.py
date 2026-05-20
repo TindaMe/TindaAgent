@@ -23,7 +23,11 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from pydantic import BaseModel, Field
 
 from TindaAgent.Process.AI.agent import Agent
-from TindaAgent.Process.AI.client import has_tool_protocol_artifacts, strip_tool_protocol_artifacts
+from TindaAgent.Process.AI.client import (
+    has_tool_protocol_artifacts,
+    request_tool_skip,
+    strip_tool_protocol_artifacts,
+)
 from TindaAgent.Process.AI.dispatcher import LlmDispatcher
 from TindaAgent.Process.Versioning import get_version_manager
 from TindaAgent.Process.Security import (
@@ -2100,6 +2104,7 @@ def _get_agent(session_id: str, *, refresh_context: bool = True):
             client=_tool_client,
             model_name=_llm.current_model,
         )
+        agent.session_id = sid
         model = _llm.current_model
         agent._context_logger = lambda hist, trigger="agent_ready", _sid=sid, _model=model: _write_context_log(
             _sid,
@@ -2111,6 +2116,7 @@ def _get_agent(session_id: str, *, refresh_context: bool = True):
     else:
         # 会话 Agent 需实时跟随当前登录用户权限，避免工具可见性与鉴权失真
         agent = _sessions[sid]
+        agent.session_id = sid
         agent._client = _tool_client
         model = _llm.current_model
         agent._context_logger = lambda hist, trigger="agent_ready", _sid=sid, _model=model: _write_context_log(
@@ -3563,7 +3569,19 @@ async def get_session_config(session_id: str):
 
 @app.get("/sessions/{session_id}/context-usage")
 async def get_session_context_usage(session_id: str):
-    sid, _meta = _require_session_access(session_id, create=False)
+    try:
+        sid, _meta = _require_session_access(session_id, create=False)
+    except HTTPException as exc:
+        if exc.status_code != 404:
+            raise
+        sid = str(session_id or "").strip()
+        current = _require_login()
+        agent = _sessions.get(sid)
+        if not sid or agent is None:
+            raise
+        get_uid = getattr(current, "get_uid", None)
+        uid = str(get_uid() if callable(get_uid) else "")
+        _store.ensure_session(sid, owner_uid=uid)
     rows = _store.get_context_messages(sid)
     usage_length = _estimate_context_usage_length(rows)
     meta = _store.get_session(sid) or {}
@@ -3591,6 +3609,25 @@ async def get_session_context_usage(session_id: str):
             "max_context_tokens": int(max_context_tokens),
         }
     )
+
+
+@app.post("/sessions/{session_id}/tool-calls/{tool_call_id}/skip")
+async def skip_session_tool_call(session_id: str, tool_call_id: str, payload: dict[str, Any] = Body(default_factory=dict)):
+    sid, _meta = _require_session_access(session_id, create=False)
+    model_id = str(tool_call_id or "").strip()
+    call_id = str(payload.get("call_id", "") if isinstance(payload, dict) else "").strip()
+    if not model_id and not call_id:
+        return JSONResponse({"ok": False, "error": "tool_call_id required"}, status_code=400)
+    ok = request_tool_skip(sid, tool_call_id=model_id, call_id=call_id)
+    if not ok:
+        return JSONResponse({"ok": False, "error": "tool call skip request rejected"}, status_code=400)
+    _audit_web(
+        "TOOL_EXECUTE",
+        "skip_session_tool_call",
+        f"tool_call_skip_requested session_id={sid}",
+        {"session_id": sid, "tool_call_id": model_id, "call_id": call_id},
+    )
+    return JSONResponse({"ok": True, "session_id": sid, "tool_call_id": model_id, "call_id": call_id})
 
 
 @app.delete("/sessions/{session_id}")

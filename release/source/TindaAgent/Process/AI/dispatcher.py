@@ -15,6 +15,7 @@ from TindaAgent.Process.AI.client import (
     _parse_json,
     _result_has_pending_confirmation,
     _tool_failed,
+    _tool_skipped,
     record_llm_request,
     record_llm_response_usage,
 )
@@ -167,6 +168,7 @@ class MultiProviderToolClient:
         user_perm: int,
         temperature: float = 0.7,
         max_tool_steps: int = 6,
+        session_id: str = "",
     ) -> dict:
         provider = self._dispatcher.current_provider
         row = self._dispatcher._provider(provider)
@@ -176,6 +178,7 @@ class MultiProviderToolClient:
                 user_perm=user_perm,
                 temperature=temperature,
                 max_tool_steps=max_tool_steps,
+                session_id=session_id,
             )
         base_len = len(messages)
         reply, delta, steps, trace = self._process_tool_loop(
@@ -194,6 +197,7 @@ class MultiProviderToolClient:
         user_perm: int,
         temperature: float = 0.7,
         max_tool_steps: int = 6,
+        session_id: str = "",
     ):
         provider = self._dispatcher.current_provider
         row = self._dispatcher._provider(provider)
@@ -203,6 +207,7 @@ class MultiProviderToolClient:
                 user_perm=user_perm,
                 temperature=temperature,
                 max_tool_steps=max_tool_steps,
+                session_id=session_id,
             )
             return
         base_len = len(messages)
@@ -264,6 +269,12 @@ class MultiProviderToolClient:
             msgs.append(msg_out)
             step_trace, has_pending_confirmation = self._run_tools(normalized_calls, user_perm, msgs, trace, func)
             steps += 1
+            if any(_tool_skipped(s) for s in step_trace):
+                fallback = "工具调用已被用户跳过。"
+                msgs.append({"role": "assistant", "content": fallback})
+                if return_working:
+                    return fallback, msgs, steps, trace
+                return fallback, msgs[base_len:], steps, trace
             if step_trace and all(_tool_failed(s) for s in step_trace):
                 continue
             if has_pending_confirmation:

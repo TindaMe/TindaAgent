@@ -157,6 +157,40 @@ class Agent:
             self._client = LLMClient()
         return self._client
 
+    def _chat_with_tools(self, messages: list[dict], user_perm: int, temperature: float = 0.7) -> dict:
+        client = self._ensure_client()
+        kwargs = {
+            "user_perm": user_perm,
+            "temperature": temperature,
+        }
+        sid = str(getattr(self, "session_id", "") or "").strip()
+        if sid:
+            kwargs["session_id"] = sid
+        try:
+            return client.chat_with_tools(messages, **kwargs)
+        except TypeError as exc:
+            if "session_id" not in str(exc):
+                raise
+            kwargs.pop("session_id", None)
+            return client.chat_with_tools(messages, **kwargs)
+
+    def _stream_chat_with_tools(self, messages: list[dict], user_perm: int, temperature: float = 0.7) -> Iterator[dict]:
+        client = self._ensure_client()
+        kwargs = {
+            "user_perm": user_perm,
+            "temperature": temperature,
+        }
+        sid = str(getattr(self, "session_id", "") or "").strip()
+        if sid:
+            kwargs["session_id"] = sid
+        try:
+            yield from client.stream_chat_with_tools(messages, **kwargs)
+        except TypeError as exc:
+            if "session_id" not in str(exc):
+                raise
+            kwargs.pop("session_id", None)
+            yield from client.stream_chat_with_tools(messages, **kwargs)
+
     def check_perm(self, task: str) -> bool:
         """
         用处： 检查用户是否有执行任务的权限
@@ -184,7 +218,7 @@ class Agent:
         """
         self.history.append({"role": "user", "content": user_message})
         request_messages = self._messages_for_llm_request(self.history)
-        result = self._ensure_client().chat_with_tools(
+        result = self._chat_with_tools(
             request_messages,
             user_perm=self.perm,
             temperature=temperature,
@@ -208,7 +242,7 @@ class Agent:
                 self._context_logger(request_messages, "llm_request")
             except Exception:
                 pass
-        result = self._ensure_client().chat_with_tools(
+        result = self._chat_with_tools(
             request_messages,
             user_perm=self.perm,
             temperature=temperature,
@@ -251,7 +285,7 @@ class Agent:
                 pass
         final_result: dict | None = None
 
-        for event in self._ensure_client().stream_chat_with_tools(
+        for event in self._stream_chat_with_tools(
             request_messages,
             user_perm=self.perm,
             temperature=temperature,
@@ -361,7 +395,7 @@ class Agent:
         else:
             msgs.append({"role": "system", "content": "The terminal command above has been executed per your request. You MUST now respond to the user in natural language: describe what was executed, show the key results, and ask if they need anything else. Do NOT call more tools unless the user explicitly asks for another action."})
         request_messages = self._messages_for_llm_request(msgs)
-        result = self._ensure_client().chat_with_tools(
+        result = self._chat_with_tools(
             request_messages,
             user_perm=self._held_perm,
             temperature=0.7,

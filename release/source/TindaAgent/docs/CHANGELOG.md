@@ -4,6 +4,28 @@
 
 > **分类**: `Added` 新增 | `Changed` 变更 | `Fixed` 修复 | `Removed` 移除 | `BREAKING` 破坏性变更 | `Defense` 防御性加固 | `Known Issues` 已知待修
 
+## v1.9.0 - 2026-05-20
+
+### Added
+
+- **Agent 集群工具跳过控制** — Chat 工具调用气泡在运行中显示 `跳过` 操作，长时间搜索、终端命令或工具执行可由用户主动中止，不再只能等待工具自然返回。
+- **工具跳过后端接口** — 新增 `POST /sessions/{sid}/tool-calls/{tool_call_id}/skip`，前端 `toolskip:` 动作统一转发到后端，由当前会话的 Agent/LLM client 消费跳过请求。
+- **工具执行进程可取消** — `run_terminal` 从阻塞式 `subprocess.run()` 调整为 `subprocess.Popen()` 执行，工具 call_id 与运行中进程绑定；用户跳过时向进程发送终止信号并返回结构化 `user_skipped` 结果。
+- **会话级工具调度上下文** — Agent、LLMClient 与 MultiProviderToolClient 支持透传 `session_id`，工具跳过、heartbeat 和工具执行状态可按会话隔离，避免不同会话工具状态串扰。
+
+### Changed
+
+- **版本提升** — 项目版本从 `1.8.3` 提升到 `1.9.0`，同步更新 Web 版本徽章、设置页 fallback、Chat fallback 和主题脚本标识。
+- **长工具调用交互策略** — 长工具调用不再依赖固定超时或前端拦截，改为“heartbeat/progress 持续反馈 + 用户显式跳过”的控制模型，保留长任务能力同时给用户可见进度和退出手段。
+- **工具循环跳过收束** — LLM 工具循环消费到 `user_skipped` 后会优雅结束当前工具链路，并向会话写入“工具调用已被用户跳过”的 assistant fallback，避免继续等待已取消工具。
+
+### Fixed
+
+- **context-usage 首轮 404 竞态** — 修复真实 session 刚创建但 meta 尚未落盘时 `/sessions/{sid}/context-usage` 返回 404 的问题；live agent 存在时后端会兜底返回空 usage，前端首轮创建阶段也会跳过过早轮询。
+- **工具跳过 ID 映射** — 工具模型侧 `tool_call_id` 与内部审计 `call_id` 建立 alias 绑定，前端跳过动作可在工具开始前、执行中或 ID 刚生成后正确命中同一次工具调用。
+- **工具跳过渲染安全** — Markdown 渲染器允许 `toolskip:` 作为受控安全链接，由 document click 统一拦截处理，避免把跳过动作当普通外链或危险协议渲染。
+- **自动化覆盖** — 增加 context-usage live session 兜底测试和 tool skip 消费测试，并补充长终端跳过 smoke 验证，覆盖本轮 Agent 集群工具控制链路。
+
 ## v1.8.3 - 2026-05-17
 
 ### Added

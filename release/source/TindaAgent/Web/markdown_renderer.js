@@ -20,7 +20,7 @@
 
   function safeHref(rawUrl) {
     const url = String(rawUrl ?? "").trim();
-    if (/^(https?:\/\/|mailto:)/i.test(url)) return url;
+    if (/^(https?:\/\/|mailto:|toolskip:)/i.test(url)) return url;
     return "#";
   }
 
