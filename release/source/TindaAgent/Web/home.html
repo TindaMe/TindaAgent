@@ -159,17 +159,30 @@
     [data-theme="dark"] .btn-admin,
     [data-theme="dark"] .modal-close,
     [data-theme="dark"] .switch-btn,
-    [data-theme="dark"] .version-btn,
-    [data-theme="dark"] .version-badge-btn {
+    [data-theme="dark"] .version-btn:not(.version-badge-btn) {
       box-shadow:
         0 12px 30px rgba(0, 0, 0, 0.26),
         inset 1px 1px 0 rgba(130, 153, 238, 0.026),
         inset -1px -1px 0 rgba(255, 120, 183, 0.012);
       border-color: rgba(255, 176, 211, 0.11);
     }
+    [data-theme="dark"] .version-badge-btn,
+    [data-theme="dark"] .theme-toggle {
+      background: transparent;
+      border-color: rgba(255, 176, 211, 0.11);
+      color: #d8c0cc;
+      box-shadow: none;
+    }
+    [data-theme="dark"] .version-badge-btn:hover,
+    [data-theme="dark"] .theme-toggle:hover {
+      background: rgba(34, 25, 34, 0.88);
+      border-color: rgba(255, 137, 190, 0.20);
+      color: #ffadc9;
+      box-shadow: none;
+    }
     [data-theme="dark"] .btn-chat,
     [data-theme="dark"] .switch-btn,
-    [data-theme="dark"] .version-btn:not(.secondary) {
+    [data-theme="dark"] .version-btn:not(.secondary):not(.version-badge-btn) {
       background: #d85c95;
       color: #fff3f7;
       box-shadow:
@@ -181,7 +194,6 @@
     [data-theme="dark"] .tag:hover,
     [data-theme="dark"] .info-row:hover,
     [data-theme="dark"] .btn-admin:hover,
-    [data-theme="dark"] .version-badge-btn:hover,
     [data-theme="dark"] .version-btn.secondary:hover {
       background: rgba(34, 25, 34, 0.88);
       border-color: rgba(255, 137, 190, 0.20);
@@ -193,7 +205,7 @@
     }
     [data-theme="dark"] .btn-chat:hover,
     [data-theme="dark"] .switch-btn:hover,
-    [data-theme="dark"] .version-btn:not(.secondary):hover {
+    [data-theme="dark"] .version-btn:not(.secondary):not(.version-badge-btn):hover {
       border-color: rgba(255, 173, 207, 0.22);
       box-shadow:
         0 14px 34px rgba(0, 0, 0, 0.30),
@@ -211,22 +223,6 @@
     [data-theme="dark"] .changelog-body pre,
     [data-theme="dark"] .version-current {
       background: rgba(9, 7, 10, 0.72);
-    }
-    [data-theme="dark"] .theme-toggle {
-      background: rgba(25, 19, 27, 0.84);
-      border-color: rgba(255, 176, 211, 0.11);
-      color: #d8c0cc;
-      box-shadow:
-        0 10px 26px rgba(0, 0, 0, 0.24),
-        inset 1px 1px 0 rgba(130, 153, 238, 0.024);
-    }
-    [data-theme="dark"] .theme-toggle:hover {
-      background: rgba(34, 25, 34, 0.88);
-      color: #ffadc9;
-      box-shadow:
-        0 12px 28px rgba(0, 0, 0, 0.26),
-        -4px -5px 16px rgba(118, 139, 226, 0.014),
-        inset 1px 1px 0 rgba(130, 153, 238, 0.024);
     }
     [data-theme="dark"] .version-badge-btn:focus-visible,
     [data-theme="dark"] .theme-toggle:focus-visible,
@@ -536,6 +532,11 @@
       display: flex; align-items: center; gap: 10px;
       font-weight: 700; font-size: 15.5px;
     }
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
 
     .brand-logo {
       width: 34px; height: 34px; border-radius: 50%;
@@ -565,67 +566,52 @@
       -webkit-text-fill-color: transparent;
     }
 
-    .version-badge {
-      --version-badge-ink: var(--text-faint);
-      --version-badge-text-y: -0.55px;
-      font-size: 10.5px; color: transparent;
-      background: var(--surface-2);
-      padding: 2px 9px; border-radius: 999px;
-      border: 1.5px solid var(--border); font-weight: 700;
-      display: inline-flex;
-      align-items: center;
-      white-space: nowrap;
-      word-break: normal;
-      line-break: auto;
-      flex-shrink: 0;
-      text-shadow: 0 var(--version-badge-text-y) var(--version-badge-ink);
-    }
-    .version-badge-btn {
-      border: 1.5px solid var(--border);
-      cursor: pointer;
-      font-family: inherit;
-      line-height: 1.35;
-      transition: transform 0.18s ease,
-                  border-color 0.18s ease,
-                  background 0.18s ease,
-                  color 0.18s ease,
-                  box-shadow 0.18s ease;
-    }
-    .version-badge-btn:hover {
-      border-color: var(--accent-2);
-      --version-badge-ink: var(--accent-deep);
-      background: var(--surface);
-      transform: translateY(-1px);
-    }
-    .version-badge-btn:focus-visible {
-      outline: none;
-      box-shadow: 0 0 0 3px rgba(255, 110, 180, 0.2);
-    }
-
+    .version-badge-btn,
     .theme-toggle {
-      width: 32px; height: 32px;
+      width: 34px;
+      height: 34px;
       border-radius: 50%;
-      background: var(--surface-2);
+      background: transparent;
       border: 1.5px solid var(--border);
-      color: var(--accent);
-      display: grid; place-items: center;
+      color: var(--text-dim);
+      display: grid;
+      place-items: center;
       padding: 0;
       line-height: 1;
       cursor: pointer;
-      margin-left: 6px;
+      font-family: inherit;
+      text-decoration: none;
       flex-shrink: 0;
-      transition: transform 0.32s cubic-bezier(0.34, 1.56, 0.64, 1),
-                  background 0.24s ease,
-                  border-color 0.24s ease,
-                  color 0.24s ease,
-                  box-shadow 0.24s ease;
+      transition: transform 0.22s cubic-bezier(0.34,1.56,0.64,1),
+                  background 0.22s ease,
+                  border-color 0.22s ease,
+                  color 0.22s ease;
     }
+    .version-badge-btn {
+      width: auto;
+      min-width: 54px;
+      max-width: 78px;
+      padding: 0 10px;
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      color: var(--text-dim);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .version-badge-btn:hover,
     .theme-toggle:hover {
-      transform: scale(1.08) rotate(-15deg);
-      background: rgba(255, 110, 180, 0.12);
-      border-color: var(--accent);
+      background: var(--surface-2);
+      border-color: var(--accent-2);
+      color: var(--accent-deep);
+      transform: scale(1.1);
     }
-    .theme-toggle:active { transform: scale(0.94); }
+    .version-badge-btn:active,
+    .theme-toggle:active {
+      transform: scale(0.94);
+    }
+    .version-badge-btn:focus-visible,
     .theme-toggle:focus-visible {
       outline: none;
       box-shadow: 0 0 0 3px rgba(255, 110, 180, 0.2);
@@ -1399,8 +1385,7 @@
     .btn-admin,
     .modal-close,
     .switch-btn,
-    .version-btn,
-    .version-badge-btn {
+    .version-btn:not(.version-badge-btn) {
       overflow: hidden;
       border: 1px solid var(--ios-border);
       box-shadow: var(--ios-shadow), inset 1px 1px 0 rgba(255,255,255,0.78), inset -1px -1px 0 rgba(255,110,180,0.10);
@@ -1410,13 +1395,12 @@
     }
     .btn-chat,
     .switch-btn,
-    .version-btn:not(.secondary) {
+    .version-btn:not(.secondary):not(.version-badge-btn) {
       background: rgba(255, 110, 180, 0.86);
       color: #fff;
     }
     .btn-admin,
     .modal-close,
-    .version-badge-btn,
     .version-btn.secondary {
       background: var(--ios-glass-strong);
       color: var(--text-dim);
@@ -1424,8 +1408,7 @@
     .btn-chat:hover,
     .btn-admin:hover,
     .switch-btn:hover,
-    .version-btn:hover,
-    .version-badge-btn:hover {
+    .version-btn:not(.version-badge-btn):hover {
       border-color: rgba(255, 255, 255, 0.92);
       transform: translateY(-3px);
       box-shadow: 0 20px 48px rgba(61,31,47,0.14), inset 1px 1px 0 rgba(255,255,255,0.9), inset -1px -1px 0 rgba(255,110,180,0.12);
@@ -1438,14 +1421,13 @@
     .btn-chat:active,
     .btn-admin:active,
     .switch-btn:active,
-    .version-btn:active,
-    .version-badge-btn:active {
+    .version-btn:not(.version-badge-btn):active {
       transform: translateY(0) scale(0.98);
       box-shadow: var(--ios-pressed);
     }
     .btn-chat.disabled,
     .switch-btn:disabled,
-    .version-btn:disabled {
+    .version-btn:not(.version-badge-btn):disabled {
       opacity: 0.56;
       cursor: not-allowed;
       transform: none;
@@ -2107,6 +2089,8 @@
       <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"></circle><path d="M12 2.8v4.2M12 17v4.2M2.8 12h4.2M17 12h4.2M5.3 5.3l3 3M15.7 15.7l3 3M18.7 5.3l-3 3M8.3 15.7l-3 3"></path></svg>
     </div>
     <span class="brand-name">TindaAgent</span>
+  </div>
+  <div class="header-actions">
     <button id="versionBadge" type="button" class="version-badge version-badge-btn" title="点击选择版本">v1.10.0</button>
     <button id="themeToggle" class="theme-toggle" type="button" aria-label="切换深色模式" data-theme="light">
       <svg class="theme-icon theme-sun" viewBox="0 0 24 24" aria-hidden="true">
@@ -2118,7 +2102,6 @@
       </svg>
     </button>
   </div>
-  <span class="header-decos" aria-hidden="true"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span>
 </header>
 
 <main class="home-grid">
@@ -2558,7 +2541,7 @@
       const verified = Boolean(data?.verified);
       if (display) {
         if (sig) {
-          ui.versionBadge.textContent = `${display} ${verified ? "signed" : "unsigned"}`;
+          ui.versionBadge.textContent = display;
           ui.versionBadge.title = `当前 ${display} (${verified ? "已签名验证" : "未验证签名"})`;
         } else {
           ui.versionBadge.textContent = display;

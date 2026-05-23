@@ -383,7 +383,7 @@ class LogArchiveEventLookupTests(unittest.TestCase):
         self.assertIn("simulate the user's answer", str((info or {}).get("des", "")))
         result = tool.ask_user_question(
             question="请选择修复范围",
-            options="只修BUG|顺带优化UI|全部",
+            options=["只修BUG", "顺带优化UI", "全部"],
             allow_custom_answer="true",
             call_id="ask_unit",
         )
@@ -414,8 +414,10 @@ class LogArchiveEventLookupTests(unittest.TestCase):
         self.assertIn("HARD RULES", str(fn.get("description", "")))
         self.assertEqual(params.get("required"), ["question"])
         self.assertIn("Ask only one thing", str(props.get("question", {}).get("description", "")))
+        self.assertEqual(props.get("options", {}).get("type"), "array")
+        self.assertEqual(props.get("options", {}).get("items", {}).get("type"), "string")
         self.assertIn("mutually exclusive", str(props.get("options", {}).get("description", "")).lower())
-        self.assertIn("one clean choice per separator", str(props.get("options", {}).get("description", "")))
+        self.assertIn("one clean choice in each array item", str(props.get("options", {}).get("description", "")))
 
     def test_plan_tool_is_registered_and_visible_to_llm(self) -> None:
         info = tool.find_tool("plan")
@@ -423,34 +425,130 @@ class LogArchiveEventLookupTests(unittest.TestCase):
         self.assertEqual(int((info or {}).get("perm", 0)), 1)
 
         result = tool.plan(
+            action="request_completion_confirmation",
             goal="修复 Deep 上下文顺序",
-            steps="检查请求体; 调整注入顺序; 补测试",
+            steps=[
+                {"text": "检查请求体"},
+                {"text": "调整注入顺序", "status": "in_progress"},
+                {"text": "补测试"},
+            ],
             status="planned",
             notes="只制定计划，不执行修改",
-            requires_completion_confirmation="true",
             completion_note="完成后请用户确认",
         )
         self.assertTrue(bool(result.get("ok")))
         self.assertEqual(result.get("kind"), "plan")
+        self.assertEqual(result.get("action"), "request_completion_confirmation")
+        self.assertEqual(result.get("schema_version"), 2)
         self.assertEqual(len(result.get("steps") or []), 3)
+        self.assertEqual((result.get("steps") or [])[1].get("status"), "in_progress")
         self.assertEqual(result.get("status"), "awaiting_completion_confirmation")
         self.assertTrue(bool(result.get("requires_completion_confirmation")))
+        self.assertEqual(result.get("completion_confirmation_state"), "pending")
         self.assertFalse(bool(result.get("completed")))
         self.assertEqual(result.get("completion_note"), "完成后请用户确认")
 
-        done = tool.plan(goal="修复 Deep 上下文顺序", completed="true", completion_note="已完成")
+        done = tool.plan(
+            action="confirm_complete",
+            goal="修复 Deep 上下文顺序",
+            completion_note="已完成",
+        )
+        self.assertEqual(done.get("action"), "confirm_complete")
         self.assertEqual(done.get("status"), "complete")
         self.assertTrue(bool(done.get("completed")))
         self.assertFalse(bool(done.get("requires_completion_confirmation")))
+        self.assertEqual(done.get("completion_confirmation_state"), "confirmed")
+
+        step_done = tool.plan(
+            action="set_step_status",
+            step_index=1,
+            step_status="done",
+            update_note="用户确认第一步已完成",
+        )
+        self.assertTrue(bool(step_done.get("ok")))
+        self.assertEqual(step_done.get("action"), "set_step_status")
+        self.assertEqual(step_done.get("schema_version"), 2)
+        self.assertEqual((step_done.get("step_updates") or [])[0].get("index"), 1)
+        self.assertEqual((step_done.get("step_updates") or [])[0].get("status"), "done")
+
+        bad_text_status = tool.plan(
+            action="update",
+            goal="植物大战僵尸开发",
+            steps=[
+                {"text": "游戏概述 — 已完成（由用户完成）", "status": "pending"},
+                {"text": "Phase 1 — 网格渲染", "status": "pending"},
+            ],
+        )
+        self.assertFalse(bool(bad_text_status.get("ok")))
+        self.assertEqual(bad_text_status.get("error_code"), "invalid_plan_contract")
+        self.assertIn("set_step_status", str(bad_text_status.get("message", "")))
 
         schemas = tool.build_agent_tool_schemas(511)
         names = [str(row.get("function", {}).get("name", "")) for row in schemas]
         self.assertIn("plan", names)
         plan_schema = next(row for row in schemas if str(row.get("function", {}).get("name", "")) == "plan")
         props = plan_schema.get("function", {}).get("parameters", {}).get("properties", {})
+        self.assertIn("action", props)
         self.assertIn("completed", props)
         self.assertIn("requires_completion_confirmation", props)
+        self.assertIn("completion_confirmation_state", props)
         self.assertIn("completion_note", props)
+        self.assertEqual(props.get("action", {}).get("enum"), ["create", "update", "set_step_status", "request_completion_confirmation", "confirm_complete", "block", "clear"])
+        self.assertEqual(props.get("status", {}).get("enum"), ["planned", "revised", "blocked", "awaiting_completion_confirmation", "complete"])
+        self.assertEqual(props.get("completion_confirmation_state", {}).get("enum"), ["none", "pending", "confirmed"])
+        self.assertEqual(props.get("completed", {}).get("type"), "boolean")
+        self.assertEqual(props.get("requires_completion_confirmation", {}).get("type"), "boolean")
+        self.assertEqual(props.get("steps", {}).get("type"), "array")
+        self.assertEqual(props.get("steps", {}).get("items", {}).get("type"), "object")
+        self.assertIn("step_index", props)
+        self.assertIn("step_status", props)
+        self.assertIn("step_updates", props)
+        self.assertEqual(props.get("step_status", {}).get("enum"), ["pending", "in_progress", "done", "blocked"])
+        plan_description = str(plan_schema.get("function", {}).get("description", ""))
+        self.assertIn("structured Plan state API", plan_description)
+        self.assertIn("never use emoji", plan_description.lower())
+        self.assertIn("set_step_status", plan_description)
+        self.assertIn("Never pack multiple steps", plan_description)
+
+    def test_plan_normalizer_keeps_legacy_text_status_at_boundary_only(self) -> None:
+        legacy = tool.normalize_plan_payload({
+            "kind": "plan",
+            "action": "create",
+            "goal": "旧计划",
+            "steps": [{"text": "游戏概述 — 已完成（由用户完成）", "status": "pending"}],
+        })
+        self.assertIsNotNone(legacy)
+        self.assertEqual((legacy or {}).get("schema_version"), 1)
+        self.assertTrue(bool((legacy or {}).get("legacy_text_adapter")))
+        self.assertEqual(((legacy or {}).get("steps") or [])[0].get("text"), "游戏概述")
+        self.assertEqual(((legacy or {}).get("steps") or [])[0].get("status"), "done")
+
+        strict = tool.normalize_plan_payload({
+            "kind": "plan",
+            "schema_version": 2,
+            "action": "create",
+            "goal": "新计划",
+            "steps": [{"text": "游戏概述 — 已完成（由用户完成）", "status": "pending"}],
+        })
+        self.assertIsNotNone(strict)
+        self.assertEqual((strict or {}).get("schema_version"), 2)
+        self.assertFalse(bool((strict or {}).get("legacy_text_adapter")))
+        self.assertEqual(((strict or {}).get("steps") or [])[0].get("text"), "游戏概述 — 已完成（由用户完成）")
+        self.assertEqual(((strict or {}).get("steps") or [])[0].get("status"), "pending")
+
+    def test_session_store_tracks_plan_deleted_marker(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="tinda_plan_delete_") as tmp:
+            store = SessionStore(Path(tmp))
+            sid = "s_plan_delete"
+            store.ensure_session(sid, owner_uid="u1")
+            deleted = store.mark_plan_deleted(sid)
+            self.assertTrue(str(deleted.get("plan_deleted_at", "")).strip())
+            cleared = store.clear_plan_deleted(sid)
+            self.assertEqual(str(cleared.get("plan_deleted_at", "")), "")
+
+    def test_server_exposes_delete_session_plan_api(self) -> None:
+        self.assertTrue(hasattr(server, "delete_session_plan"))
+        self.assertIn('"/sessions/{session_id}/plan"', Path(server._THIS_FILE).read_text(encoding="utf-8"))
 
     def test_plan_mode_helpers_strip_prefix_and_build_english_context(self) -> None:
         self.assertTrue(server._is_plan_mode_message("/plan 修复登录问题"))
@@ -465,6 +563,8 @@ class LogArchiveEventLookupTests(unittest.TestCase):
         self.assertIn("MCP-backed plan tool", context)
         self.assertIn("full available tool list", context)
         self.assertIn("only tools you should call in Plan mode", context)
+        self.assertIn("completion_confirmation_state", context)
+        self.assertIn("Do not use emoji", context)
         self.assertIn("修复登录问题", context)
         self.assertNotIn("请", context)
 
@@ -816,15 +916,17 @@ class LogArchiveEventLookupTests(unittest.TestCase):
 
         fake_client = FakeClient()
         agent = server.Agent("deep-transient-test", user_perm=511, client=fake_client, model_name="deepseek-v4-flash")
-        context = server._build_deep_alignment_transient_context("用户确认：只改前端，不动后端。")
-        result = agent.chat_with_meta("执行原始请求", transient_system_context=context)
+        tail = server._build_deep_alignment_tail_messages("用户确认：只改前端，不动后端。")
+        result = agent.chat_with_meta("执行原始请求", transient_tail_messages=tail)
 
         self.assertEqual(result.get("reply"), "ok")
         request_rows = fake_client.request_messages
-        self.assertTrue(any(str(m.get("role")) == "system" and "[DEEP_ALIGNMENT_CONFIRMED]" in str(m.get("content", "")) for m in request_rows))
-        injected = "\n".join(str(m.get("content", "")) for m in request_rows if str(m.get("role")) == "system")
-        self.assertIn("execute the current user request now", injected)
-        self.assertIn("use native tool_calls/function calling normally", injected)
+        self.assertEqual([str(m.get("role")) for m in request_rows[-3:]], ["user", "assistant", "system"])
+        self.assertEqual(str(request_rows[-3].get("content")), "执行原始请求")
+        self.assertIn("用户确认：只改前端，不动后端。", str(request_rows[-2].get("content", "")))
+        self.assertIn("[DEEP_ALIGNMENT_CONFIRMED]", str(request_rows[-1].get("content", "")))
+        self.assertIn("Execute the current user request now", str(request_rows[-1].get("content", "")))
+        self.assertIn("use native tool_calls/function calling normally", str(request_rows[-1].get("content", "")))
         persisted_rows = agent.get_conversation_messages()
         self.assertFalse(any("[DEEP_ALIGNMENT_CONFIRMED]" in str(m.get("content", "")) for m in persisted_rows))
         self.assertTrue(any(str(m.get("role")) == "user" and str(m.get("content")) == "执行原始请求" for m in persisted_rows))
@@ -904,12 +1006,69 @@ class LogArchiveEventLookupTests(unittest.TestCase):
         self.assertEqual(result.get("state"), "waiting_question")
         self.assertEqual(captured["payload"].get("tool_choice"), "auto")
         self.assertEqual(len(captured["payload"].get("tools") or []), 1)
+        tool_schema = captured["payload"]["tools"][0]["function"]["parameters"]["properties"]
+        self.assertEqual(tool_schema.get("options", {}).get("type"), "array")
         pending = result.get("pending")
         self.assertIsInstance(pending, dict)
         self.assertEqual(pending.get("flow"), "deep_alignment")
         self.assertEqual(pending.get("kind"), "question")
         self.assertEqual(pending.get("question"), "你希望脚本做什么用途？")
         self.assertEqual(pending.get("options"), ["文件整理", "日志分析", "__none_of_them__"])
+
+    def test_deep_alignment_parses_dsml_ask_and_hides_protocol_text(self) -> None:
+        class Msg:
+            content = (
+                "我需要先问你一个问题。\n"
+                "<｜｜DSML｜｜tool_calls>"
+                "<｜｜DSML｜｜invoke name=\"ask_user_question\">"
+                "<｜｜DSML｜｜parameter name=\"question\">你要哪种方案？</｜｜DSML｜｜parameter>"
+                "<｜｜DSML｜｜parameter name=\"options\">快速|稳妥</｜｜DSML｜｜parameter>"
+                "</｜｜DSML｜｜invoke>"
+                "</｜｜DSML｜｜tool_calls>"
+            )
+            tool_calls = []
+
+        class Choice:
+            message = Msg()
+
+        class Resp:
+            choices = [Choice()]
+
+        with patch.object(server._llm, "create_completion", return_value=Resp()):
+            result = server._generate_deep_alignment_result("写个脚本", [], session_id="s_deep_dsml")
+
+        self.assertEqual(result.get("state"), "waiting_question")
+        pending = result.get("pending")
+        self.assertIsInstance(pending, dict)
+        self.assertEqual(pending.get("question"), "你要哪种方案？")
+        self.assertEqual(pending.get("options"), ["快速", "稳妥", "__none_of_them__"])
+
+    def test_deep_alignment_strips_non_ask_dsml_from_visible_text(self) -> None:
+        class Msg:
+            content = (
+                "我会先理解你的目标。\n"
+                "<｜｜DSML｜｜tool_calls>"
+                "<｜｜DSML｜｜invoke name=\"run_terminal\">"
+                "<｜｜DSML｜｜parameter name=\"cmd\">pwd</｜｜DSML｜｜parameter>"
+                "</｜｜DSML｜｜invoke>"
+                "</｜｜DSML｜｜tool_calls>"
+            )
+            tool_calls = []
+
+        class Choice:
+            message = Msg()
+
+        class Resp:
+            choices = [Choice()]
+
+        with patch.object(server._llm, "create_completion", return_value=Resp()):
+            result = server._generate_deep_alignment_result("写个脚本", [], session_id="s_deep_strip_dsml")
+
+        self.assertEqual(result.get("state"), "waiting_confirm")
+        text = str(result.get("alignment_text", ""))
+        self.assertIn("我会先理解你的目标", text)
+        self.assertNotIn("DSML", text)
+        self.assertNotIn("invoke", text)
 
     def test_deep_alignment_resume_after_question_answer(self) -> None:
         captured: dict[str, Any] = {}
@@ -2333,7 +2492,12 @@ for line in sys.stdin:
                 self.user_message = ""
                 self.transient_context = ""
 
-            def chat_with_meta(self, user_message: str, transient_system_context: str | None = None):
+            def chat_with_meta(
+                self,
+                user_message: str,
+                transient_system_context: str | None = None,
+                transient_tail_messages: list[dict] | None = None,
+            ):
                 self.user_message = user_message
                 self.transient_context = str(transient_system_context or "")
                 return {

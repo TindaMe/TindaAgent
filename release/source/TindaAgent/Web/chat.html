@@ -282,16 +282,19 @@
     [data-theme="dark"] .term-clear-btn { color: var(--accent); }
     [data-theme="dark"] .account-item .dot.on { background: #34d399; }
     [data-theme="dark"] .status-pill,
-    [data-theme="dark"] .version-badge,
-    [data-theme="dark"] .icon-btn,
     [data-theme="dark"] .model-panel {
       background: rgba(25, 19, 27, 0.78);
       border-color: rgba(255, 176, 211, 0.12);
       box-shadow: 0 10px 28px rgba(0, 0, 0, 0.20), inset 0 1px 0 rgba(130, 153, 238, 0.022);
     }
+    [data-theme="dark"] .version-badge,
+    [data-theme="dark"] .icon-btn {
+      background: transparent;
+      border-color: rgba(255, 176, 211, 0.12);
+      color: #d8c0cc;
+      box-shadow: none;
+    }
     [data-theme="dark"] .brand-logo,
-    [data-theme="dark"] .stream-btn.on,
-    [data-theme="dark"] .term-toggle.on,
     [data-theme="dark"] #sendBtn,
     [data-theme="dark"] .record-item-btn,
     [data-theme="dark"] .config-dialog .btn.save,
@@ -310,12 +313,13 @@
       background: rgba(255, 173, 201, 0.46);
       box-shadow: 0 0 0 3px rgba(255, 111, 172, 0.045);
     }
+    [data-theme="dark"] .version-badge:hover,
     [data-theme="dark"] .icon-btn:hover,
     [data-theme="dark"] .model-item:hover,
     [data-theme="dark"] .time-item:hover {
-      background: rgba(48, 39, 60, 0.80);
-      border-color: rgba(199, 184, 215, 0.16);
-      color: #ded2df;
+      background: rgba(40, 29, 39, 0.82);
+      border-color: rgba(255, 173, 207, 0.24);
+      color: #ff8fc4;
     }
     [data-theme="dark"] .model-btn.on,
     [data-theme="dark"] .model-item.active,
@@ -838,34 +842,42 @@
     }
 
     .version-badge {
+      min-width: 54px;
+      height: 34px;
       font-size: 10.5px;
-      color: var(--text-faint);
-      background: var(--surface-2);
-      padding: 2px 9px;
+      color: var(--text-dim);
+      background: transparent;
+      padding: 0 10px;
       border-radius: 999px;
       border: 1.5px solid var(--border);
-      font-weight: 700;
+      font-weight: 800;
       display: inline-flex;
       align-items: center;
+      justify-content: center;
       white-space: nowrap;
       word-break: normal;
       line-break: auto;
       flex-shrink: 0;
+      letter-spacing: -0.02em;
     }
 
     .version-btn {
-      border: none;
       cursor: pointer;
       font-family: inherit;
-      line-height: inherit;
-      transition: transform 0.16s ease, box-shadow 0.16s ease;
+      line-height: 1;
+      transition: transform 0.22s cubic-bezier(0.34,1.56,0.64,1),
+                  background 0.22s ease,
+                  border-color 0.22s ease,
+                  color 0.22s ease;
     }
     .version-btn:hover {
-      transform: translateY(-1px);
-      box-shadow: 0 4px 10px rgba(255,110,180,0.18);
+      background: var(--surface-2);
+      border-color: var(--accent-2);
+      color: var(--accent-deep);
+      transform: scale(1.05);
     }
     .version-btn:active {
-      transform: translateY(0);
+      transform: scale(0.96);
     }
 
     .header-right {
@@ -894,60 +906,19 @@
     #settingsNavBtn { --quick-enter-index: 1; }
     #homeNavBtn { --quick-enter-index: 0; }
     .account-btn {
-      width: 32px;
-      height: 32px;
-      color: var(--accent-deep);
-      background:
-        linear-gradient(145deg, rgba(255, 255, 255, 0.78), rgba(255, 238, 247, 0.46)),
-        rgba(255, 245, 250, 0.58);
-      border-color: rgba(255, 196, 220, 0.72);
-      box-shadow:
-        0 10px 24px rgba(120, 55, 82, 0.10),
-        inset 1px 1px 0 rgba(255, 255, 255, 0.78),
-        inset -1px -1px 0 rgba(255, 110, 180, 0.10);
-      backdrop-filter: blur(18px) saturate(150%);
-      -webkit-backdrop-filter: blur(18px) saturate(150%);
+      color: var(--text-dim);
     }
     .account-btn:hover {
-      color: var(--accent);
-      background:
-        linear-gradient(145deg, rgba(255, 255, 255, 0.88), rgba(255, 229, 242, 0.58)),
-        rgba(255, 245, 250, 0.68);
-      border-color: rgba(255, 255, 255, 0.92);
-      transform: translateY(-2px) scale(1.06);
-      box-shadow:
-        0 16px 34px rgba(120, 55, 82, 0.14),
-        inset 1px 1px 0 rgba(255, 255, 255, 0.86),
-        inset -1px -1px 0 rgba(255, 110, 180, 0.12);
+      color: var(--accent-deep);
     }
     .account-btn:active {
-      transform: translateY(0) scale(0.96);
-      box-shadow:
-        inset 5px 5px 12px rgba(182, 104, 136, 0.12),
-        inset -5px -5px 12px rgba(255, 255, 255, 0.78);
+      transform: scale(0.94);
     }
     [data-theme="dark"] .account-btn {
-      color: #ffadc9;
-      background:
-        linear-gradient(145deg, rgba(118, 139, 226, 0.035), rgba(28, 21, 30, 0.78) 52%, rgba(255, 111, 172, 0.020)),
-        rgba(20, 15, 22, 0.76);
-      border-color: rgba(255, 176, 211, 0.14);
-      box-shadow:
-        0 12px 28px rgba(0, 0, 0, 0.26),
-        inset 1px 1px 0 rgba(130, 153, 238, 0.032),
-        inset -1px -1px 0 rgba(255, 120, 183, 0.018);
+      color: #d8c0cc;
     }
     [data-theme="dark"] .account-btn:hover {
-      color: #ffd4e4;
-      background:
-        linear-gradient(145deg, rgba(124, 145, 232, 0.050), rgba(36, 27, 38, 0.88) 52%, rgba(255, 111, 172, 0.030)),
-        rgba(28, 21, 30, 0.88);
-      border-color: rgba(255, 137, 190, 0.24);
-      box-shadow:
-        0 16px 36px rgba(0, 0, 0, 0.30),
-        -5px -6px 18px rgba(118, 139, 226, 0.018),
-        7px 9px 22px rgba(255, 107, 166, 0.020),
-        inset 1px 1px 0 rgba(130, 153, 238, 0.036);
+      color: #ffadc9;
     }
 
     .header-decos {
@@ -1005,6 +976,7 @@
     .icon-btn:hover {
       background: var(--surface-2);
       border-color: var(--accent-2);
+      color: var(--accent-deep);
       transform: scale(1.1);
     }
 
@@ -1055,26 +1027,24 @@
       font-size: 15px;
     }
     .stream-btn.on {
-      background: var(--gradient);
-      border-color: transparent;
-      color: #fff;
-      box-shadow: 0 3px 12px rgba(255,110,180,0.32);
+      background: rgba(255, 110, 180, 0.10);
+      border-color: var(--accent-2);
+      color: var(--accent-deep);
     }
     .stream-btn.on:hover {
-      background: var(--gradient);
-      opacity: 0.88;
+      background: var(--surface-2);
+      opacity: 1;
       transform: scale(1.1);
     }
 
     .term-toggle.on {
-      background: var(--gradient);
-      border-color: transparent;
-      color: #fff;
-      box-shadow: 0 3px 12px rgba(255,110,180,0.32);
+      background: rgba(255, 110, 180, 0.10);
+      border-color: var(--accent-2);
+      color: var(--accent-deep);
     }
     .term-toggle.on:hover {
-      background: var(--gradient);
-      opacity: 0.88;
+      background: var(--surface-2);
+      opacity: 1;
       transform: scale(1.1);
     }
 
@@ -1829,6 +1799,16 @@
       border-color: rgba(255, 172, 64, 0.26);
       color: #9a5b13;
     }
+    .plan-state.pending {
+      background: rgba(255, 172, 64, 0.14);
+      border-color: rgba(255, 172, 64, 0.26);
+      color: #9a5b13;
+    }
+    .plan-state.confirmed {
+      background: rgba(80, 180, 130, 0.12);
+      border-color: rgba(80, 180, 130, 0.22);
+      color: #257a55;
+    }
     .plan-steps {
       display: grid;
       gap: 8px;
@@ -1838,7 +1818,7 @@
     }
     .plan-step {
       display: grid;
-      grid-template-columns: 24px 1fr;
+      grid-template-columns: 24px 1fr auto;
       gap: 8px;
       align-items: start;
       color: var(--text-dim);
@@ -1853,6 +1833,32 @@
       color: var(--accent-deep);
       font-size: 11px;
       font-weight: 900;
+    }
+    .plan-step-status {
+      align-self: start;
+      padding: 2px 7px;
+      border: 1px solid rgba(255, 110, 180, 0.14);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.34);
+      color: var(--text-faint);
+      font-size: 10px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+    .plan-step-done .plan-step-status {
+      border-color: rgba(80, 180, 130, 0.22);
+      background: rgba(80, 180, 130, 0.10);
+      color: #257a55;
+    }
+    .plan-step-in_progress .plan-step-status {
+      border-color: rgba(255, 172, 64, 0.26);
+      background: rgba(255, 172, 64, 0.12);
+      color: #9a5b13;
+    }
+    .plan-step-blocked .plan-step-status {
+      border-color: rgba(150, 150, 160, 0.24);
+      background: rgba(120, 120, 130, 0.10);
+      color: var(--text-faint);
     }
     .plan-notes {
       margin-top: 12px;
@@ -1898,6 +1904,16 @@
       border-color: rgba(255, 172, 64, 0.22);
       color: #e8b872;
     }
+    [data-theme="dark"] .plan-state.pending {
+      background: rgba(255, 172, 64, 0.12);
+      border-color: rgba(255, 172, 64, 0.22);
+      color: #e8b872;
+    }
+    [data-theme="dark"] .plan-state.confirmed {
+      background: rgba(98, 190, 145, 0.12);
+      border-color: rgba(98, 190, 145, 0.22);
+      color: #9ad8b8;
+    }
     [data-theme="dark"] .plan-completion-note {
       background: rgba(255, 255, 255, 0.06);
       border-color: rgba(255, 149, 200, 0.12);
@@ -1908,6 +1924,10 @@
     }
     [data-theme="dark"] .plan-step-index {
       background: rgba(216, 92, 149, 0.13);
+    }
+    [data-theme="dark"] .plan-step-status {
+      background: rgba(255, 255, 255, 0.06);
+      border-color: rgba(255, 255, 255, 0.10);
     }
     @media (max-width: 720px) {
       .plan-float {
@@ -4306,6 +4326,8 @@
   let planFloatDragStartY = 0;
   let planFloatStartLeft = 0;
   let planFloatStartTop = 0;
+  let planDeletedBySession = new Map();
+  let planDeleteInFlight = false;
   let pendingConfirmCurrent = null;
   let pendingConfirmSubmitting = false;
   const TOOL_EVENTS_ERROR_REPORT_INTERVAL_MS = 15000;
@@ -4750,7 +4772,6 @@
             force_latest: true,
           });
           renderDeepAlignmentCard(deepPendingPayload);
-          addSystemNotice("请确认 Deep 理解是否一致", { persist: false });
         } else if (data?.state === "cancelled") {
           deepPendingPayload = null;
           removeDeepCard(deepActiveCard);
@@ -5907,6 +5928,7 @@
       newestSeq: Number(data.newest_seq || 0),
       hasMore: !!data.has_more,
       total: Number(data.total || 0),
+      plan: data && typeof data.plan === "object" ? data.plan : {},
     };
   }
 
@@ -5971,7 +5993,13 @@
       });
     }
     if (!preserveScroll) {
-      showLatestPlanFromSessionEntries(entries);
+      const sid = String(historyPagingState.sid || getSessionId() || "").trim();
+      if (!sid || !planDeletedBySession.get(sid)) {
+        showLatestPlanFromSessionEntries(entries);
+      } else {
+        clearPlanFloatContent();
+        hidePlanFloat();
+      }
     }
     renderHistoryLoadMoreControl();
   }
@@ -6012,6 +6040,8 @@
         return false;
       }
       const data = await fetchSessionMessagesPage(sid, { limit: CHAT_INITIAL_MESSAGE_LIMIT });
+      const planMeta = data.plan && typeof data.plan === "object" ? data.plan : {};
+      planDeletedBySession.set(sid, !!planMeta.deleted);
       hydratedSessionEntries = data.entries;
       historyPagingState = {
         sid,
@@ -6157,10 +6187,19 @@
     const c = String(content || "").trim();
     if (!r && !c) return "";
     if (r) {
-      const rBlock = "> " + r.split("\n").join("\n> ") + "\n";
+      const rBlock = markdownQuoteBlock(r);
       return c ? c + "\n\n" + rBlock : rBlock;
     }
     return c;
+  }
+
+  function markdownQuoteBlock(text) {
+    const raw = String(text ?? "").trim();
+    if (!raw) return "";
+    return raw
+      .split(/\r?\n/)
+      .map((line) => line ? `> ${line}` : ">")
+      .join("\n");
   }
 
   function buildStreamFullMd(reasoning, content) {
@@ -6383,13 +6422,39 @@
       });
     }
     if (!result || typeof result !== "object") return null;
+    const inferPlanStepStatus = (text) => {
+      const rawText = String(text ?? "").trim();
+      if (!rawText) return "";
+      if (/✅|(?:→|—|-)\s*(?:已完成|已实施|完成|done)(?:\s*[（(][^）)]*[）)])?\s*$/i.test(rawText)) return "done";
+      if (/(?:^|[→—\-\s])(?:进行中|处理中|in[_ -]?progress)(?:$|[，。,.\s])/i.test(rawText)) return "in_progress";
+      if (/⏳|(?:^|[→—\-\s])(?:未实施|搁置|待定|阻塞|blocked)(?:$|[：:，。,.\s])/i.test(rawText)) return "blocked";
+      return "";
+    };
+    const cleanPlanStepText = (text) => {
+      let clean = String(text ?? "").trim();
+      clean = clean.replace(/^\s*[-*•]\s*/, "");
+      clean = clean.replace(/^\s*\d{1,3}[.、)]\s*/, "");
+      clean = clean.replace(/[✅⏳🏁]/g, "");
+      clean = clean.trim();
+      clean = clean.replace(/\s*(?:→|—|-)\s*(?:已完成|已实施|完成|done)(?:\s*[（(][^）)]*[）)])?\s*$/i, "");
+      clean = clean.replace(/\s*(?:→|—|-)\s*(?:进行中|处理中|in[_ -]?progress)\s*$/i, "");
+      clean = clean.replace(/\s*(?:→|—|-)\s*(?:待定|未实施|搁置|阻塞|blocked)(?:\s*[：:].*)?\s*$/i, "");
+      clean = clean.replace(/^(?:未实施|待定|搁置)(?:[（(][^）)]*[）)])?\s*[：:]\s*/, "");
+      return clean.replace(/\s{2,}/g, " ").trim();
+    };
+    const schemaVersion = Number(result.schema_version || result.schemaVersion || 0);
+    const allowLegacyTextStatus = !schemaVersion || schemaVersion < 2;
     const stepsRaw = Array.isArray(result.steps) ? result.steps : [];
     const steps = stepsRaw.map((step, idx) => {
-      const text = typeof step === "object" ? String(step.text || "") : String(step || "");
+      const rawText = typeof step === "object" ? String(step.text || "") : String(step || "");
+      let stepStatus = String((step && typeof step === "object" ? step.status : "") || "pending").trim().toLowerCase();
+      const inferredStatus = allowLegacyTextStatus ? inferPlanStepStatus(rawText) : "";
+      if (allowLegacyTextStatus && (!stepStatus || stepStatus === "pending") && inferredStatus) stepStatus = inferredStatus;
+      if (!["pending", "in_progress", "done", "blocked"].includes(stepStatus)) stepStatus = "pending";
       return {
         index: Number((step && typeof step === "object" ? step.index : 0) || idx + 1),
-        text: text.trim(),
-      status: String((step && typeof step === "object" ? step.status : "") || "pending"),
+        text: allowLegacyTextStatus ? cleanPlanStepText(rawText) : rawText.replace(/^\s*[-*•]\s*/, "").replace(/^\s*\d{1,3}[.、)]\s*/, "").trim(),
+        status: stepStatus,
       };
     }).filter((step) => step.text);
     const status = String(result.status || "planned").trim();
@@ -6397,37 +6462,162 @@
     const requiresCompletionConfirmation = result.requires_completion_confirmation === true
       || result.requiresCompletionConfirmation === true
       || status === "awaiting_completion_confirmation";
+    let completionConfirmationState = String(
+      result.completion_confirmation_state
+      || result.completionConfirmationState
+      || ""
+    ).trim().toLowerCase();
+    if (!completionConfirmationState) {
+      completionConfirmationState = completed
+        ? "confirmed"
+        : requiresCompletionConfirmation
+        ? "pending"
+        : "none";
+    }
+    if (!["none", "pending", "confirmed"].includes(completionConfirmationState)) {
+      completionConfirmationState = "none";
+    }
     return {
+      action: String(result.action || "create").trim().toLowerCase(),
       goal: String(result.goal || "").trim(),
       status,
+      schema_version: schemaVersion || 1,
       completed,
       requires_completion_confirmation: requiresCompletionConfirmation,
+      completion_confirmation_state: completionConfirmationState,
       notes: String(result.notes || "").trim(),
       completion_note: String(result.completion_note || result.completionNote || "").trim(),
+      update_note: String(result.update_note || result.updateNote || "").trim(),
+      step_updates: normalizePlanStepUpdates(result.step_updates || result.stepUpdates || [], {
+        step_index: result.step_index || result.stepIndex || 0,
+        step_text: result.step_text || result.stepText || "",
+        step_status: result.step_status || result.stepStatus || "",
+        update_note: result.update_note || result.updateNote || "",
+      }),
       steps,
     };
   }
 
+  function normalizePlanStepStatus(status) {
+    const raw = String(status || "pending").trim().toLowerCase();
+    if (raw === "complete" || raw === "completed" || raw === "finished") return "done";
+    if (raw === "doing" || raw === "working" || raw === "progress") return "in_progress";
+    if (raw === "block") return "blocked";
+    return ["pending", "in_progress", "done", "blocked"].includes(raw) ? raw : "pending";
+  }
+
+  function normalizePlanStepUpdates(rawUpdates, fallback = {}) {
+    const values = Array.isArray(rawUpdates)
+      ? rawUpdates
+      : rawUpdates && typeof rawUpdates === "object"
+      ? [rawUpdates]
+      : [];
+    const fallbackIndex = Number(fallback.step_index || 0);
+    const fallbackText = String(fallback.step_text || "").trim();
+    const fallbackStatus = String(fallback.step_status || "").trim();
+    if (fallbackIndex > 0 || fallbackText || fallbackStatus) {
+      values.push({
+        index: fallbackIndex,
+        text: fallbackText,
+        status: fallbackStatus,
+        note: fallback.update_note || "",
+      });
+    }
+    return values.map((item) => {
+      if (!item || typeof item !== "object") return null;
+      const index = Number(item.index || item.step_index || 0);
+      const text = String(item.text || item.step_text || "").trim();
+      if (index <= 0 && !text) return null;
+      return {
+        index,
+        text,
+        status: normalizePlanStepStatus(item.status || item.step_status),
+        note: String(item.note || item.update_note || "").trim(),
+      };
+    }).filter(Boolean);
+  }
+
+  function mergePlanPayload(base, eventPayload) {
+    const nextEvent = normalizePlanPayload(eventPayload);
+    if (!nextEvent) return base || null;
+    if (nextEvent.action === "clear") return nextEvent;
+    if (nextEvent.action !== "set_step_status") {
+      return nextEvent;
+    }
+    const current = base ? normalizePlanPayload(base) : null;
+    if (!current) return nextEvent;
+    const merged = {
+      ...current,
+      action: "update",
+      status: nextEvent.status === "planned" ? current.status : nextEvent.status,
+      notes: nextEvent.notes || current.notes,
+      completion_note: nextEvent.completion_note || current.completion_note,
+      update_note: nextEvent.update_note || current.update_note || "",
+      steps: current.steps.map((step) => ({ ...step })),
+    };
+    nextEvent.step_updates.forEach((update) => {
+      let idx = Number(update.index || 0) - 1;
+      if (idx < 0 && update.text) {
+        const needle = update.text.toLowerCase();
+        idx = merged.steps.findIndex((step) => String(step.text || "").toLowerCase().includes(needle));
+      }
+      if (idx >= 0 && idx < merged.steps.length) {
+        merged.steps[idx] = { ...merged.steps[idx], status: update.status };
+      }
+    });
+    return merged;
+  }
+
+  function planStateView(payload) {
+    const state = String(payload?.completion_confirmation_state || "").trim().toLowerCase();
+    if (state === "confirmed" || payload?.completed) {
+      return { text: "已确认完成", cls: "confirmed complete" };
+    }
+    if (state === "pending" || payload?.requires_completion_confirmation) {
+      return { text: "待用户确认完成", cls: "pending confirm" };
+    }
+    const status = String(payload?.status || "planned").trim();
+    if (status === "revised") return { text: "已修订", cls: "" };
+    if (status === "blocked") return { text: "已阻塞", cls: "blocked" };
+    if (status === "complete") return { text: "已确认完成", cls: "confirmed complete" };
+    return { text: "计划中", cls: "" };
+  }
+
+  function planStepStatusText(status) {
+    const normalized = String(status || "pending").trim().toLowerCase();
+    if (normalized === "done") return "完成";
+    if (normalized === "in_progress") return "进行中";
+    if (normalized === "blocked") return "阻塞";
+    return "待办";
+  }
+
   function renderPlanFloat(plan) {
     if (!planFloatEl || !planFloatBodyEl || !planFloatSubtitleEl) return;
-    const payload = normalizePlanPayload(plan);
+    const currentPayload = planFloatEl?._planPayload || null;
+    const incomingPayload = normalizePlanPayload(plan);
+    const payload = incomingPayload?.action === "set_step_status"
+      ? mergePlanPayload(currentPayload, incomingPayload)
+      : incomingPayload;
     if (!payload) return;
-    const stateText = payload.completed
-      ? "已完成"
-      : payload.requires_completion_confirmation
-      ? "等待确认完成"
-      : payload.status || "planned";
-    planFloatSubtitleEl.textContent = payload.goal ? `${stateText} · ${payload.goal}` : `${stateText} · ${payload.steps.length || 0} 个步骤`;
-    const stateClass = payload.completed ? "complete" : payload.requires_completion_confirmation ? "confirm" : "";
-    const stateHtml = `<div class="plan-state ${stateClass}">${escapeHtml(stateText)}</div>`;
+    if (payload.action === "clear") {
+      planFloatEl._planPayload = null;
+      clearPlanFloatContent();
+      hidePlanFloat();
+      return;
+    }
+    planFloatEl._planPayload = payload;
+    const stateView = planStateView(payload);
+    planFloatSubtitleEl.textContent = payload.goal ? `${stateView.text} · ${payload.goal}` : `${stateView.text} · ${payload.steps.length || 0} 个步骤`;
+    const stateHtml = `<div class="plan-state ${escapeHtml(stateView.cls)}">${escapeHtml(stateView.text)}</div>`;
     const goalHtml = payload.goal
       ? `<p class="plan-goal">${escapeHtml(payload.goal)}</p>`
       : `<p class="plan-goal">LLM 已记录一份执行计划。</p>`;
     const stepsHtml = payload.steps.length
       ? `<ol class="plan-steps">${payload.steps.map((step, idx) => `
-          <li class="plan-step">
+          <li class="plan-step plan-step-${escapeHtml(step.status || "pending")}">
             <span class="plan-step-index">${escapeHtml(String(step.index || idx + 1))}</span>
-            <span>${escapeHtml(step.text)}</span>
+            <span class="plan-step-text">${escapeHtml(step.text)}</span>
+            <span class="plan-step-status">${escapeHtml(planStepStatusText(step.status))}</span>
           </li>`).join("")}</ol>`
       : "";
     const notesHtml = payload.notes ? `<div class="plan-notes">${renderMarkdown(payload.notes)}</div>` : "";
@@ -6436,6 +6626,19 @@
       : "";
     planFloatBodyEl.innerHTML = stateHtml + goalHtml + stepsHtml + notesHtml + completionHtml;
     showPlanFloat();
+  }
+
+  function clearPlanFloatContent() {
+    if (planFloatBodyEl) planFloatBodyEl.innerHTML = "";
+    if (planFloatSubtitleEl) planFloatSubtitleEl.textContent = "等待 LLM 制定计划";
+    if (planFloatEl) {
+      planFloatEl.classList.remove("collapsed");
+      planFloatEl._planPayload = null;
+    }
+    if (planFloatCollapseBtnEl) {
+      planFloatCollapseBtnEl.textContent = "－";
+      planFloatCollapseBtnEl.setAttribute("aria-label", "折叠计划面板");
+    }
   }
 
   function showPlanFloat() {
@@ -6450,6 +6653,29 @@
     window.setTimeout(() => {
       if (!planFloatEl.classList.contains("show")) planFloatEl.style.display = "none";
     }, 280);
+  }
+
+  async function deleteCurrentPlan() {
+    const sid = String(getSessionId() || "").trim();
+    if (!sid || isDraftSessionId(sid)) {
+      clearPlanFloatContent();
+      hidePlanFloat();
+      return;
+    }
+    if (planDeleteInFlight) return;
+    planDeleteInFlight = true;
+    planDeletedBySession.set(sid, true);
+    clearPlanFloatContent();
+    hidePlanFloat();
+    try {
+      const res = await apiFetch(`/sessions/${encodeURIComponent(sid)}/plan`, { method: "DELETE" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data?.ok === false) throw new Error(String(data?.error || `HTTP ${res.status}`));
+    } catch (e) {
+      showToast(`删除计划失败：${String(e?.message || e)}`, "warn");
+    } finally {
+      planDeleteInFlight = false;
+    }
   }
 
   function togglePlanFloatCollapsed() {
@@ -6508,6 +6734,14 @@
     if (name !== "plan") return false;
     const payload = normalizePlanPayload(step?.result || step);
     if (!payload) return false;
+    const sid = String(getSessionId() || "").trim();
+    if (payload.action === "clear") {
+      if (sid) planDeletedBySession.set(sid, true);
+      clearPlanFloatContent();
+      hidePlanFloat();
+      return true;
+    }
+    if (sid) planDeletedBySession.set(sid, false);
     renderPlanFloat(payload);
     return true;
   }
@@ -6533,7 +6767,7 @@
         const name = String(marker.name || marker.tool_name || marker.agent_tool || "").trim();
         if (name !== "plan") return;
         const payload = normalizePlanPayload(marker);
-        if (payload) latest = payload;
+        if (payload) latest = mergePlanPayload(latest, payload);
       });
     });
     if (!latest) return false;
@@ -6722,7 +6956,6 @@
           force_latest: true,
         });
         renderDeepAlignmentCard(deepPendingPayload);
-        addSystemNotice("请确认 Deep 理解是否一致", { persist: false });
       } else if (data?.state === "cancelled") {
         deepPendingPayload = null;
         removeDeepCard(deepActiveCard);
@@ -6746,6 +6979,17 @@
   function removeDeepCard(card) {
     if (card?.row?.isConnected) card.row.remove();
     if (deepActiveCard === card) deepActiveCard = null;
+  }
+
+  function renderDeepLoadingBubble(text) {
+    const rendered = addBubble(String(text || "正在理解您的问题..."), "bot");
+    rendered?.row?.classList?.add("deep-loading-msg");
+    return rendered;
+  }
+
+  function replaceDeepLoadingWithCard(loading, card) {
+    if (!loading?.row?.isConnected || !card?.row) return;
+    loading.row.replaceWith(card.row);
   }
 
   function setDeepCardBusy(card, busy) {
@@ -6914,9 +7158,20 @@
     return wrapper;
   }
 
+  function mountDeepAlignmentCard(payload, replaceTarget = null) {
+    const wrapper = renderDeepAlignmentCard(payload);
+    if (replaceTarget?.row?.isConnected) {
+      replaceDeepLoadingWithCard(replaceTarget, wrapper);
+      scrollToBottom();
+    }
+    return wrapper;
+  }
+
   async function startDeepAlignment(payload) {
     deepAlignmentBusy = true;
     setMessageSendInFlight(true);
+    removeDeepCard(deepActiveCard);
+    const deepLoadingBubble = renderDeepLoadingBubble("正在理解您的问题...");
     try {
       const res = await apiFetch(`/sessions/${encodeURIComponent(payload.sid)}/deep/align`, {
         method: "POST",
@@ -6942,9 +7197,8 @@
           force_latest: true,
         });
         removeDeepCard(deepActiveCard);
-        renderDeepAlignmentCard(deepPendingPayload);
+        mountDeepAlignmentCard(deepPendingPayload, deepLoadingBubble);
         setPendingConfirmFromList(Array.isArray(data.pending) ? data.pending : []);
-        addSystemNotice("Deep 需要你先补充一个条件", { persist: false });
         return;
       }
       deepPendingPayload = normalizeDeepPayload({
@@ -6956,11 +7210,14 @@
         pending_deep_ask: data.pending_deep_ask || null,
         force_latest: true,
       });
-      renderDeepAlignmentCard(deepPendingPayload);
-      addSystemNotice("请确认 Deep 理解是否一致", { persist: false });
+      mountDeepAlignmentCard(deepPendingPayload, deepLoadingBubble);
     } catch (e) {
       reportErrorToTerminal(`Deep 对齐失败：${String(e?.message || e)}`, { source: "deep_alignment", sessionId: payload.sid });
-      addBubble("Deep 对齐失败，请检查模型服务或关闭 Deep 后重试。", "bot");
+      if (deepLoadingBubble?.bubble?.isConnected) {
+        window.ChatBubbleRenderer?.updateBubbleMarkdown?.(deepLoadingBubble.bubble, "Deep 对齐失败，请检查模型服务或关闭 Deep 后重试。");
+      } else {
+        addBubble("Deep 对齐失败，请检查模型服务或关闭 Deep 后重试。", "bot");
+      }
       if (payload.createdForThisMessage && String(getStoredSessionId() || "") === payload.sid) {
         clearActiveSessionState({ title: "新会话" });
       }
@@ -8097,7 +8354,7 @@
         function flushStreamReasoningToText() {
           if (!streamReasoning) return false;
           if (streamText && !streamText.endsWith("\n\n")) streamText += "\n";
-          streamText += "> " + streamReasoning.split("\n").join("\n> ") + "\n\n";
+          streamText += markdownQuoteBlock(streamReasoning) + "\n\n";
           streamReasoning = "";
           streamSegmentStart = streamText.length;
           return true;
@@ -8148,6 +8405,19 @@
           } else {
             schedule();
           }
+        }
+
+        function refreshToolMarkerNow() {
+          if (!renderDelta || !streamBot) return;
+          if (streamRenderTimer) {
+            clearTimeout(streamRenderTimer);
+            streamRenderTimer = 0;
+          }
+          if (streamRenderRaf) {
+            cancelAnimationFrame(streamRenderRaf);
+            streamRenderRaf = 0;
+          }
+          commitStreamBubbleRender(buildStreamTextWithToolBlocks());
         }
 
         while (true) {
@@ -8201,9 +8471,7 @@
               });
               if (!changed) continue;
               streamSegmentStart = streamText.length;
-              if (renderDelta && streamBot) {
-                queueStreamBubbleRender(buildStreamTextWithToolBlocks(), { force: true });
-              }
+              refreshToolMarkerNow();
             } else if (eventName === "tool_step") {
               const trace = Array.isArray(payload?.trace) ? payload.trace : [];
               if (trace.length > 0) {
@@ -8213,9 +8481,7 @@
                   upsertToolBlock(step, true);
                 });
                 streamSegmentStart = streamText.length;
-                if (renderDelta && streamBot) {
-                  queueStreamBubbleRender(buildStreamTextWithToolBlocks(), { force: true });
-                }
+                refreshToolMarkerNow();
               }
             } else if (eventName === "tool_heartbeat") {
               const hbTool = payload.tool && typeof payload.tool === "object" ? payload.tool : {};
@@ -8234,9 +8500,7 @@
                 };
                 upsertToolBlock(heartbeatPayload, false, progress);
               }
-              if (renderDelta && streamBot) {
-                queueStreamBubbleRender(buildStreamTextWithToolBlocks(), { force: true });
-              }
+              refreshToolMarkerNow();
             } else if (eventName === "done") {
               donePayload = payload;
             } else if (eventName === "error") {
@@ -8259,7 +8523,7 @@
             if (!buildStreamTextWithToolBlocks().trim() && donePayload.reasoning_content) {
               const rc = String(donePayload.reasoning_content || "").trim();
               if (rc) {
-                streamText = "> " + rc.split("\n").join("\n> ") + "\n\n";
+                streamText = markdownQuoteBlock(rc) + "\n\n";
                 streamSegmentStart = streamText.length;
               }
             }
@@ -8373,7 +8637,7 @@
         const replyText = String(data.reply ?? "（无回复）");
         var displayText = replyText;
         if (reasoningText) {
-          displayText = "> " + reasoningText.split("\n").join("\n> ") + "\n\n" + replyText;
+          displayText = markdownQuoteBlock(reasoningText) + "\n\n" + replyText;
         }
         const compressionText = absorbContextCompressionPayload(data.context_compression);
         if (compressionText) {
@@ -8462,7 +8726,7 @@
   document.addEventListener("mousemove", movePlanFloatDrag);
   document.addEventListener("mouseup", stopPlanFloatDrag);
   planFloatCollapseBtnEl?.addEventListener("click", togglePlanFloatCollapsed);
-  planFloatCloseBtnEl?.addEventListener("click", hidePlanFloat);
+  planFloatCloseBtnEl?.addEventListener("click", deleteCurrentPlan);
   recordsSearchInputEl?.addEventListener("keydown", (e) => {
     if (e.key === "Enter") {
       e.preventDefault();

@@ -1,5 +1,6 @@
 fastapi
 uvicorn
+watchfiles
 openai
 python-dotenv
 pydantic

@@ -89,6 +89,15 @@
     return typeof renderMarkdown === "function" ? renderMarkdown(text) : String(text || "");
   }
 
+  function markdownQuoteBlock(text) {
+    var raw = String(text ?? "").trim();
+    if (!raw) return "";
+    return raw
+      .split(/\r?\n/)
+      .map(function(line) { return line ? "> " + line : ">"; })
+      .join("\n");
+  }
+
   function updateBubbleMarkdown(bubbleEl, text, options) {
     options = options || {};
     if (!bubbleEl) return false;
@@ -121,6 +130,28 @@
     return String(value ?? "").replace(/[&<>"']/g, function (ch) {
       return {"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[ch];
     });
+  }
+
+  function inferPlanStepStatus(text) {
+    var raw = String(text ?? "").trim();
+    if (!raw) return "";
+    if (/✅|(?:→|—|-)\s*(?:已完成|已实施|完成|done)(?:\s*[（(][^）)]*[）)])?\s*$/i.test(raw)) return "done";
+    if (/(?:^|[→—\-\s])(?:进行中|处理中|in[_ -]?progress)(?:$|[，。,.\s])/i.test(raw)) return "in_progress";
+    if (/⏳|(?:^|[→—\-\s])(?:未实施|搁置|待定|阻塞|blocked)(?:$|[：:，。,.\s])/i.test(raw)) return "blocked";
+    return "";
+  }
+
+  function cleanPlanStepText(text) {
+    var clean = String(text ?? "").trim();
+    clean = clean.replace(/^\s*[-*•]\s*/, "");
+    clean = clean.replace(/^\s*\d{1,3}[.、)]\s*/, "");
+    clean = clean.replace(/[✅⏳🏁]/g, "");
+    clean = clean.trim();
+    clean = clean.replace(/\s*(?:→|—|-)\s*(?:已完成|已实施|完成|done)(?:\s*[（(][^）)]*[）)])?\s*$/i, "");
+    clean = clean.replace(/\s*(?:→|—|-)\s*(?:进行中|处理中|in[_ -]?progress)\s*$/i, "");
+    clean = clean.replace(/\s*(?:→|—|-)\s*(?:待定|未实施|搁置|阻塞|blocked)(?:\s*[：:].*)?\s*$/i, "");
+    clean = clean.replace(/^(?:未实施|待定|搁置)(?:[（(][^）)]*[）)])?\s*[：:]\s*/, "");
+    return clean.replace(/\s{2,}/g, " ").trim();
   }
 
   function displayFileName(fullName) {
@@ -279,23 +310,54 @@
   function renderPlanMarkerMarkdown(plan, options) {
     options = options || {};
     var d = plan && typeof plan === "object" ? plan : {};
-    var lines = ["> >_<", "> --计划已记录--"];
+    var action = String(d.action || "").trim().toLowerCase();
+    var lines = ["> >_<", action === "clear" ? "> --计划已清除--" : action === "set_step_status" ? "> --计划状态已更新--" : "> --计划已记录--"];
     var status = String(d.status || "").trim();
+    if (action === "clear") return lines.join("\n") + (options.trailingNewline === false ? "" : "\n");
+    if (action === "set_step_status") {
+      var updates = Array.isArray(d.step_updates) ? d.step_updates : [];
+      if (updates.length > 0) {
+        lines.push("> **更新步骤**:");
+        updates.forEach(function(update) {
+          if (!update || typeof update !== "object") return;
+          var idx = Number(update.index || 0);
+          var text = String(update.text || "").trim();
+          var stepStatus = String(update.status || "pending").trim();
+          var label = stepStatus === "done" ? "完成" : stepStatus === "in_progress" ? "进行中" : stepStatus === "blocked" ? "阻塞" : "待办";
+          var target = idx > 0 ? "第 " + idx + " 步" : text || "匹配步骤";
+          lines.push("> " + target + " → " + label);
+        });
+      }
+      var updateNote = String(d.update_note || d.updateNote || "").trim();
+      if (updateNote) lines.push("> **说明**: " + updateNote);
+      return lines.join("\n") + (options.trailingNewline === false ? "" : "\n");
+    }
     var completed = d.completed === true || status === "complete";
     var needsConfirm = d.requires_completion_confirmation === true || status === "awaiting_completion_confirmation";
-    if (completed) lines.push("> **状态**: 已完成");
-    else if (needsConfirm) lines.push("> **状态**: 等待用户确认完成");
+    var confirmationState = String(d.completion_confirmation_state || d.completionConfirmationState || "").trim().toLowerCase();
+    if (!confirmationState) confirmationState = completed ? "confirmed" : needsConfirm ? "pending" : "none";
+    if (confirmationState === "confirmed" || completed) lines.push("> **状态**: 已确认完成");
+    else if (confirmationState === "pending" || needsConfirm) lines.push("> **状态**: 待用户确认完成");
     else if (status) lines.push("> **状态**: " + status);
     var goal = String(d.goal || "").trim();
     if (goal) lines.push("> **目标**: " + goal);
+    var schemaVersion = Number(d.schema_version || d.schemaVersion || 0);
+    var allowLegacyTextStatus = !schemaVersion || schemaVersion < 2;
     var steps = Array.isArray(d.steps) ? d.steps : [];
     if (steps.length > 0) {
       lines.push("> **步骤**:");
       steps.forEach(function(step, idx) {
         if (!step) return;
         var text = typeof step === "object" ? String(step.text || "") : String(step || "");
-        text = text.trim();
-        if (text) lines.push("> " + String(idx + 1) + ". " + text);
+        var stepStatus = String((step && typeof step === "object" ? step.status : "") || "").trim();
+        var inferredStatus = allowLegacyTextStatus ? inferPlanStepStatus(text) : "";
+        if (allowLegacyTextStatus && (!stepStatus || stepStatus === "pending") && inferredStatus) stepStatus = inferredStatus;
+        text = allowLegacyTextStatus ? cleanPlanStepText(text) : text.replace(/^\s*[-*•]\s*/, "").replace(/^\s*\d{1,3}[.、)]\s*/, "").trim();
+        var prefix = "";
+        if (stepStatus === "done") prefix = "[完成] ";
+        else if (stepStatus === "in_progress") prefix = "[进行中] ";
+        else if (stepStatus === "blocked") prefix = "[阻塞] ";
+        if (text) lines.push("> " + String(idx + 1) + ". " + prefix + text);
       });
     }
     var notes = String(d.notes || "").trim();
@@ -413,7 +475,7 @@
           if (toolText) parts.push(toolText);
         } else {
           if (kind === "thinking") {
-            parts.push("> " + String(step.data || "").split("\n").join("\n> "));
+            parts.push(markdownQuoteBlock(step.data));
           } else if (kind === "text") {
             parts.push(String(step.data || ""));
           } else if (kind === "system") {

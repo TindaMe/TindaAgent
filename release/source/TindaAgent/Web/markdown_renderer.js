@@ -151,6 +151,25 @@
         continue;
       }
 
+      if (trim.startsWith(">")) {
+        if (inList) { parts.push("</ul>"); inList = false; }
+        const quoteLines = [];
+        for (; i < lines.length; i++) {
+          const qTrim = lines[i].trim();
+          if (!qTrim.startsWith(">")) {
+            i -= 1;
+            break;
+          }
+          const m = /^>\s?(.*)$/.exec(qTrim);
+          quoteLines.push(m ? m[1] : "");
+        }
+        const quoteHtml = quoteLines
+          .map((line) => (line ? renderInlineMarkdown(line) : "<br/>"))
+          .join("<br/>");
+        parts.push(`<blockquote>${quoteHtml}</blockquote>`);
+        continue;
+      }
+
       const nextTrim = i + 1 < lines.length ? lines[i + 1].trim() : "";
       if (trim.includes("|") && nextTrim && isTableSeparatorLine(nextTrim)) {
         if (inList) { parts.push("</ul>"); inList = false; }
@@ -226,25 +245,6 @@
       if (headingMatch) {
         const level = headingMatch[1].length;
         parts.push(`<h${level}>${renderInlineMarkdown(headingMatch[2])}</h${level}>`);
-        continue;
-      }
-
-      if (trim.startsWith(">")) {
-        if (inList) { parts.push("</ul>"); inList = false; }
-        const quoteLines = [];
-        for (; i < lines.length; i++) {
-          const qTrim = lines[i].trim();
-          if (!qTrim.startsWith(">")) {
-            i -= 1;
-            break;
-          }
-          const m = /^>\s?(.*)$/.exec(qTrim);
-          quoteLines.push(m ? m[1] : "");
-        }
-        const quoteHtml = quoteLines
-          .map((line) => (line ? renderInlineMarkdown(line) : "<br/>"))
-          .join("<br/>");
-        parts.push(`<blockquote>${quoteHtml}</blockquote>`);
         continue;
       }
 

@@ -46,6 +46,7 @@ class SessionMeta:
     summary_anchor_msg_id: str = ""
     latest_summary_message_id: str = ""
     last_compress_anchor_msg_id: str = ""
+    plan_deleted_at: str = ""
 
 
 def _normalize_entry(raw: dict) -> dict | None:
@@ -550,6 +551,7 @@ class SessionStore:
                             summary_anchor_msg_id: str | None = None,
                             latest_summary_message_id: str | None = None,
                             last_compress_anchor_msg_id: str | None = None,
+                            plan_deleted_at: str | None = None,
                             message_count: int | None = None) -> dict[str, Any]:
         sid = _safe_session_id(session_id)
         if not sid:
@@ -562,7 +564,8 @@ class SessionStore:
             item = {"id": sid, "title": "新对话", "created_at": now, "updated_at": now,
                     "owner_uid": str(owner_uid or ""), "message_count": 0,
                     "reset_anchor_msg_id": "", "summary_anchor_msg_id": "",
-                    "latest_summary_message_id": "", "last_compress_anchor_msg_id": ""}
+                    "latest_summary_message_id": "", "last_compress_anchor_msg_id": "",
+                    "plan_deleted_at": ""}
             sessions.append(item)
             idx = len(sessions) - 1
         row = dict(sessions[idx])
@@ -571,6 +574,7 @@ class SessionStore:
         row.setdefault("summary_anchor_msg_id", "")
         row.setdefault("latest_summary_message_id", "")
         row.setdefault("last_compress_anchor_msg_id", "")
+        row.setdefault("plan_deleted_at", "")
         row["updated_at"] = now
         if title is not None:
             t = str(title or "").strip().strip("\"'")
@@ -585,6 +589,8 @@ class SessionStore:
             row["latest_summary_message_id"] = str(latest_summary_message_id or "")
         if last_compress_anchor_msg_id is not None:
             row["last_compress_anchor_msg_id"] = str(last_compress_anchor_msg_id or "")
+        if plan_deleted_at is not None:
+            row["plan_deleted_at"] = str(plan_deleted_at or "")
         if message_count is not None:
             row["message_count"] = max(0, int(message_count))
         sessions[idx] = row
@@ -715,6 +721,20 @@ class SessionStore:
             raise SessionStoreError("session_id invalid")
         with self._lock:
             return self._touch_session_meta(sid, title=title)
+
+    def mark_plan_deleted(self, session_id: str) -> dict[str, Any]:
+        sid = _safe_session_id(session_id)
+        if not sid:
+            raise SessionStoreError("session_id invalid")
+        with self._lock:
+            return self._touch_session_meta(sid, plan_deleted_at=_now_iso())
+
+    def clear_plan_deleted(self, session_id: str) -> dict[str, Any]:
+        sid = _safe_session_id(session_id)
+        if not sid:
+            raise SessionStoreError("session_id invalid")
+        with self._lock:
+            return self._touch_session_meta(sid, plan_deleted_at="")
 
     def mark_reset_anchor(self, session_id: str) -> dict[str, Any]:
         sid = _safe_session_id(session_id)

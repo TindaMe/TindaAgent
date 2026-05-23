@@ -47,6 +47,31 @@ def _parse_json(raw: str | None) -> Any:
         return None
 
 
+def _is_plan_tool_name(name: str) -> bool:
+    clean = str(name or "").strip()
+    return clean == "plan" or clean.endswith("__plan")
+
+
+def _normalize_plan_tool_boundary(
+    *,
+    display_name: str,
+    mcp_alias: str,
+    call_id: str,
+    parsed: Any,
+    raw: str,
+) -> tuple[Any, str]:
+    if not _is_plan_tool_name(display_name) and not _is_plan_tool_name(mcp_alias):
+        return parsed, raw
+    normalized = tool_registry.normalize_plan_tool_result(
+        parsed,
+        call_id=call_id,
+        tool_name=display_name or "plan",
+    )
+    if not isinstance(normalized, dict):
+        return parsed, raw
+    return normalized, json.dumps(normalized, ensure_ascii=False)
+
+
 def _coerce_float(value: Any, default: float | None = None, *,
                   min_value: float | None = None, max_value: float | None = None) -> float | None:
     if value is None or value == "":
@@ -1015,6 +1040,13 @@ class LLMClient:
                 continue
             raw = tool_registry.run_mcp_agent_tool(name, user_perm, args, call_id=call_id)
             parsed = _parse_json(raw)
+            parsed, raw = _normalize_plan_tool_boundary(
+                display_name=display_name,
+                mcp_alias=name,
+                call_id=call_id,
+                parsed=parsed,
+                raw=raw,
+            )
 
             user_safe = parsed
             model_content = raw
@@ -1124,6 +1156,13 @@ class LLMClient:
                                     extra={"tool_name": display_name, "mcp_alias": name, "call_id": call_id, "model_id": model_id})
                         continue
                     parsed = _parse_json(raw)
+                    parsed, raw = _normalize_plan_tool_boundary(
+                        display_name=display_name,
+                        mcp_alias=name,
+                        call_id=call_id,
+                        parsed=parsed,
+                        raw=raw,
+                    )
 
                     user_safe = parsed
                     model_content = raw

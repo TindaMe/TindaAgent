@@ -109,6 +109,46 @@ process.stdout.write(JSON.stringify({ tableCount, out }, null, 2));
         self.assertIn("TAVILY_API_KEY", rendered)
         self.assertNotIn("源 | 条件 | 方式", rendered)
 
+    def test_render_markdown_keeps_thinking_quote_blocks_before_tables(self) -> None:
+        sample_text = """> 思考 A | B
+> --- | ---
+> 这里是思维链引用块，不应该被当成表格
+
+正文"""
+        node_script = r"""
+const fs = require("fs");
+global.window = {};
+const source = fs.readFileSync(process.argv[2], "utf8");
+eval(source);
+const payload = JSON.parse(fs.readFileSync(process.argv[3], "utf8"));
+const out = window.renderMarkdown(String(payload.content || ""));
+const tableCount = (out.match(/<table>/g) || []).length;
+const blockquoteCount = (out.match(/<blockquote>/g) || []).length;
+process.stdout.write(JSON.stringify({ tableCount, blockquoteCount, out }, null, 2));
+"""
+        with tempfile.TemporaryDirectory(prefix="tinda_md_quote_table_") as tmp:
+            tmp_dir = Path(tmp)
+            script_path = tmp_dir / "render_quote_table_check.js"
+            payload_path = tmp_dir / "quote_table_sample.json"
+            script_path.write_text(node_script, encoding="utf-8")
+            payload_path.write_text(json.dumps({"content": sample_text}, ensure_ascii=False), encoding="utf-8")
+
+            out = subprocess.run(
+                ["node", str(script_path), str(self.md_renderer), str(payload_path)],
+                cwd=str(self.repo_root),
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=20,
+            )
+        self.assertEqual(out.returncode, 0, msg=out.stderr)
+        data = json.loads(out.stdout)
+        rendered = str(data.get("out", ""))
+        self.assertEqual(int(data.get("tableCount", 0)), 0)
+        self.assertEqual(int(data.get("blockquoteCount", 0)), 1)
+        self.assertIn("<blockquote>", rendered)
+        self.assertIn("思维链引用块", rendered)
+
     def test_render_markdown_accepts_bbcode_code_blocks(self) -> None:
         sample_text = """[code]
 TindaAgent 搜索请求
@@ -192,7 +232,7 @@ process.stdout.write(JSON.stringify({ codeCount, out }, null, 2));
     def test_chat_renderer_has_plan_tool_marker_view(self) -> None:
         self.assertIn("function renderPlanMarkerMarkdown", self.renderer_content)
         self.assertIn("--计划已记录--", self.renderer_content)
-        self.assertIn("等待用户确认完成", self.renderer_content)
+        self.assertIn("待用户确认完成", self.renderer_content)
         self.assertIn("完成说明", self.renderer_content)
         self.assertIn("innerResult = result.result", self.renderer_content)
         self.assertIn('name === "plan" && innerResult.kind === "plan"', self.renderer_content)
@@ -212,7 +252,13 @@ process.stdout.write(JSON.stringify({ codeCount, out }, null, 2));
         self.assertIn("terminalTrace = trace.filter((step) => !isPlanToolTraceStep(step))", self.content)
         self.assertIn("plan-state", self.content)
         self.assertIn("requires_completion_confirmation", self.content)
+        self.assertIn("completion_confirmation_state", self.content)
         self.assertIn("completion_note", self.content)
+        self.assertIn("function deleteCurrentPlan()", self.content)
+        self.assertIn('apiFetch(`/sessions/${encodeURIComponent(sid)}/plan`, { method: "DELETE" })', self.content)
+        self.assertIn('planFloatCloseBtnEl?.addEventListener("click", deleteCurrentPlan)', self.content)
+        self.assertIn("待用户确认完成", self.content)
+        self.assertIn("已确认完成", self.content)
 
     def test_chat_composer_has_plus_menu_and_selected_tool_row(self) -> None:
         self.assertIn('id="inputBox"', self.content)

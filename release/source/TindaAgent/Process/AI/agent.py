@@ -65,7 +65,12 @@ class Agent:
                 return
         messages.append(item)
 
-    def _messages_for_llm_request(self, messages: list[dict], transient_system_context: str | None = None) -> list[dict]:
+    def _messages_for_llm_request(
+        self,
+        messages: list[dict],
+        transient_system_context: str | None = None,
+        transient_tail_messages: list[dict] | None = None,
+    ) -> list[dict]:
         out = [m.copy() if isinstance(m, dict) else m for m in messages]
         memory_context = getattr(self, "_memory_context", None)
         if memory_context:
@@ -73,6 +78,20 @@ class Agent:
         transient = str(transient_system_context or "").strip()
         if transient:
             self._insert_before_last_user(out, {"role": "system", "content": transient})
+        if isinstance(transient_tail_messages, list):
+            for msg in transient_tail_messages:
+                if not isinstance(msg, dict):
+                    continue
+                role = str(msg.get("role", "") or "").strip()
+                if role not in {"system", "user", "assistant", "tool"}:
+                    continue
+                content = msg.get("content", "")
+                if content is None or not str(content).strip():
+                    continue
+                item = msg.copy()
+                item["role"] = role
+                item["content"] = str(content)
+                out.append(item)
         return compact_messages_for_llm(out)
 
     def _refresh_tokens(self) -> None:
@@ -229,6 +248,7 @@ class Agent:
         user_message: str,
         temperature: float | None = None,
         transient_system_context: str | None = None,
+        transient_tail_messages: list[dict] | None = None,
     ) -> str:
         """
         用处： 发起一次多轮对话，自动维护历史
@@ -241,7 +261,11 @@ class Agent:
             str // 模型回复
         """
         self.history.append({"role": "user", "content": user_message})
-        request_messages = self._messages_for_llm_request(self.history, transient_system_context)
+        request_messages = self._messages_for_llm_request(
+            self.history,
+            transient_system_context,
+            transient_tail_messages,
+        )
         result = self._chat_with_tools(
             request_messages,
             user_perm=self.perm,
@@ -259,13 +283,18 @@ class Agent:
         user_message: str,
         temperature: float | None = None,
         transient_system_context: str | None = None,
+        transient_tail_messages: list[dict] | None = None,
     ) -> dict:
         """
         用处：发起对话并返回回复 + 工具轨迹元信息（给 Web 层调试展示）
         """
         self._held_messages = None
         self.history.append({"role": "user", "content": user_message})
-        request_messages = self._messages_for_llm_request(self.history, transient_system_context)
+        request_messages = self._messages_for_llm_request(
+            self.history,
+            transient_system_context,
+            transient_tail_messages,
+        )
         if self._context_logger is not None:
             try:
                 self._context_logger(request_messages, "llm_request")
@@ -306,13 +335,18 @@ class Agent:
         user_message: str,
         temperature: float | None = None,
         transient_system_context: str | None = None,
+        transient_tail_messages: list[dict] | None = None,
     ) -> Iterator[dict]:
         """
         用处：流式返回本轮对话事件，并在结束时写回历史
         """
         self._held_messages = None
         self.history.append({"role": "user", "content": user_message})
-        request_messages = self._messages_for_llm_request(self.history, transient_system_context)
+        request_messages = self._messages_for_llm_request(
+            self.history,
+            transient_system_context,
+            transient_tail_messages,
+        )
         if self._context_logger is not None:
             try:
                 self._context_logger(request_messages, "llm_request")

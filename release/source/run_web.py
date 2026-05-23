@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
+import copy
 import json
+import logging
 import os
 import re
 import socket
 import subprocess
 import threading
 import time
+import importlib.util
 from pathlib import Path
 
 import uvicorn
@@ -21,6 +25,53 @@ _DEFAULT_FIRST_PORT_WAIT_MS = 1800
 _DEFAULT_FIRST_PORT_POLL_MS = 120
 _PORTS_FILE_NAME = ".tinda_ports.list"
 _PORTS_ENV_VAR = "TINDA_ACTIVE_PORTS"
+
+
+class _UvicornShutdownNoiseFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        exc_info = record.exc_info
+        if not exc_info:
+            return True
+        exc_type = exc_info[0]
+        if exc_type in {KeyboardInterrupt, asyncio.CancelledError}:
+            return False
+        return True
+
+
+def _uvicorn_log_config() -> dict:
+    config = copy.deepcopy(uvicorn.config.LOGGING_CONFIG)
+    config.setdefault("filters", {})["shutdown_noise"] = {
+        "()": f"{__name__}._UvicornShutdownNoiseFilter",
+    }
+    for handler in config.get("handlers", {}).values():
+        filters = handler.setdefault("filters", [])
+        if "shutdown_noise" not in filters:
+            filters.append("shutdown_noise")
+    return config
+
+
+def _has_watchfiles() -> bool:
+    return importlib.util.find_spec("watchfiles") is not None
+
+
+def _is_wsl_mount_path(path: Path | None) -> bool:
+    if path is None:
+        return False
+    try:
+        text = str(path.resolve())
+    except Exception:
+        text = str(path)
+    return _is_wsl() and text.startswith("/mnt/")
+
+
+def _enable_watchfiles_polling_for_wsl_mounts(app_dir: Path | None) -> bool:
+    if not _is_wsl_mount_path(app_dir):
+        return False
+    # Windows-mounted drives under WSL often do not emit reliable inotify events.
+    # Force polling so uvicorn --reload also sees html/js/css/json edits.
+    os.environ["WATCHFILES_FORCE_POLLING"] = "true"
+    os.environ.setdefault("WATCHFILES_POLL_DELAY_MS", "300")
+    return True
 
 
 def _load_selected_app_dir() -> Path | None:
@@ -530,11 +581,29 @@ if __name__ == "__main__":
     if str(args.host).strip() in {"0.0.0.0", "::"}:
         print("[start] 提示: 0.0.0.0 仅用于监听，浏览器请访问上面的服务地址")
 
-    uvicorn_kw = {"host": args.host, "port": selected_port, "reload": bool(args.reload)}
+    reload_has_watchfiles = _has_watchfiles()
+    reload_uses_polling = False
+    if bool(args.reload):
+        reload_uses_polling = _enable_watchfiles_polling_for_wsl_mounts(app_dir)
+        if reload_has_watchfiles:
+            watched = "*.py, *.html, *.js, *.css, *.json"
+            polling = "polling" if reload_uses_polling else "native"
+            print(f"[start] reload: watchfiles={polling}, includes={watched}")
+        else:
+            print("[start] reload: python files only (install watchfiles to include html/js/css/json)")
+
+    uvicorn_kw = {
+        "host": args.host,
+        "port": selected_port,
+        "reload": bool(args.reload),
+        "log_config": _uvicorn_log_config(),
+    }
     if app_dir is not None:
         uvicorn_kw["app_dir"] = str(app_dir)
         if bool(args.reload):
             uvicorn_kw["reload_dirs"] = [str(app_dir)]
+            if reload_has_watchfiles:
+                uvicorn_kw["reload_includes"] = ["*.py", "*.html", "*.js", "*.css", "*.json"]
 
     tracking_ok = False
     try:

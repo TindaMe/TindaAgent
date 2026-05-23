@@ -55,10 +55,14 @@ MEMORY_MAX_ITEMS = 500
 MEMORY_MAX_DATA_LEN = 2000
 ASK_USER_NONE_OF_THEM_VALUE = "__none_of_them__"
 ASK_USER_NONE_OF_THEM_LABEL = "以上都不是，我自己补充"
+PLAN_SCHEMA_VERSION = 2
+PLAN_ACTION_VALUES = {"create", "update", "set_step_status", "request_completion_confirmation", "confirm_complete", "block", "clear"}
+PLAN_STATUS_VALUES = {"planned", "revised", "blocked", "awaiting_completion_confirmation", "complete"}
+PLAN_STEP_STATUS_VALUES = {"pending", "in_progress", "done", "blocked"}
 ASK_USER_QUESTION_TOOL_DESCRIPTION = (
     "Ask the human user exactly one concise clarification question and pause the current workflow until the user answers. "
     "HARD RULES: use this tool only when a missing requirement, unsafe ambiguity, required choice, permission-sensitive decision, or user preference blocks correct execution; do not use it for small details you can safely infer; do not ask multiple questions in one call; do not continue the task, call other task tools, fabricate an answer, or simulate the user's answer until the tool result is returned; after the tool result arrives, treat its answer/choice as authoritative user input for the current request. "
-    "Arguments: question is required and must be user-facing; options is optional and should be newline/semicolon/pipe separated mutually exclusive choices. For options, provide one clean answer label per line or separator, for example `A. ...\\nB. ...\\nC. ...`; do not include explanatory prefixes like 'these are options' inside the options string, and do not pack multiple choices into one option. allow_custom_answer controls whether the user may type a free-form answer; placeholder is a short input hint."
+    "Arguments: question is required and must be user-facing; options is an optional array of mutually exclusive choice strings. Put each choice in its own array item; never pack A/B/C choices into one string and never use newline/semicolon/pipe-separated option text. allow_custom_answer controls whether the user may type a free-form answer; placeholder is a short input hint."
 )
 ASK_USER_QUESTION_PARAMETER_DESCRIPTIONS = {
     "question": (
@@ -66,8 +70,8 @@ ASK_USER_QUESTION_PARAMETER_DESCRIPTIONS = {
         "Do not include hidden reasoning, implementation details, or multiple subquestions."
     ),
     "options": (
-        "Optional. Mutually exclusive answer choices separated by newline, semicolon, or pipe. "
-        "Use only when choices are clear. Put exactly one clean choice per separator, such as `A. first\\nB. second\\nC. third`; do not include explanatory prefixes or combine multiple choices in one item. "
+        "Optional array of mutually exclusive answer choices. Use only when choices are clear. "
+        "Put exactly one clean choice in each array item; do not combine multiple choices in one item and do not use newline/semicolon/pipe-separated option text. "
         "The system will add a 'none of them / custom answer' option automatically."
     ),
     "allow_custom_answer": (
@@ -78,18 +82,136 @@ ASK_USER_QUESTION_PARAMETER_DESCRIPTIONS = {
     ),
 }
 PLAN_PARAMETER_DESCRIPTIONS = {
+    "action": (
+        "Plan API action for this call: create, update, set_step_status, request_completion_confirmation, confirm_complete, block, or clear. "
+        "Use create/update for normal planning, request_completion_confirmation when waiting for the user to confirm completion, "
+        "set_step_status to update existing step progress without rewriting the plan, "
+        "confirm_complete only after the user has confirmed completion, block when planning is blocked, and clear to remove the visible plan."
+    ),
     "goal": "Plan objective. Keep it concise and user-facing.",
-    "steps": "Execution steps separated by newline, semicolon, or Chinese semicolon. Keep each step short.",
+    "steps": (
+        "Array of plan step objects. Put each step in its own item, for example "
+        "[{\"text\":\"Inspect current implementation\",\"status\":\"pending\"},{\"text\":\"Patch API\",\"status\":\"in_progress\"}]. "
+        "Put progress only in the status field; keep text clean without numbering, emoji, checkmarks, or phrases such as 'done/in progress'. "
+        "Do not pass newline/semicolon-separated steps. If a step's status changes after the plan exists, do not rewrite steps; call action=set_step_status."
+    ),
     "status": (
         "Plan lifecycle status: planned, revised, blocked, awaiting_completion_confirmation, or complete. "
-        "Use awaiting_completion_confirmation when the work appears done but the user should confirm before final completion."
+        "Use awaiting_completion_confirmation when the work appears done but the user should confirm before final completion. "
+        "Do not express lifecycle status with emoji or free-form labels."
     ),
     "notes": "Optional assumptions, risks, or constraints for the plan.",
     "completed": "Boolean. Set true only when the plan is actually complete.",
     "requires_completion_confirmation": (
         "Boolean. Set true when the plan should wait for explicit user confirmation before being marked complete."
     ),
+    "completion_confirmation_state": (
+        "Structured completion confirmation state: none, pending, or confirmed. "
+        "Use pending when waiting for explicit user confirmation; use confirmed only after the user has confirmed completion. "
+        "Never encode this state with emoji, punctuation, or natural-language status text."
+    ),
     "completion_note": "Optional short note explaining what was completed or what needs confirmation.",
+    "step_index": "For action=set_step_status. 1-based index of the existing plan step to update.",
+    "step_text": "For action=set_step_status. Optional exact/short step text used as a fallback when index is unavailable.",
+    "step_status": "For action=set_step_status. New step status: pending, in_progress, done, or blocked.",
+    "step_updates": (
+        "For action=set_step_status. Optional array of step status updates. "
+        "Each item must contain enum status and either index or text. Do not rewrite the full plan to mark progress."
+    ),
+    "update_note": "For action=set_step_status. Optional short note explaining why the step status changed.",
+}
+TOOL_PARAMETER_SCHEMA_OVERRIDES: dict[tuple[str, str], dict[str, Any]] = {
+    ("ask_user_question", "options"): {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": ASK_USER_QUESTION_PARAMETER_DESCRIPTIONS["options"],
+    },
+    ("plan", "action"): {
+        "type": "string",
+        "enum": ["create", "update", "set_step_status", "request_completion_confirmation", "confirm_complete", "block", "clear"],
+        "description": PLAN_PARAMETER_DESCRIPTIONS["action"],
+    },
+    ("plan", "status"): {
+        "type": "string",
+        "enum": ["planned", "revised", "blocked", "awaiting_completion_confirmation", "complete"],
+        "description": PLAN_PARAMETER_DESCRIPTIONS["status"],
+    },
+    ("plan", "completed"): {
+        "type": "boolean",
+        "description": PLAN_PARAMETER_DESCRIPTIONS["completed"],
+    },
+    ("plan", "requires_completion_confirmation"): {
+        "type": "boolean",
+        "description": PLAN_PARAMETER_DESCRIPTIONS["requires_completion_confirmation"],
+    },
+    ("plan", "completion_confirmation_state"): {
+        "type": "string",
+        "enum": ["none", "pending", "confirmed"],
+        "description": PLAN_PARAMETER_DESCRIPTIONS["completion_confirmation_state"],
+    },
+    ("plan", "steps"): {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "text": {
+                    "type": "string",
+                    "description": "One concise user-facing plan step. Do not include numbering, emoji, checkmarks, or progress labels; use status for initial state and set_step_status for later progress.",
+                },
+                "status": {
+                    "type": "string",
+                    "description": "Optional step status: pending, in_progress, done, or blocked.",
+                    "enum": ["pending", "in_progress", "done", "blocked"],
+                },
+            },
+            "required": ["text", "status"],
+        },
+        "description": PLAN_PARAMETER_DESCRIPTIONS["steps"],
+    },
+    ("plan", "step_index"): {
+        "type": "integer",
+        "description": PLAN_PARAMETER_DESCRIPTIONS["step_index"],
+    },
+    ("plan", "step_text"): {
+        "type": "string",
+        "description": PLAN_PARAMETER_DESCRIPTIONS["step_text"],
+    },
+    ("plan", "step_status"): {
+        "type": "string",
+        "enum": ["pending", "in_progress", "done", "blocked"],
+        "description": PLAN_PARAMETER_DESCRIPTIONS["step_status"],
+    },
+    ("plan", "step_updates"): {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "index": {
+                    "type": "integer",
+                    "description": "1-based step index to update.",
+                },
+                "text": {
+                    "type": "string",
+                    "description": "Optional exact/short step text fallback for matching.",
+                },
+                "status": {
+                    "type": "string",
+                    "enum": ["pending", "in_progress", "done", "blocked"],
+                    "description": "New structured step status. This is the only supported way to mark existing plan steps complete/in progress/blocked.",
+                },
+                "note": {
+                    "type": "string",
+                    "description": "Optional short status-change note.",
+                },
+            },
+            "required": ["status"],
+        },
+        "description": PLAN_PARAMETER_DESCRIPTIONS["step_updates"],
+    },
+    ("plan", "update_note"): {
+        "type": "string",
+        "description": PLAN_PARAMETER_DESCRIPTIONS["update_note"],
+    },
 }
 _MEMORY_FILE = get_memory_file()
 PROFILE_SNIPPETS = {
@@ -153,7 +275,10 @@ def _split_options(raw_options: Any) -> list[str]:
     out: list[str] = []
     seen: set[str] = set()
     for value in values:
-        item = str(value or "").strip()
+        if isinstance(value, dict):
+            item = str(value.get("label") or value.get("text") or value.get("content") or value.get("value") or "").strip()
+        else:
+            item = str(value or "").strip()
         if not item:
             continue
         if item == ASK_USER_NONE_OF_THEM_VALUE:
@@ -169,6 +294,345 @@ def _split_options(raw_options: Any) -> list[str]:
             break
     if out:
         out.append(ASK_USER_NONE_OF_THEM_VALUE)
+    return out
+
+
+def _coerce_plan_step_values(raw_steps: Any) -> list[Any]:
+    if isinstance(raw_steps, list):
+        return raw_steps
+    text = str(raw_steps or "")
+    try:
+        parsed = json.loads(text)
+        return parsed if isinstance(parsed, list) else re.split(r"[\n；;]+", text)
+    except Exception:
+        return re.split(r"[\n；;]+", text)
+
+
+def _normalize_plan_steps(raw_steps: Any, *, infer_text_status: bool = False) -> list[dict[str, Any]]:
+    values = _coerce_plan_step_values(raw_steps)
+    out: list[dict[str, Any]] = []
+    for value in values:
+        status = "pending"
+        if isinstance(value, dict):
+            raw_text = _normalize_text(
+                value.get("text") or value.get("content") or value.get("title") or value.get("label") or "",
+                800,
+            )
+            raw_status = str(value.get("status", "") or "").strip().lower()
+            if raw_status in PLAN_STEP_STATUS_VALUES:
+                status = raw_status
+        else:
+            raw_text = _normalize_text(value, 800)
+        inferred_status = _infer_plan_step_status(raw_text) if infer_text_status else ""
+        if infer_text_status and inferred_status and status == "pending":
+            status = inferred_status
+        text = _clean_plan_step_text(raw_text) if infer_text_status else _clean_plan_step_prefix(raw_text)
+        if not text:
+            continue
+        out.append({"index": len(out) + 1, "text": text, "status": status})
+        if len(out) >= 12:
+            break
+    return out
+
+
+def _normalize_step_status(raw_status: Any) -> str:
+    text = str(raw_status or "").strip().lower()
+    aliases = {
+        "doing": "in_progress",
+        "working": "in_progress",
+        "progress": "in_progress",
+        "complete": "done",
+        "completed": "done",
+        "finish": "done",
+        "finished": "done",
+        "blocked": "blocked",
+        "block": "blocked",
+        "todo": "pending",
+    }
+    text = aliases.get(text, text)
+    return text if text in PLAN_STEP_STATUS_VALUES else "pending"
+
+
+def _normalize_plan_step_updates(
+    step_updates: Any = None,
+    *,
+    step_index: Any = 0,
+    step_text: Any = "",
+    step_status: Any = "",
+    update_note: Any = "",
+) -> list[dict[str, Any]]:
+    values: list[Any]
+    if isinstance(step_updates, list):
+        values = step_updates
+    elif isinstance(step_updates, dict):
+        values = [step_updates]
+    else:
+        values = []
+    if step_index or step_text or step_status:
+        values.append({
+            "index": step_index,
+            "text": step_text,
+            "status": step_status,
+            "note": update_note,
+        })
+    out: list[dict[str, Any]] = []
+    for raw in values:
+        if not isinstance(raw, dict):
+            continue
+        status = _normalize_step_status(raw.get("status") or raw.get("step_status"))
+        idx = _parse_int(str(raw.get("index") or raw.get("step_index") or 0), 0, 0, 1000)
+        text = _clean_plan_step_text(raw.get("text") or raw.get("step_text") or "")
+        note = _normalize_text(raw.get("note") or raw.get("update_note") or "", 500)
+        if idx <= 0 and not text:
+            continue
+        item: dict[str, Any] = {"status": status}
+        if idx > 0:
+            item["index"] = idx
+        if text:
+            item["text"] = text
+        if note:
+            item["note"] = note
+        out.append(item)
+        if len(out) >= 12:
+            break
+    return out
+
+
+def _infer_plan_step_status(text: str) -> str:
+    raw = str(text or "").strip()
+    lowered = raw.lower()
+    if re.search(r"✅|(?:→|—|-)\s*(?:已完成|已实施|完成|done)(?:\s*[（(][^）)]*[）)])?\s*$", raw, flags=re.IGNORECASE):
+        return "done"
+    if re.search(r"(?:^|[→—\-\s])(?:进行中|处理中|in[_ -]?progress)(?:$|[，。,.\s])", raw, flags=re.IGNORECASE):
+        return "in_progress"
+    if re.search(r"⏳|(?:^|[→—\-\s])(?:未实施|搁置|待定|阻塞|blocked)(?:$|[：:，。,.\s])", raw, flags=re.IGNORECASE):
+        return "blocked"
+    if re.search(r"(?:^|[→—\-\s])(?:待办|未开始|pending)(?:$|[，。,.\s])", raw, flags=re.IGNORECASE):
+        return "pending"
+    if "blocked" in lowered:
+        return "blocked"
+    return ""
+
+
+def _clean_plan_step_prefix(text: str) -> str:
+    clean = _normalize_text(text, 800)
+    clean = re.sub(r"^\s*[-*•]\s*", "", clean)
+    clean = re.sub(r"^\s*\d{1,3}[.、)]\s*", "", clean)
+    return re.sub(r"\s{2,}", " ", clean).strip()
+
+
+def _clean_plan_step_text(text: str) -> str:
+    clean = _clean_plan_step_prefix(text)
+    clean = clean.replace("✅", "").replace("⏳", "").replace("🏁", "")
+    clean = clean.strip()
+    clean = re.sub(r"\s*(?:→|—|-)\s*(?:已完成|已实施|完成|done)(?:\s*[（(][^）)]*[）)])?\s*$", "", clean, flags=re.IGNORECASE)
+    clean = re.sub(r"\s*(?:→|—|-)\s*(?:进行中|处理中|in[_ -]?progress)\s*$", "", clean, flags=re.IGNORECASE)
+    clean = re.sub(r"\s*(?:→|—|-)\s*(?:待定|未实施|搁置|阻塞|blocked)(?:\s*[：:].*)?\s*$", "", clean, flags=re.IGNORECASE)
+    clean = re.sub(r"^(?:未实施|待定|搁置)(?:[（(][^）)]*[）)])?\s*[：:]\s*", "", clean)
+    clean = re.sub(r"\s{2,}", " ", clean).strip()
+    return clean
+
+
+def _plan_step_text_has_status_marker(text: Any) -> bool:
+    raw = str(text or "").strip()
+    if not raw:
+        return False
+    return bool(re.search(
+        r"✅|⏳|🏁|(?:→|—|-)\s*(?:已完成|已实施|完成|done|进行中|处理中|in[_ -]?progress|待办|未开始|pending|未实施|搁置|待定|阻塞|blocked)(?:\s*[（(][^）)]*[）)])?\s*$",
+        raw,
+        flags=re.IGNORECASE,
+    ))
+
+
+def _validate_plan_steps_contract(raw_steps: Any, *, action: str) -> list[str]:
+    if action not in {"create", "update", "request_completion_confirmation", "confirm_complete", "block"}:
+        return []
+    if raw_steps in (None, ""):
+        return []
+    errors: list[str] = []
+    if not isinstance(raw_steps, list):
+        errors.append("steps must be an array of objects; do not pass newline/semicolon-separated step text")
+    for idx, value in enumerate(_coerce_plan_step_values(raw_steps), start=1):
+        if value in (None, ""):
+            continue
+        if isinstance(value, dict):
+            raw_text = value.get("text") or value.get("content") or value.get("title") or value.get("label") or ""
+            raw_status = str(value.get("status", "pending") or "pending").strip().lower()
+            if raw_status not in PLAN_STEP_STATUS_VALUES:
+                errors.append(f"step {idx} status must be one of pending/in_progress/done/blocked")
+        else:
+            raw_text = value
+            errors.append(f"step {idx} must be an object with text and status fields")
+        if _plan_step_text_has_status_marker(raw_text):
+            errors.append(f"step {idx} text encodes progress; use the status field for initial state or action=set_step_status for later changes")
+    return errors[:8]
+
+
+def _validate_plan_step_updates_contract(
+    step_updates: Any = None,
+    *,
+    step_index: Any = 0,
+    step_text: Any = "",
+    step_status: Any = "",
+) -> list[str]:
+    values: list[Any]
+    if isinstance(step_updates, list):
+        values = step_updates
+    elif isinstance(step_updates, dict):
+        values = [step_updates]
+    else:
+        values = []
+    if step_index or step_text or step_status:
+        values.append({"index": step_index, "text": step_text, "status": step_status})
+    if not values:
+        return ["step_updates or step_index/step_text plus step_status is required"]
+    errors: list[str] = []
+    for idx, raw in enumerate(values, start=1):
+        if not isinstance(raw, dict):
+            errors.append(f"step update {idx} must be an object")
+            continue
+        raw_status = str(raw.get("status") or raw.get("step_status") or "").strip().lower()
+        raw_index = _parse_int(str(raw.get("index") or raw.get("step_index") or 0), 0, 0, 1000)
+        raw_text = raw.get("text") or raw.get("step_text") or ""
+        if raw_status not in PLAN_STEP_STATUS_VALUES:
+            errors.append(f"step update {idx} status must be one of pending/in_progress/done/blocked")
+        if raw_index <= 0 and not str(raw_text or "").strip():
+            errors.append(f"step update {idx} must include index or text")
+        if _plan_step_text_has_status_marker(raw_text):
+            errors.append(f"step update {idx} text must identify the step only; put progress in status")
+    return errors[:8]
+
+
+def _normalize_plan_action_status(
+    *,
+    action: Any = "create",
+    status: Any = "planned",
+    completed: Any = False,
+    requires_completion_confirmation: Any = False,
+    completion_confirmation_state: Any = "none",
+) -> tuple[str, str, bool, bool, str]:
+    action_text = str(action or "create").strip().lower()
+    if action_text not in PLAN_ACTION_VALUES:
+        action_text = "create"
+    status_text = str(status or "planned").strip().lower()
+    completed_flag = _parse_boolish(completed, default=False)
+    needs_completion_confirmation = _parse_boolish(requires_completion_confirmation, default=False)
+    confirmation_state = str(completion_confirmation_state or "").strip().lower()
+    if confirmation_state not in {"none", "pending", "confirmed"}:
+        confirmation_state = "none"
+
+    if action_text == "clear":
+        status_text = "complete" if completed_flag else "planned"
+        confirmation_state = "none"
+        needs_completion_confirmation = False
+    elif action_text == "request_completion_confirmation":
+        status_text = "awaiting_completion_confirmation"
+        confirmation_state = "pending"
+        needs_completion_confirmation = True
+    elif action_text == "confirm_complete":
+        status_text = "complete"
+        confirmation_state = "confirmed"
+        completed_flag = True
+    elif action_text == "block":
+        status_text = "blocked"
+        confirmation_state = "none"
+        needs_completion_confirmation = False
+    elif confirmation_state == "pending":
+        needs_completion_confirmation = True
+    elif confirmation_state == "confirmed":
+        completed_flag = True
+
+    if completed_flag:
+        status_text = "complete"
+        needs_completion_confirmation = False
+        confirmation_state = "confirmed"
+    elif needs_completion_confirmation and status_text in {"planned", "revised", "complete"}:
+        status_text = "awaiting_completion_confirmation"
+        confirmation_state = "pending"
+    if status_text not in PLAN_STATUS_VALUES:
+        status_text = "planned"
+    if status_text == "awaiting_completion_confirmation":
+        confirmation_state = "pending"
+        needs_completion_confirmation = True
+    elif confirmation_state == "pending":
+        status_text = "awaiting_completion_confirmation"
+    elif confirmation_state == "none" and status_text == "complete":
+        confirmation_state = "confirmed"
+    return action_text, status_text, completed_flag, needs_completion_confirmation, confirmation_state
+
+
+def normalize_plan_payload(payload: Any) -> dict[str, Any] | None:
+    """Normalize plan objects at read/render boundaries.
+
+    Text-status inference here is a legacy adapter for already persisted
+    malformed plan records. New plan() tool calls are validated separately and
+    must use structured fields.
+    """
+    if not isinstance(payload, dict):
+        return None
+    if str(payload.get("kind", "") or "").strip() != "plan" and not (
+        "goal" in payload or "steps" in payload or "completion_note" in payload
+    ):
+        return None
+    raw_schema_version = payload.get("schema_version", payload.get("schemaVersion", None))
+    has_schema_version = raw_schema_version not in (None, "")
+    schema_version = _parse_int(str(raw_schema_version), 1, 1, 99) if has_schema_version else 1
+    legacy_text_adapter = schema_version < PLAN_SCHEMA_VERSION
+    action_text, status_text, completed_flag, needs_completion_confirmation, confirmation_state = _normalize_plan_action_status(
+        action=payload.get("action", "create"),
+        status=payload.get("status", "planned"),
+        completed=payload.get("completed", False),
+        requires_completion_confirmation=payload.get("requires_completion_confirmation", False),
+        completion_confirmation_state=payload.get("completion_confirmation_state", "none"),
+    )
+    normalized: dict[str, Any] = {
+        "ok": bool(payload.get("ok", True)),
+        "kind": "plan",
+        "action": action_text,
+        "status": status_text,
+        "completed": bool(completed_flag or status_text == "complete"),
+        "requires_completion_confirmation": bool(needs_completion_confirmation),
+        "completion_confirmation_state": confirmation_state,
+        "schema_version": schema_version,
+        "legacy_text_adapter": bool(legacy_text_adapter),
+        "goal": _normalize_text(payload.get("goal", ""), 1200),
+        "steps": _normalize_plan_steps(payload.get("steps", []), infer_text_status=legacy_text_adapter),
+        "notes": _normalize_text(payload.get("notes", ""), 1600),
+        "completion_note": _normalize_text(payload.get("completion_note", payload.get("completionNote", "")), 1200),
+    }
+    step_updates = _normalize_plan_step_updates(
+        payload.get("step_updates"),
+        step_index=payload.get("step_index", 0),
+        step_text=payload.get("step_text", ""),
+        step_status=payload.get("step_status", ""),
+        update_note=payload.get("update_note", ""),
+    )
+    if action_text == "set_step_status":
+        normalized["step_updates"] = step_updates
+        normalized["update_note"] = _normalize_text(payload.get("update_note", ""), 500)
+    for key in ("message", "error", "error_code", "call_id", "pending_confirmation"):
+        if key in payload:
+            normalized[key] = payload.get(key)
+    return normalized
+
+
+def normalize_plan_tool_result(payload: Any, *, call_id: str = "", tool_name: str = "plan") -> Any:
+    """Normalize plan results at API boundaries while preserving wrapper metadata."""
+    if not isinstance(payload, dict):
+        return payload
+    direct = normalize_plan_payload(payload)
+    if direct is not None:
+        return direct
+    inner = payload.get("result")
+    normalized_inner = normalize_plan_payload(inner)
+    if normalized_inner is None:
+        return payload
+    out = dict(payload)
+    out["result"] = normalized_inner
+    out["ok"] = bool(out.get("ok", normalized_inner.get("ok", True)))
+    out["tool_name"] = str(out.get("tool_name") or tool_name or "plan")
+    if call_id:
+        out["call_id"] = str(out.get("call_id") or call_id)
     return out
 
 
@@ -496,7 +960,8 @@ def _local_tool_schema(tool_name: str, tool_desc: str, info: dict[str, Any] | No
                         ptype = "integer"
                     elif a is bool:
                         ptype = "boolean"
-                properties[pname] = {"type": ptype}
+                override = TOOL_PARAMETER_SCHEMA_OVERRIDES.get((tool_name, pname))
+                properties[pname] = json.loads(json.dumps(override, ensure_ascii=False)) if override else {"type": ptype}
                 if tool_name == "ask_user_question" and pname in ASK_USER_QUESTION_PARAMETER_DESCRIPTIONS:
                     properties[pname]["description"] = ASK_USER_QUESTION_PARAMETER_DESCRIPTIONS[pname]
                 if tool_name == "plan" and pname in PLAN_PARAMETER_DESCRIPTIONS:
@@ -984,7 +1449,7 @@ def echo(text: str = "", *content_list: str) -> None:
 )
 def ask_user_question(
     question: str = "",
-    options: str = "",
+    options: Any = "",
     allow_custom_answer: str = "true",
     placeholder: str = "",
     call_id: str = "",
@@ -1015,58 +1480,121 @@ def ask_user_question(
     perm.PUBLIC_READ,
     "Create or update a concise execution plan without performing the task. "
     "Use when the user asks for /plan, planning mode, or when complex work needs a visible plan. "
-    "Parameters: goal=objective, steps=newline/semicolon separated plan steps, "
-    "status=planned|revised|blocked|awaiting_completion_confirmation|complete, "
-    "completed=true only after the plan is actually done, "
-    "requires_completion_confirmation=true when the user must confirm before completion, "
-    "completion_note=short completion/confirmation note, notes=optional assumptions/risks. "
-    "Use this same tool to update an existing visible plan state; do not invent a separate plan API.",
+    "This tool is the structured Plan state API. Choose action=create or update for normal planning, "
+    "action=request_completion_confirmation when the plan should wait for user confirmation, "
+    "action=set_step_status to mark existing steps pending/in_progress/done/blocked without rewriting plan text, "
+    "action=confirm_complete only after explicit user confirmation, action=block when blocked, and action=clear to remove the visible plan. "
+    "Parameters: goal=objective, steps=array of step objects with one step per item, notes=optional assumptions/risks, completion_note=short completion/confirmation note. "
+    "Use the enum fields exactly as provided by the JSON schema. Never use emoji/free-form status labels. Never pack multiple steps into one newline/semicolon-separated string. "
+    "Never write progress such as 'done' or 'completed' in step text; call action=set_step_status instead.",
     must=True,
 )
 def plan(
+    action: str = "create",
     goal: str = "",
-    steps: str = "",
+    steps: Any = "",
     status: str = "planned",
     notes: str = "",
-    completed: str = "false",
-    requires_completion_confirmation: str = "false",
+    completed: Any = False,
+    requires_completion_confirmation: Any = False,
+    completion_confirmation_state: str = "none",
     completion_note: str = "",
+    step_index: int = 0,
+    step_text: str = "",
+    step_status: str = "",
+    step_updates: Any = None,
+    update_note: str = "",
 ) -> dict[str, Any]:
     goal_text = _normalize_text(goal, 1200)
-    raw_steps = re.split(r"[\n；;]+", str(steps or ""))
-    step_rows: list[dict[str, Any]] = []
-    for idx, raw in enumerate(raw_steps, start=1):
-        text = _normalize_text(raw, 800)
-        if not text:
-            continue
-        step_rows.append({"index": len(step_rows) + 1, "text": text, "status": "pending"})
-        if len(step_rows) >= 12:
-            break
-    status_text = str(status or "planned").strip().lower()
-    completed_flag = _parse_boolish(completed, default=False)
-    needs_completion_confirmation = _parse_boolish(requires_completion_confirmation, default=False)
-    if completed_flag:
-        status_text = "complete"
-        needs_completion_confirmation = False
-    elif needs_completion_confirmation and status_text in {"planned", "revised", "complete"}:
-        status_text = "awaiting_completion_confirmation"
-    if status_text not in {"planned", "revised", "blocked", "awaiting_completion_confirmation", "complete"}:
-        status_text = "planned"
+    action_text, status_text, completed_flag, needs_completion_confirmation, confirmation_state = _normalize_plan_action_status(
+        action=action,
+        status=status,
+        completed=completed,
+        requires_completion_confirmation=requires_completion_confirmation,
+        completion_confirmation_state=completion_confirmation_state,
+    )
     notes_text = _normalize_text(notes, 1600)
     completion_note_text = _normalize_text(completion_note, 1200)
-    if not goal_text and not step_rows and not notes_text and not completion_note_text:
+    contract_errors = (
+        _validate_plan_step_updates_contract(
+            step_updates,
+            step_index=step_index,
+            step_text=step_text,
+            step_status=step_status,
+        )
+        if action_text == "set_step_status"
+        else _validate_plan_steps_contract(steps, action=action_text)
+    )
+    if contract_errors:
         return {
             "ok": False,
-            "error": "goal, steps, or notes is required",
             "kind": "plan",
+            "action": action_text,
             "status": status_text,
+            "schema_version": PLAN_SCHEMA_VERSION,
+            "error": "invalid_plan_contract",
+            "error_code": "invalid_plan_contract",
+            "details": contract_errors,
+            "message": (
+                "Plan state must be represented with structured API fields. "
+                "Use action=create/update with steps as array objects for plan content, "
+                "and action=set_step_status with step_updates to change progress."
+            ),
         }
+    step_rows = _normalize_plan_steps(steps, infer_text_status=False)
+    normalized_step_updates = _normalize_plan_step_updates(
+        step_updates,
+        step_index=step_index,
+        step_text=step_text,
+        step_status=step_status,
+        update_note=update_note,
+    )
+    if action_text == "set_step_status":
+        if not normalized_step_updates:
+            return {
+                "ok": False,
+                "error": "step_index/step_text and step_status are required for set_step_status",
+                "kind": "plan",
+                "action": action_text,
+                "status": status_text,
+                "schema_version": PLAN_SCHEMA_VERSION,
+                "step_updates": [],
+            }
+        return {
+            "ok": True,
+            "kind": "plan",
+            "action": action_text,
+            "status": status_text if status_text != "planned" else "revised",
+            "schema_version": PLAN_SCHEMA_VERSION,
+            "completed": False,
+            "requires_completion_confirmation": False,
+            "completion_confirmation_state": "none",
+            "goal": goal_text,
+            "steps": [],
+            "step_updates": normalized_step_updates,
+            "notes": notes_text,
+            "completion_note": completion_note_text,
+            "update_note": _normalize_text(update_note, 500),
+            "message": "Plan step status updated.",
+        }
+    if not goal_text and not step_rows and not notes_text and not completion_note_text:
+        return {
+        "ok": False,
+        "error": "goal, steps, or notes is required",
+        "kind": "plan",
+        "action": action_text,
+        "status": status_text,
+        "schema_version": PLAN_SCHEMA_VERSION,
+    }
     return {
         "ok": True,
         "kind": "plan",
+        "action": action_text,
         "status": status_text,
+        "schema_version": PLAN_SCHEMA_VERSION,
         "completed": bool(completed_flag or status_text == "complete"),
         "requires_completion_confirmation": bool(needs_completion_confirmation),
+        "completion_confirmation_state": confirmation_state,
         "goal": goal_text,
         "steps": step_rows,
         "notes": notes_text,

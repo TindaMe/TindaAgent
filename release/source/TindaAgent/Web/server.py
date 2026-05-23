@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+import html
 import ipaddress
 import calendar
 import shutil
@@ -202,6 +203,54 @@ def _build_substeps_from_history(agent: Agent, tool_trace: list[dict] | None) ->
     return substeps
 
 
+def _trace_has_plan_tool(tool_trace: list[dict] | None) -> bool:
+    if not isinstance(tool_trace, list):
+        return False
+    for step in tool_trace:
+        if not isinstance(step, dict):
+            continue
+        name = str(step.get("agent_tool") or step.get("name") or step.get("tool_name") or "").strip()
+        if name == "plan":
+            return True
+    return False
+
+
+def _is_plan_tool_name(name: str) -> bool:
+    clean = str(name or "").strip()
+    return clean == "plan" or clean.endswith("__plan")
+
+
+def _normalize_plan_tool_step(step: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(step, dict):
+        return step
+    name = str(step.get("agent_tool") or step.get("name") or step.get("tool_name") or "").strip()
+    alias = str(step.get("mcp_alias") or "").strip()
+    if not _is_plan_tool_name(name) and not _is_plan_tool_name(alias):
+        return step
+    row = dict(step)
+    call_id = str(row.get("call_id") or row.get("id") or "").strip()
+    result = row.get("result")
+    normalized_result = tool_registry.normalize_plan_tool_result(
+        result,
+        call_id=call_id,
+        tool_name=name or "plan",
+    )
+    if isinstance(normalized_result, dict):
+        row["result"] = normalized_result
+        row["raw_result"] = json.dumps(normalized_result, ensure_ascii=False)
+    return row
+
+
+def _clear_plan_deleted_if_plan_tool(session_id: str, tool_trace: list[dict] | None) -> None:
+    if not _trace_has_plan_tool(tool_trace):
+        return
+    try:
+        _store.clear_plan_deleted(session_id)
+        _invalidate_session_index(session_id)
+    except Exception:
+        logger.debug("clear plan deleted marker failed session_id=%s", session_id, exc_info=True)
+
+
 def _build_substeps_from_agent_delta(
     messages: list[dict] | None,
     tool_trace: list[dict] | None,
@@ -298,6 +347,7 @@ _DEEP_ALIGNMENT_SYSTEM_PROMPT = (
     "If required information is missing, use ask_user_question to ask one concise clarification question before writing the summary. "
     "When using ask_user_question, ask exactly one user-facing question, include clear options only when they are truly mutually exclusive, and stop until the tool result returns. "
     "Never invent, guess, or simulate the user's answer to ask_user_question. Treat the returned answer/choice as authoritative user input for the next alignment summary. "
+    "Use native tool_calls/function calling for ask_user_question; never write DSML/XML/tool-call protocol text in the visible answer. "
     "Deep Alignment is only for aligning the user's intent and constraints; it is not Plan mode and must not create an execution plan. "
     "Deep Alignment exposes only ask_user_question as a pause/clarification tool, but after confirmation the main agent runtime has additional native tools. "
     "If the user asks about tools, describe only that more tools may be available after confirmation; do not claim a tool is unavailable just because Deep Alignment cannot call it directly. "
@@ -484,16 +534,24 @@ def _load_html(file_name: str) -> str:
     except Exception:
         return f"<!-- {file_name} not found -->"
 
-_HTML_HOME = _load_html("home.html")
-_HTML_CHAT = _load_html("chat.html")
-_HTML_SETTINGS = _load_html("settings.html")
-_HTML_USER_ADMIN = _load_html("user_admin.html")
-_HTML_LOG_VIEW = _load_html("logs.html")
-_HTML_MODEL_DIAGNOSTICS = _load_html("model_diagnostics.html")
-_HTML_LLM_REQUEST = _load_html("llm_request.html")
-_JS_CHAT_RENDERER = _load_html("chat_renderer.js")
-_JS_MARKDOWN_RENDERER = _load_html("markdown_renderer.js")
-_JS_THEME_TOGGLE = _load_html("theme_toggle.js")
+_LIVE_ASSET_HEADERS = {
+    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+    "Pragma": "no-cache",
+    "Expires": "0",
+}
+
+
+def _live_html(file_name: str) -> HTMLResponse:
+    return HTMLResponse(content=_load_html(file_name), headers=_LIVE_ASSET_HEADERS)
+
+
+def _live_js(file_name: str) -> Response:
+    return Response(
+        content=_load_html(file_name),
+        media_type="application/javascript",
+        headers=_LIVE_ASSET_HEADERS,
+    )
+
 _LOG_ROOT = get_log_root()
 _CONTEXT_LOG_FILE = _LOG_ROOT / "llm_context.jsonl"
 _LLM_REQUEST_LOG_FILE = Path(os.getenv("TINDA_LLM_REQUEST_LOG", str(_LOG_ROOT / "llm_request.jsonl")))
@@ -1710,7 +1768,7 @@ def _sanitize_tool_trace_for_user(trace: list[dict] | None) -> list[dict]:
     for step in trace:
         if not isinstance(step, dict):
             continue
-        row = dict(step)
+        row = _normalize_plan_tool_step(dict(step))
         result = row.get("result")
         if isinstance(result, dict):
             err_code = str(result.get("error_code", "") or "")
@@ -2214,7 +2272,9 @@ def _build_plan_mode_transient_context(original_message: str) -> str:
         "When using ask_user_question, ask exactly one blocking question, stop planning until the user answers, and treat the returned answer/choice as authoritative. "
         "Never simulate the user's answer or continue with assumptions while ask_user_question is pending. "
         "Otherwise, call the MCP-backed plan tool to record a concise execution plan. "
-        "The plan tool is also the API for plan state updates: set requires_completion_confirmation=true when user confirmation is needed before completion, and set completed=true/status=complete only when the plan is actually finished. "
+        "The plan tool is the structured Plan state API: use action=create or update for normal planning; use steps as array objects with clean text plus enum status; use action=set_step_status with step_updates/step_index/step_status to change existing step progress; use action=request_completion_confirmation when user confirmation is needed before completion; use action=confirm_complete only after explicit user confirmation; use action=block when blocked; use action=clear to remove the visible plan. "
+        "Represent lifecycle with status, completed, requires_completion_confirmation, and completion_confirmation_state. "
+        "Do not use emoji or free-form labels to represent plan state; never write progress such as done/completed/in progress inside step text. "
         "After recording the plan, explain it briefly in Chinese and wait for the user to confirm or ask to continue. "
         "You can consider the full available tool list when designing the plan, but do not execute task tools while in Plan mode. "
         "The only tools you should call in Plan mode are ask_user_question and plan. "
@@ -2605,8 +2665,9 @@ def _deep_ask_tool_schema() -> list[dict[str, Any]]:
                             "description": "Required. One concise user-facing clarification question. Ask only one thing.",
                         },
                         "options": {
-                            "type": "string",
-                            "description": "Optional mutually exclusive choices separated by newline, semicolon, or pipe.",
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Optional mutually exclusive choices. Put exactly one choice in each array item.",
                         },
                         "allow_custom_answer": {
                             "type": "string",
@@ -2634,15 +2695,64 @@ def _parse_deep_tool_args(raw: Any) -> dict[str, Any]:
         return {}
 
 
+def _extract_deep_dsml_ask_call(text: str) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    raw = str(text or "")
+    if not raw or "invoke" not in raw.lower() or not has_tool_protocol_artifacts(raw):
+        return None
+    blocks = re.findall(
+        r"<[^>]*invoke[^>]*name\s*=\s*(['\"])(.*?)\1[^>]*>(.*?)</[^>]*invoke[^>]*>",
+        raw,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    for idx, (_quote, raw_name, body) in enumerate(blocks):
+        name = html.unescape(str(raw_name or "").strip())
+        if name != "ask_user_question":
+            continue
+        args: dict[str, Any] = {}
+        for _p_quote, p_name, p_value in re.findall(
+            r"<[^>]*parameter[^>]*name\s*=\s*(['\"])(.*?)\1[^>]*>(.*?)</[^>]*parameter[^>]*>",
+            body,
+            flags=re.DOTALL | re.IGNORECASE,
+        ):
+            key = html.unescape(str(p_name or "").strip())
+            if key:
+                args[key] = html.unescape(str(p_value or "").strip())
+        if not str(args.get("question", "") or "").strip():
+            continue
+        call_id = f"deep_dsml_{uuid.uuid4().hex[:12]}_{idx}"
+        return (
+            {
+                "id": call_id,
+                "type": "function",
+                "function": {
+                    "name": "ask_user_question",
+                    "arguments": json.dumps(args, ensure_ascii=False),
+                },
+            },
+            args,
+        )
+    return None
+
+
 def _split_deep_ask_options(raw_options: Any) -> list[str]:
     if isinstance(raw_options, list):
         values = raw_options
+    elif isinstance(raw_options, str):
+        raw_text = raw_options.strip()
+        try:
+            parsed = json.loads(raw_text)
+            values = parsed if isinstance(parsed, list) else re.split(r"[\n|；;]+", raw_text)
+        except Exception:
+            values = re.split(r"[\n|；;]+", raw_text)
     else:
         values = re.split(r"[\n|；;]+", str(raw_options or ""))
     out: list[str] = []
     seen: set[str] = set()
     for value in values:
-        item = str(value or "").strip()
+        if isinstance(value, dict):
+            item = str(value.get("label") or value.get("text") or value.get("content") or value.get("value") or "").strip()
+        else:
+            item = str(value or "").strip()
         if not item or item == "__none_of_them__":
             continue
         if len(item) > 120:
@@ -2715,6 +2825,9 @@ def _extract_deep_ask_call(resp: Any) -> tuple[dict[str, Any], dict[str, Any]] |
         args = _parse_deep_tool_args(fn.get("arguments", "{}"))
         if str(args.get("question", "") or "").strip():
             return row, args
+    dsml_call = _extract_deep_dsml_ask_call(_extract_llm_message_text(resp))
+    if dsml_call is not None:
+        return dsml_call
     return None
 
 
@@ -2863,7 +2976,7 @@ def _generate_deep_alignment_result(
                     "created_at": _now_iso(),
                 },
             }
-    text = _extract_llm_message_text(resp)
+    text = strip_tool_protocol_artifacts(_extract_llm_message_text(resp))
     if not text:
         text = "我理解你希望我先确认需求重点，再继续执行。请确认这个理解是否一致。"
     return {"state": "waiting_confirm", "alignment_text": text[:2400].strip()}
@@ -2920,7 +3033,7 @@ def _resume_deep_alignment_after_question(
         "temperature": 0.2,
     }
     resp = _llm.create_completion(payload, provider=_llm.current_provider, purpose="deep_alignment", stream=False)
-    text = _extract_llm_message_text(resp)
+    text = strip_tool_protocol_artifacts(_extract_llm_message_text(resp))
     if not text:
         text = "我已经收到你的补充，并会按这个理解继续执行。请确认这个理解是否一致。"
     return {
@@ -2946,6 +3059,34 @@ def _build_deep_alignment_transient_context(alignment_text: str | None) -> str:
         f"{text[:2400]}\n"
         "[/DEEP_ALIGNMENT_CONFIRMED]"
     )
+
+
+def _build_deep_alignment_tail_messages(alignment_text: str | None) -> list[dict[str, str]]:
+    text = str(alignment_text or "").strip()
+    if not text:
+        return []
+    return [
+        {
+            "role": "assistant",
+            "content": (
+                "[Deep Alignment Summary]\n"
+                f"{text[:2400]}"
+            ),
+        },
+        {
+            "role": "system",
+            "content": (
+                "[DEEP_ALIGNMENT_CONFIRMED]\n"
+                "User confirmation: yes.\n"
+                "The user confirmed the assistant alignment summary immediately above. "
+                "Execute the current user request now, using that summary only as constraints for this single request. "
+                "Do not ask the user to confirm the same summary again. "
+                "If the request requires local files, shell commands, web search, memory, or other tool-backed work, "
+                "use native tool_calls/function calling normally. Never simulate tool calls in text.\n"
+                "[/DEEP_ALIGNMENT_CONFIRMED]"
+            ),
+        },
+    ]
 
 
 def _stringify_trace_value(value) -> str:
@@ -3168,6 +3309,7 @@ def _tool_trace_to_substeps(tool_trace: list[dict] | None) -> list[dict]:
     for step in tool_trace:
         if not isinstance(step, dict):
             continue
+        step = _normalize_plan_tool_step(step)
         name = str(step.get("agent_tool", "unknown") or "unknown")
         cid = str(step.get("call_id", "") or "").strip()
         model_id = str(step.get("tool_call_id", "") or "").strip()
@@ -3229,6 +3371,8 @@ def _build_tool_marker_substep_from_call(
     if not isinstance(parsed_args, dict):
         parsed_args = {}
     tinfo = trace_step if isinstance(trace_step, dict) else {}
+    if isinstance(tinfo, dict):
+        tinfo = _normalize_plan_tool_step(tinfo)
     if isinstance(tinfo, dict):
         display_name = str(tinfo.get("agent_tool", "") or name)
     call_id = str(tinfo.get("call_id", "") or model_id).strip()
@@ -3583,7 +3727,7 @@ def _find_audit_event_by_id(event_id: int) -> dict | None:
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
-    return _HTML_HOME
+    return _live_html("home.html")
 
 
 @app.get("/home", response_class=HTMLResponse)
@@ -3664,30 +3808,27 @@ async def chat_page_legacy():
 
 @app.get("/app", response_class=HTMLResponse)
 async def chat_page():
-    return _HTML_CHAT
+    return _live_html("chat.html")
 
 
 @app.get("/chat_renderer.js")
 async def chat_renderer_js():
-    from fastapi.responses import Response
-    return Response(content=_JS_CHAT_RENDERER, media_type="application/javascript")
+    return _live_js("chat_renderer.js")
 
 
 @app.get("/markdown_renderer.js")
 async def markdown_renderer_js():
-    from fastapi.responses import Response
-    return Response(content=_JS_MARKDOWN_RENDERER, media_type="application/javascript")
+    return _live_js("markdown_renderer.js")
 
 
 @app.get("/theme_toggle.js")
 async def theme_toggle_js():
-    from fastapi.responses import Response
-    return Response(content=_JS_THEME_TOGGLE, media_type="application/javascript")
+    return _live_js("theme_toggle.js")
 
 
 @app.get("/settings", response_class=HTMLResponse)
 async def settings_page():
-    return _HTML_SETTINGS
+    return _live_html("settings.html")
 
 
 # ── Web Settings API ───────────────────────────────────────────────
@@ -3742,17 +3883,17 @@ async def put_terminal_settings(data: dict[str, Any] = Body(...)):
 
 @app.get("/model-diagnostics", response_class=HTMLResponse)
 async def model_diagnostics_page():
-    return _HTML_MODEL_DIAGNOSTICS
+    return _live_html("model_diagnostics.html")
 
 
 @app.get("/llm-request", response_class=HTMLResponse)
 async def llm_request_page():
-    return _HTML_LLM_REQUEST
+    return _live_html("llm_request.html")
 
 
 @app.get("/model-data", response_class=HTMLResponse)
 async def model_data_page():
-    return _HTML_LLM_REQUEST
+    return _live_html("llm_request.html")
 
 
 @app.get("/llm-request/latest")
@@ -3992,14 +4133,14 @@ async def system_version_compat(target: str = Query(...)):
 
 @app.get("/logs", response_class=HTMLResponse)
 async def logs_page():
-    return _HTML_LOG_VIEW
+    return _live_html("logs.html")
 
 
 @app.get("/user-admin", response_class=HTMLResponse)
 async def user_admin_page(request: Request):
     # 页面本身允许打开；真正权限由 /admin/* 接口强校验，
     # 前端页面加载后会基于 /auth/status 再次判定并回跳。
-    return _HTML_USER_ADMIN
+    return _live_html("user_admin.html")
 
 
 @app.get("/auth/status")
@@ -4633,6 +4774,33 @@ async def delete_session(session_id: str):
     return JSONResponse({"ok": True, "session_id": sid})
 
 
+@app.delete("/sessions/{session_id}/plan")
+async def delete_session_plan(session_id: str):
+    sid, _meta = _require_session_access(session_id, create=False)
+    try:
+        row = _store.mark_plan_deleted(sid)
+    except AttributeError:
+        row = _store.ensure_session(sid)
+        row["plan_deleted_at"] = datetime.now().astimezone().isoformat(timespec="seconds")
+    except SessionStoreError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+    _invalidate_session_index(sid)
+    _audit_web(
+        "SYSTEM_WRITE",
+        "delete_session_plan",
+        f"plan_deleted session_id={sid}",
+        {"session_id": sid, "plan_deleted_at": str(row.get("plan_deleted_at", "") or "")},
+    )
+    return JSONResponse({
+        "ok": True,
+        "session_id": sid,
+        "plan": {
+            "deleted": True,
+            "deleted_at": str(row.get("plan_deleted_at", "") or ""),
+        },
+    })
+
+
 @app.delete("/sessions")
 async def delete_all_sessions():
     current = _require_login()
@@ -4670,16 +4838,21 @@ async def get_session_messages(
     before_seq: int = Query(default=0),
 ):
     sid, _meta = _require_session_access(session_id, create=False)
+    meta = _store.get_session(sid) or {}
     requested_limit = max(0, min(int(limit or 0), 500))
     if requested_limit > 0:
         try:
-            meta = _store.get_session(sid) or {}
             if not _sqlite_index.is_session_current(sid, meta):
                 load_effective = getattr(_store, "load_effective_messages", None)
                 current_data = load_effective(sid) if callable(load_effective) else _store.load_messages(sid)
                 _sqlite_index.index_session(sid, meta, current_data)
             cached = _sqlite_index.get_messages(sid, limit=requested_limit, before_seq=before_seq)
             if cached is not None:
+                cached = dict(cached)
+                cached["plan"] = {
+                    "deleted": bool(str(meta.get("plan_deleted_at", "") or "").strip()),
+                    "deleted_at": str(meta.get("plan_deleted_at", "") or ""),
+                }
                 return JSONResponse(cached)
         except Exception as e:
             logger.debug("sqlite session index fallback session_id=%s: %s", sid, e)
@@ -4710,6 +4883,10 @@ async def get_session_messages(
         "newest_seq": newest_seq,
         "has_more": has_more,
         "limit": requested_limit,
+        "plan": {
+            "deleted": bool(str(meta.get("plan_deleted_at", "") or "").strip()),
+            "deleted_at": str(meta.get("plan_deleted_at", "") or ""),
+        },
         "source": "json_store",
     })
 
@@ -4868,11 +5045,13 @@ async def chat(req: ChatRequest):
     if plan_mode:
         transient_contexts.append(_build_plan_mode_transient_context(message))
     transient_contexts.append(_build_web_search_mode_transient_context(bool(req.web_search_enabled)))
-    deep_context = _build_deep_alignment_transient_context(req.deep_alignment_context)
-    if deep_context:
-        transient_contexts.append(deep_context)
     transient_system_context = "\n\n".join(transient_contexts)
-    result = agent.chat_with_meta(llm_message, transient_system_context=transient_system_context)
+    deep_tail_messages = _build_deep_alignment_tail_messages(req.deep_alignment_context)
+    result = agent.chat_with_meta(
+        llm_message,
+        transient_system_context=transient_system_context,
+        transient_tail_messages=deep_tail_messages,
+    )
     tool_trace_raw = result.get("tool_trace", [])
     tool_trace = _sanitize_tool_trace_for_user(tool_trace_raw)
     tool_steps = int(result.get("tool_steps", 0))
@@ -4920,6 +5099,7 @@ async def chat(req: ChatRequest):
     saved_messages = False
     try:
         _store.append_messages(sid, items)
+        _clear_plan_deleted_if_plan_tool(sid, tool_trace)
         _invalidate_session_index(sid)
         saved_messages = True
     except Exception:
@@ -5098,10 +5278,8 @@ async def chat_stream(
     if plan_mode:
         transient_contexts.append(_build_plan_mode_transient_context(text))
     transient_contexts.append(_build_web_search_mode_transient_context(bool(web_search_enabled)))
-    deep_context = _build_deep_alignment_transient_context(deep_alignment_context)
-    if deep_context:
-        transient_contexts.append(deep_context)
     transient_system_context = "\n\n".join(transient_contexts)
+    deep_tail_messages = _build_deep_alignment_tail_messages(deep_alignment_context)
 
     def event_iter():
         final_reply = ""
@@ -5133,7 +5311,11 @@ async def chat_stream(
 
         try:
             ensure_stream_draft()
-            for event in agent.stream_chat_events(llm_message, transient_system_context=transient_system_context):
+            for event in agent.stream_chat_events(
+                llm_message,
+                transient_system_context=transient_system_context,
+                transient_tail_messages=deep_tail_messages,
+            ):
                 et = event.get("type", "")
                 if et == "delta":
                     final_reply += str(event.get("content", ""))
@@ -5175,6 +5357,7 @@ async def chat_stream(
                             substeps=done_steps,
                             replace_tool_results=True,
                         )
+                        _clear_plan_deleted_if_plan_tool(sid, safe_trace)
                         _audit_web(
                             "PUBLIC_WRITE",
                             "chat_stream",
@@ -5256,6 +5439,7 @@ async def chat_stream(
             if not substeps:
                 substeps = [{"kind": "text", "content": final_reply}]
             _store.replace_assistant_by_turn(sid, turn_id=turn_id, substeps=substeps)
+            _clear_plan_deleted_if_plan_tool(sid, done_payload.get("tool_trace", []))
             final_saved = True
             if not pending_items:
                 compression_result = _maybe_auto_compress_after_llm(sid)
@@ -5551,6 +5735,7 @@ async def terminal_confirm(req: TerminalConfirmRequest):
     )
     if new_substeps:
         _store.append_to_last_assistant(sid, new_substeps)
+        _clear_plan_deleted_if_plan_tool(sid, tool_trace)
     _audit_web("PUBLIC_WRITE", "_append_assistant_continuation_messages",
                f"assistant_continuation_appended session_id={sid}",
                {"session_id": sid, "substeps": len(new_substeps),
