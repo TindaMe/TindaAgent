@@ -123,11 +123,13 @@ class SessionStore:
         self.legacy_root_dir = Path(legacy_root_dir).resolve() if legacy_root_dir else None
         self.sessions_file = self.root_dir / "sessions.json"
         self.messages_dir = self.root_dir / "messages"
+        self.plans_dir = self.root_dir / "plans"
         self.exports_dir = self.root_dir / "exports"
         self.legacy_sessions_file = self.legacy_root_dir / "sessions.json" if self.legacy_root_dir else None
         self.legacy_messages_dir = self.legacy_root_dir / "messages" if self.legacy_root_dir else None
         self.root_dir.mkdir(parents=True, exist_ok=True)
         self.messages_dir.mkdir(parents=True, exist_ok=True)
+        self.plans_dir.mkdir(parents=True, exist_ok=True)
         self.exports_dir.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
         self._session_locks: dict[str, threading.RLock] = {}
@@ -173,6 +175,12 @@ class SessionStore:
             raise SessionStoreError("session_id invalid")
         return self.messages_dir / f"{sid}.json"
 
+    def _plan_path(self, session_id: str) -> Path:
+        sid = _safe_session_id(session_id)
+        if not sid:
+            raise SessionStoreError("session_id invalid")
+        return self.plans_dir / f"{sid}.json"
+
     def has_message_file(self, session_id: str) -> bool:
         sid = _safe_session_id(session_id)
         if not sid:
@@ -181,6 +189,12 @@ class SessionStore:
             return True
         legacy = self.legacy_messages_dir / f"{sid}.jsonl" if self.legacy_messages_dir else None
         return bool(legacy and legacy.exists())
+
+    def has_plan_file(self, session_id: str) -> bool:
+        sid = _safe_session_id(session_id)
+        if not sid:
+            return False
+        return self._plan_path(sid).exists()
 
     # ── Messages I/O ──
 
@@ -206,6 +220,45 @@ class SessionStore:
         temp = path.with_suffix(".json.tmp")
         temp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         temp.replace(path)
+
+    def load_plan(self, session_id: str) -> dict[str, Any]:
+        sid = _safe_session_id(session_id)
+        if not sid:
+            return {}
+        path = self._plan_path(sid)
+        if not path.exists():
+            return {}
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+
+    def save_plan(
+        self,
+        session_id: str,
+        current: dict[str, Any] | None,
+        *,
+        deleted: bool = False,
+        deleted_at: str = "",
+    ) -> dict[str, Any]:
+        sid = _safe_session_id(session_id)
+        if not sid:
+            raise SessionStoreError("session_id invalid")
+        payload = {
+            "version": 1,
+            "session_id": sid,
+            "updated_at": _now_iso(),
+            "deleted": bool(deleted),
+            "deleted_at": str(deleted_at or ""),
+            "current": current if isinstance(current, dict) and not deleted else None,
+        }
+        path = self._plan_path(sid)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temp = path.with_suffix(".json.tmp")
+        temp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        temp.replace(path)
+        return payload
 
     def load_messages(self, session_id: str) -> dict[str, Any]:
         """Return full session dict: {"1": {...}, "2": {...}}"""
@@ -660,6 +713,7 @@ class SessionStore:
             payload["sessions"] = new_rows
             self._write_sessions(payload)
             self._messages_path(sid).unlink(missing_ok=True)
+            self._plan_path(sid).unlink(missing_ok=True)
             (self.exports_dir / f"{sid}.md").unlink(missing_ok=True)
             (self.exports_dir / f"{sid}.txt").unlink(missing_ok=True)
             self._session_locks.pop(sid, None)
@@ -679,6 +733,7 @@ class SessionStore:
             sid = str(it.get("id", ""))
             if sid:
                 self._messages_path(sid).unlink(missing_ok=True)
+                self._plan_path(sid).unlink(missing_ok=True)
         return len(empty)
 
     def cleanup_orphan_messages(self) -> int:
@@ -711,6 +766,7 @@ class SessionStore:
                         continue
             self.root_dir.mkdir(parents=True, exist_ok=True)
             self.messages_dir.mkdir(parents=True, exist_ok=True)
+            self.plans_dir.mkdir(parents=True, exist_ok=True)
             self.exports_dir.mkdir(parents=True, exist_ok=True)
             self._write_sessions({"sessions": []})
             self._session_locks.clear()
@@ -727,7 +783,9 @@ class SessionStore:
         if not sid:
             raise SessionStoreError("session_id invalid")
         with self._lock:
-            return self._touch_session_meta(sid, plan_deleted_at=_now_iso())
+            deleted_at = _now_iso()
+            self.save_plan(sid, None, deleted=True, deleted_at=deleted_at)
+            return self._touch_session_meta(sid, plan_deleted_at=deleted_at)
 
     def clear_plan_deleted(self, session_id: str) -> dict[str, Any]:
         sid = _safe_session_id(session_id)

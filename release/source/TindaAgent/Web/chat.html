@@ -3867,7 +3867,7 @@
   <div class="brand">
     <div class="brand-logo" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"></circle><path d="M12 2.8v4.2M12 17v4.2M2.8 12h4.2M17 12h4.2M5.3 5.3l3 3M15.7 15.7l3 3M18.7 5.3l-3 3M8.3 15.7l-3 3"></path></svg></div>
     <span class="brand-name">TindaAgent</span>
-    <button id="versionBadgeBtn" class="version-badge version-btn" onclick="showVersionTip()" title="版本信息">v1.10.0</button>
+    <button id="versionBadgeBtn" class="version-badge version-btn" onclick="showVersionTip()" title="版本信息">v1.10.1</button>
     <button id="accountBtn" class="icon-btn account-btn" onclick="showAccountPopup()" title="切换账户" aria-label="切换账户">
       <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 21a8 8 0 0 0-16 0"></path><circle cx="12" cy="8" r="3.2"></circle></svg>
     </button>
@@ -4153,7 +4153,7 @@
   };
   const USER_ADMIN_PERM = 511;
   const AUTH_TOKEN_KEY = "ta_auth_token";
-  const VERSION_FALLBACK = "v1.10.0";
+  const VERSION_FALLBACK = "v1.10.1";
   const CONTEXT_TOKEN_DEFAULT = 16000;
   const CONTEXT_TOKEN_MIN = 16000;
   const CONTEXT_TOKEN_MAX = 200000;
@@ -4327,6 +4327,7 @@
   let planFloatStartLeft = 0;
   let planFloatStartTop = 0;
   let planDeletedBySession = new Map();
+  let planCurrentBySession = new Map();
   let planDeleteInFlight = false;
   let pendingConfirmCurrent = null;
   let pendingConfirmSubmitting = false;
@@ -5994,11 +5995,18 @@
     }
     if (!preserveScroll) {
       const sid = String(historyPagingState.sid || getSessionId() || "").trim();
-      if (!sid || !planDeletedBySession.get(sid)) {
-        showLatestPlanFromSessionEntries(entries);
-      } else {
+      const currentPlan = sid ? planCurrentBySession.get(sid) : null;
+      if (!sid || planDeletedBySession.get(sid)) {
         clearPlanFloatContent();
         hidePlanFloat();
+      } else if (currentPlan && typeof currentPlan === "object") {
+        renderPlanFloat(currentPlan);
+      } else {
+        const hasPlan = showLatestPlanFromSessionEntries(entries);
+        if (!hasPlan) {
+          clearPlanFloatContent();
+          hidePlanFloat();
+        }
       }
     }
     renderHistoryLoadMoreControl();
@@ -6037,11 +6045,21 @@
       let sid = String(sessionId || "").trim();
       if (!sid || isDraftSessionId(sid)) {
         showEmptyState();
+        clearPlanFloatContent();
+        hidePlanFloat();
         return false;
       }
       const data = await fetchSessionMessagesPage(sid, { limit: CHAT_INITIAL_MESSAGE_LIMIT });
+      if (sid !== String(getSessionId() || "").trim()) {
+        return false;
+      }
       const planMeta = data.plan && typeof data.plan === "object" ? data.plan : {};
       planDeletedBySession.set(sid, !!planMeta.deleted);
+      if (planMeta.current && typeof planMeta.current === "object" && !planMeta.deleted) {
+        planCurrentBySession.set(sid, planMeta.current);
+      } else {
+        planCurrentBySession.delete(sid);
+      }
       hydratedSessionEntries = data.entries;
       historyPagingState = {
         sid,
@@ -6459,32 +6477,12 @@
     }).filter((step) => step.text);
     const status = String(result.status || "planned").trim();
     const completed = result.completed === true || status === "complete";
-    const requiresCompletionConfirmation = result.requires_completion_confirmation === true
-      || result.requiresCompletionConfirmation === true
-      || status === "awaiting_completion_confirmation";
-    let completionConfirmationState = String(
-      result.completion_confirmation_state
-      || result.completionConfirmationState
-      || ""
-    ).trim().toLowerCase();
-    if (!completionConfirmationState) {
-      completionConfirmationState = completed
-        ? "confirmed"
-        : requiresCompletionConfirmation
-        ? "pending"
-        : "none";
-    }
-    if (!["none", "pending", "confirmed"].includes(completionConfirmationState)) {
-      completionConfirmationState = "none";
-    }
     return {
       action: String(result.action || "create").trim().toLowerCase(),
       goal: String(result.goal || "").trim(),
       status,
       schema_version: schemaVersion || 1,
       completed,
-      requires_completion_confirmation: requiresCompletionConfirmation,
-      completion_confirmation_state: completionConfirmationState,
       notes: String(result.notes || "").trim(),
       completion_note: String(result.completion_note || result.completionNote || "").trim(),
       update_note: String(result.update_note || result.updateNote || "").trim(),
@@ -6569,17 +6567,11 @@
   }
 
   function planStateView(payload) {
-    const state = String(payload?.completion_confirmation_state || "").trim().toLowerCase();
-    if (state === "confirmed" || payload?.completed) {
-      return { text: "已确认完成", cls: "confirmed complete" };
-    }
-    if (state === "pending" || payload?.requires_completion_confirmation) {
-      return { text: "待用户确认完成", cls: "pending confirm" };
-    }
     const status = String(payload?.status || "planned").trim();
+    if (payload?.completed || status === "complete") return { text: "已完成", cls: "complete" };
+    if (status === "awaiting_completion_confirmation") return { text: "已修订", cls: "" };
     if (status === "revised") return { text: "已修订", cls: "" };
     if (status === "blocked") return { text: "已阻塞", cls: "blocked" };
-    if (status === "complete") return { text: "已确认完成", cls: "confirmed complete" };
     return { text: "计划中", cls: "" };
   }
 
@@ -6737,11 +6729,13 @@
     const sid = String(getSessionId() || "").trim();
     if (payload.action === "clear") {
       if (sid) planDeletedBySession.set(sid, true);
+      if (sid) planCurrentBySession.delete(sid);
       clearPlanFloatContent();
       hidePlanFloat();
       return true;
     }
     if (sid) planDeletedBySession.set(sid, false);
+    if (sid) planCurrentBySession.set(sid, payload);
     renderPlanFloat(payload);
     return true;
   }

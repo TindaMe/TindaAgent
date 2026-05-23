@@ -210,7 +210,8 @@ def _trace_has_plan_tool(tool_trace: list[dict] | None) -> bool:
         if not isinstance(step, dict):
             continue
         name = str(step.get("agent_tool") or step.get("name") or step.get("tool_name") or "").strip()
-        if name == "plan":
+        alias = str(step.get("mcp_alias") or "").strip()
+        if _is_plan_tool_name(name) or _is_plan_tool_name(alias):
             return True
     return False
 
@@ -241,14 +242,127 @@ def _normalize_plan_tool_step(step: dict[str, Any]) -> dict[str, Any]:
     return row
 
 
-def _clear_plan_deleted_if_plan_tool(session_id: str, tool_trace: list[dict] | None) -> None:
+def _merge_plan_payload_state(base: dict[str, Any] | None, event_payload: dict[str, Any]) -> dict[str, Any] | None:
+    current = tool_registry.normalize_plan_payload(base) if isinstance(base, dict) else None
+    event = tool_registry.normalize_plan_payload(event_payload)
+    if event is None:
+        return current
+    action = str(event.get("action", "") or "").strip().lower()
+    if action == "clear":
+        return None
+    if action != "set_step_status":
+        return event
+    if current is None:
+        return event
+    merged = dict(current)
+    merged["action"] = "update"
+    if str(event.get("status", "") or "") not in {"", "planned"}:
+        merged["status"] = event.get("status")
+    for key in ("notes", "completion_note", "update_note"):
+        if str(event.get(key, "") or "").strip():
+            merged[key] = event.get(key)
+    steps = [dict(step) for step in (merged.get("steps") or []) if isinstance(step, dict)]
+    for update in event.get("step_updates") or []:
+        if not isinstance(update, dict):
+            continue
+        idx = int(update.get("index") or 0) - 1
+        if idx < 0 and str(update.get("text", "") or "").strip():
+            needle = str(update.get("text", "") or "").strip().lower()
+            idx = next((i for i, step in enumerate(steps) if needle in str(step.get("text", "") or "").lower()), -1)
+        if 0 <= idx < len(steps):
+            steps[idx]["status"] = str(update.get("status") or steps[idx].get("status") or "pending")
+            if str(update.get("note", "") or "").strip():
+                steps[idx]["note"] = str(update.get("note") or "")
+    merged["steps"] = steps
+    return merged
+
+
+def _update_session_plan_from_trace(session_id: str, tool_trace: list[dict] | None) -> None:
     if not _trace_has_plan_tool(tool_trace):
         return
+    sid = str(session_id or "").strip()
+    if not sid:
+        return
     try:
-        _store.clear_plan_deleted(session_id)
-        _invalidate_session_index(session_id)
+        plan_file = _store.load_plan(sid)
+        current = plan_file.get("current") if isinstance(plan_file, dict) else None
+        deleted = bool(plan_file.get("deleted")) if isinstance(plan_file, dict) else False
+        for raw_step in tool_trace or []:
+            step = _normalize_plan_tool_step(raw_step if isinstance(raw_step, dict) else {})
+            name = str(step.get("agent_tool") or step.get("name") or step.get("tool_name") or "").strip()
+            alias = str(step.get("mcp_alias") or "").strip()
+            if not _is_plan_tool_name(name) and not _is_plan_tool_name(alias):
+                continue
+            result = step.get("result")
+            payload = tool_registry.normalize_plan_tool_result(result)
+            if isinstance(payload, dict) and isinstance(payload.get("result"), dict):
+                payload = payload.get("result")
+            payload = tool_registry.normalize_plan_payload(payload)
+            if not isinstance(payload, dict) or payload.get("ok") is False:
+                continue
+            action = str(payload.get("action", "") or "").strip().lower()
+            if action == "clear":
+                _store.mark_plan_deleted(sid)
+                deleted = True
+                current = None
+                continue
+            current = _merge_plan_payload_state(current, payload)
+            deleted = False
+        if deleted:
+            _store.mark_plan_deleted(sid)
+        elif isinstance(current, dict):
+            _store.save_plan(sid, current, deleted=False)
+            _store.clear_plan_deleted(sid)
+        _invalidate_session_index(sid)
     except Exception:
-        logger.debug("clear plan deleted marker failed session_id=%s", session_id, exc_info=True)
+        logger.debug("update session plan failed session_id=%s", session_id, exc_info=True)
+
+
+def _session_plan_response(session_id: str, entries: list[dict] | None = None) -> dict[str, Any]:
+    sid = str(session_id or "").strip()
+    meta = _store.get_session(sid) or {}
+    row = _store.load_plan(sid)
+    deleted_at = str(row.get("deleted_at") or meta.get("plan_deleted_at", "") or "") if isinstance(row, dict) else str(meta.get("plan_deleted_at", "") or "")
+    deleted = bool(row.get("deleted")) if isinstance(row, dict) and row else bool(deleted_at)
+    current = row.get("current") if isinstance(row, dict) else None
+    if not deleted and not isinstance(current, dict) and isinstance(entries, list):
+        current = _plan_from_frontend_entries(entries)
+        if isinstance(current, dict):
+            try:
+                _store.save_plan(sid, current, deleted=False)
+                _store.clear_plan_deleted(sid)
+            except Exception:
+                logger.debug("legacy plan backfill failed session_id=%s", sid, exc_info=True)
+    return {
+        "deleted": bool(deleted),
+        "deleted_at": deleted_at,
+        "current": current if isinstance(current, dict) and not deleted else None,
+        "source": "plan_file" if isinstance(row, dict) and row else "legacy_messages",
+    }
+
+
+def _plan_from_frontend_entries(entries: list[dict] | None) -> dict[str, Any] | None:
+    latest: dict[str, Any] | None = None
+    if not isinstance(entries, list):
+        return None
+    for entry in entries:
+        content = entry.get("content") if isinstance(entry, dict) else None
+        if not isinstance(content, list):
+            continue
+        for substep in content:
+            if not isinstance(substep, dict) or str(substep.get("kind", "") or "") != "tool_marker":
+                continue
+            marker = substep.get("data") if isinstance(substep.get("data"), dict) else {}
+            name = str(marker.get("name") or marker.get("tool_name") or marker.get("agent_tool") or "").strip()
+            if not _is_plan_tool_name(name):
+                continue
+            payload = tool_registry.normalize_plan_tool_result(marker)
+            if isinstance(payload, dict) and isinstance(payload.get("result"), dict):
+                payload = payload.get("result")
+            payload = tool_registry.normalize_plan_payload(payload)
+            if isinstance(payload, dict) and payload.get("ok") is not False:
+                latest = _merge_plan_payload_state(latest, payload)
+    return latest
 
 
 def _build_substeps_from_agent_delta(
@@ -2272,10 +2386,10 @@ def _build_plan_mode_transient_context(original_message: str) -> str:
         "When using ask_user_question, ask exactly one blocking question, stop planning until the user answers, and treat the returned answer/choice as authoritative. "
         "Never simulate the user's answer or continue with assumptions while ask_user_question is pending. "
         "Otherwise, call the MCP-backed plan tool to record a concise execution plan. "
-        "The plan tool is the structured Plan state API: use action=create or update for normal planning; use steps as array objects with clean text plus enum status; use action=set_step_status with step_updates/step_index/step_status to change existing step progress; use action=request_completion_confirmation when user confirmation is needed before completion; use action=confirm_complete only after explicit user confirmation; use action=block when blocked; use action=clear to remove the visible plan. "
-        "Represent lifecycle with status, completed, requires_completion_confirmation, and completion_confirmation_state. "
+        "The plan tool is the structured Plan state API: use action=create or update for normal planning; use steps as array objects with clean text plus enum status; use action=set_step_status with step_updates/step_index/step_status to change existing step progress; use action=block when blocked; use action=clear to remove the visible plan. "
+        "Represent lifecycle with status and completed. "
         "Do not use emoji or free-form labels to represent plan state; never write progress such as done/completed/in progress inside step text. "
-        "After recording the plan, explain it briefly in Chinese and wait for the user to confirm or ask to continue. "
+        "After recording the plan, explain it briefly in Chinese and wait for the user to ask to continue; plan completion does not need a separate user-confirmation flow. "
         "You can consider the full available tool list when designing the plan, but do not execute task tools while in Plan mode. "
         "The only tools you should call in Plan mode are ask_user_question and plan. "
         "Use native tool_calls/function calling only; TindaAgent maps those calls to MCP tools internally. Never simulate tool calls in text.\n"
@@ -4849,10 +4963,7 @@ async def get_session_messages(
             cached = _sqlite_index.get_messages(sid, limit=requested_limit, before_seq=before_seq)
             if cached is not None:
                 cached = dict(cached)
-                cached["plan"] = {
-                    "deleted": bool(str(meta.get("plan_deleted_at", "") or "").strip()),
-                    "deleted_at": str(meta.get("plan_deleted_at", "") or ""),
-                }
+                cached["plan"] = _session_plan_response(sid, cached.get("entries") if isinstance(cached.get("entries"), list) else None)
                 return JSONResponse(cached)
         except Exception as e:
             logger.debug("sqlite session index fallback session_id=%s: %s", sid, e)
@@ -4883,10 +4994,7 @@ async def get_session_messages(
         "newest_seq": newest_seq,
         "has_more": has_more,
         "limit": requested_limit,
-        "plan": {
-            "deleted": bool(str(meta.get("plan_deleted_at", "") or "").strip()),
-            "deleted_at": str(meta.get("plan_deleted_at", "") or ""),
-        },
+        "plan": _session_plan_response(sid, entries),
         "source": "json_store",
     })
 
@@ -5099,7 +5207,7 @@ async def chat(req: ChatRequest):
     saved_messages = False
     try:
         _store.append_messages(sid, items)
-        _clear_plan_deleted_if_plan_tool(sid, tool_trace)
+        _update_session_plan_from_trace(sid, tool_trace)
         _invalidate_session_index(sid)
         saved_messages = True
     except Exception:
@@ -5357,7 +5465,7 @@ async def chat_stream(
                             substeps=done_steps,
                             replace_tool_results=True,
                         )
-                        _clear_plan_deleted_if_plan_tool(sid, safe_trace)
+                        _update_session_plan_from_trace(sid, safe_trace)
                         _audit_web(
                             "PUBLIC_WRITE",
                             "chat_stream",
@@ -5439,7 +5547,7 @@ async def chat_stream(
             if not substeps:
                 substeps = [{"kind": "text", "content": final_reply}]
             _store.replace_assistant_by_turn(sid, turn_id=turn_id, substeps=substeps)
-            _clear_plan_deleted_if_plan_tool(sid, done_payload.get("tool_trace", []))
+            _update_session_plan_from_trace(sid, done_payload.get("tool_trace", []))
             final_saved = True
             if not pending_items:
                 compression_result = _maybe_auto_compress_after_llm(sid)
@@ -5735,7 +5843,7 @@ async def terminal_confirm(req: TerminalConfirmRequest):
     )
     if new_substeps:
         _store.append_to_last_assistant(sid, new_substeps)
-        _clear_plan_deleted_if_plan_tool(sid, tool_trace)
+        _update_session_plan_from_trace(sid, tool_trace)
     _audit_web("PUBLIC_WRITE", "_append_assistant_continuation_messages",
                f"assistant_continuation_appended session_id={sid}",
                {"session_id": sid, "substeps": len(new_substeps),

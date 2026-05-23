@@ -425,7 +425,7 @@ class LogArchiveEventLookupTests(unittest.TestCase):
         self.assertEqual(int((info or {}).get("perm", 0)), 1)
 
         result = tool.plan(
-            action="request_completion_confirmation",
+            action="create",
             goal="修复 Deep 上下文顺序",
             steps=[
                 {"text": "检查请求体"},
@@ -434,30 +434,30 @@ class LogArchiveEventLookupTests(unittest.TestCase):
             ],
             status="planned",
             notes="只制定计划，不执行修改",
-            completion_note="完成后请用户确认",
         )
         self.assertTrue(bool(result.get("ok")))
         self.assertEqual(result.get("kind"), "plan")
-        self.assertEqual(result.get("action"), "request_completion_confirmation")
+        self.assertEqual(result.get("action"), "create")
         self.assertEqual(result.get("schema_version"), 2)
         self.assertEqual(len(result.get("steps") or []), 3)
         self.assertEqual((result.get("steps") or [])[1].get("status"), "in_progress")
-        self.assertEqual(result.get("status"), "awaiting_completion_confirmation")
-        self.assertTrue(bool(result.get("requires_completion_confirmation")))
-        self.assertEqual(result.get("completion_confirmation_state"), "pending")
+        self.assertEqual(result.get("status"), "planned")
         self.assertFalse(bool(result.get("completed")))
-        self.assertEqual(result.get("completion_note"), "完成后请用户确认")
+        self.assertNotIn("requires_completion_confirmation", result)
+        self.assertNotIn("completion_confirmation_state", result)
 
         done = tool.plan(
-            action="confirm_complete",
+            action="update",
             goal="修复 Deep 上下文顺序",
+            status="complete",
+            completed=True,
             completion_note="已完成",
         )
-        self.assertEqual(done.get("action"), "confirm_complete")
+        self.assertEqual(done.get("action"), "update")
         self.assertEqual(done.get("status"), "complete")
         self.assertTrue(bool(done.get("completed")))
-        self.assertFalse(bool(done.get("requires_completion_confirmation")))
-        self.assertEqual(done.get("completion_confirmation_state"), "confirmed")
+        self.assertNotIn("requires_completion_confirmation", done)
+        self.assertNotIn("completion_confirmation_state", done)
 
         step_done = tool.plan(
             action="set_step_status",
@@ -483,6 +483,58 @@ class LogArchiveEventLookupTests(unittest.TestCase):
         self.assertEqual(bad_text_status.get("error_code"), "invalid_plan_contract")
         self.assertIn("set_step_status", str(bad_text_status.get("message", "")))
 
+        agent_raw = tool.run_agent_tool(
+            "plan",
+            511,
+            {
+                "action": "create",
+                "goal": "修复 steps 入参",
+                "steps": [
+                    {"text": "复现工具边界问题", "status": "pending"},
+                    {"text": "修复解析和校验", "status": "in_progress"},
+                ],
+            },
+            call_id="tc_plan_steps_regression",
+        )
+        agent_result = json.loads(agent_raw)
+        self.assertTrue(bool(agent_result.get("ok")), agent_raw)
+        plan_result = agent_result.get("result") or {}
+        self.assertEqual(plan_result.get("action"), "create")
+        self.assertEqual(len(plan_result.get("steps") or []), 2)
+        self.assertEqual((plan_result.get("steps") or [])[1].get("status"), "in_progress")
+
+        status_raw = tool.run_agent_tool(
+            "plan",
+            511,
+            {"action": "set_step_status", "step_index": 1, "step_status": "done"},
+        )
+        status_result = json.loads(status_raw)
+        self.assertTrue(bool(status_result.get("ok")), status_raw)
+        self.assertEqual((status_result.get("result", {}).get("step_updates") or [])[0].get("status"), "done")
+
+        done_raw = tool.run_agent_tool(
+            "plan",
+            511,
+            {
+                "action": "update",
+                "goal": "修复 steps 入参",
+                "status": "complete",
+                "completed": True,
+                "completion_note": "已完成",
+            },
+        )
+        done_result = json.loads(done_raw)
+        self.assertTrue(bool(done_result.get("ok")), done_raw)
+        self.assertEqual(done_result.get("result", {}).get("status"), "complete")
+
+        legacy_repr = tool.plan(
+            action="create",
+            goal="兼容旧边界",
+            steps=str([{"text": "旧 repr 字符串", "status": "pending"}]),
+        )
+        self.assertTrue(bool(legacy_repr.get("ok")), legacy_repr)
+        self.assertEqual((legacy_repr.get("steps") or [])[0].get("text"), "旧 repr 字符串")
+
         schemas = tool.build_agent_tool_schemas(511)
         names = [str(row.get("function", {}).get("name", "")) for row in schemas]
         self.assertIn("plan", names)
@@ -490,14 +542,12 @@ class LogArchiveEventLookupTests(unittest.TestCase):
         props = plan_schema.get("function", {}).get("parameters", {}).get("properties", {})
         self.assertIn("action", props)
         self.assertIn("completed", props)
-        self.assertIn("requires_completion_confirmation", props)
-        self.assertIn("completion_confirmation_state", props)
+        self.assertNotIn("requires_completion_confirmation", props)
+        self.assertNotIn("completion_confirmation_state", props)
         self.assertIn("completion_note", props)
-        self.assertEqual(props.get("action", {}).get("enum"), ["create", "update", "set_step_status", "request_completion_confirmation", "confirm_complete", "block", "clear"])
-        self.assertEqual(props.get("status", {}).get("enum"), ["planned", "revised", "blocked", "awaiting_completion_confirmation", "complete"])
-        self.assertEqual(props.get("completion_confirmation_state", {}).get("enum"), ["none", "pending", "confirmed"])
+        self.assertEqual(props.get("action", {}).get("enum"), ["create", "update", "set_step_status", "block", "clear"])
+        self.assertEqual(props.get("status", {}).get("enum"), ["planned", "revised", "blocked", "complete"])
         self.assertEqual(props.get("completed", {}).get("type"), "boolean")
-        self.assertEqual(props.get("requires_completion_confirmation", {}).get("type"), "boolean")
         self.assertEqual(props.get("steps", {}).get("type"), "array")
         self.assertEqual(props.get("steps", {}).get("items", {}).get("type"), "object")
         self.assertIn("step_index", props)
@@ -509,6 +559,8 @@ class LogArchiveEventLookupTests(unittest.TestCase):
         self.assertIn("never use emoji", plan_description.lower())
         self.assertIn("set_step_status", plan_description)
         self.assertIn("Never pack multiple steps", plan_description)
+        self.assertNotIn("request_completion_confirmation", plan_description)
+        self.assertNotIn("confirm_complete", plan_description)
 
     def test_plan_normalizer_keeps_legacy_text_status_at_boundary_only(self) -> None:
         legacy = tool.normalize_plan_payload({
@@ -563,7 +615,10 @@ class LogArchiveEventLookupTests(unittest.TestCase):
         self.assertIn("MCP-backed plan tool", context)
         self.assertIn("full available tool list", context)
         self.assertIn("only tools you should call in Plan mode", context)
-        self.assertIn("completion_confirmation_state", context)
+        self.assertIn("status and completed", context)
+        self.assertNotIn("completion_confirmation_state", context)
+        self.assertNotIn("request_completion_confirmation", context)
+        self.assertNotIn("confirm_complete", context)
         self.assertIn("Do not use emoji", context)
         self.assertIn("修复登录问题", context)
         self.assertNotIn("请", context)

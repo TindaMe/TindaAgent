@@ -333,11 +333,8 @@
       return lines.join("\n") + (options.trailingNewline === false ? "" : "\n");
     }
     var completed = d.completed === true || status === "complete";
-    var needsConfirm = d.requires_completion_confirmation === true || status === "awaiting_completion_confirmation";
-    var confirmationState = String(d.completion_confirmation_state || d.completionConfirmationState || "").trim().toLowerCase();
-    if (!confirmationState) confirmationState = completed ? "confirmed" : needsConfirm ? "pending" : "none";
-    if (confirmationState === "confirmed" || completed) lines.push("> **状态**: 已确认完成");
-    else if (confirmationState === "pending" || needsConfirm) lines.push("> **状态**: 待用户确认完成");
+    if (completed) lines.push("> **状态**: 已完成");
+    else if (status === "awaiting_completion_confirmation") lines.push("> **状态**: 已修订");
     else if (status) lines.push("> **状态**: " + status);
     var goal = String(d.goal || "").trim();
     if (goal) lines.push("> **目标**: " + goal);

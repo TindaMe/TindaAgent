@@ -4,6 +4,20 @@
 
 > **分类**: `Added` 新增 | `Changed` 变更 | `Fixed` 修复 | `Removed` 移除 | `BREAKING` 破坏性变更 | `Defense` 防御性加固 | `Known Issues` 已知待修
 
+## v1.10.1 - 2026-05-24
+
+### Changed
+
+- **版本提升** — 项目版本从 `1.10.0` 提升到 `1.10.1`，同步更新 `pyproject.toml`、HOME/Chat/Settings fallback 和主题脚本标识。
+- **Plan 协议简化** — 移除模型可见的计划完成确认动作，`plan` 公开 action 收敛为 `create/update/set_step_status/block/clear`；计划完成直接使用 `status=complete` / `completed=true` 表达。
+- **Plan UI 状态简化** — 前端不再显示“待用户确认完成 / 已确认完成”，计划完成态统一展示为“已完成”，避免把计划记录误设计成用户确认工作流。
+
+### Fixed
+
+- **Plan `steps` 参数解析** — 修复 LLM 工具边界把 `steps` 数组强制转成字符串后被校验拒绝的问题；`run_agent_tool` 现在会为 `Any/list/dict` 参数保留结构化 JSON 值。
+- **Plan `steps` 兼容兜底** — `steps` 解析支持原生数组、JSON 字符串和历史 Python repr 字符串，同时继续拒绝换行/分号拼接的非结构化步骤文本。
+- **Plan 状态持久化** — 会话计划状态写入独立 plan 文件并随会话消息接口返回，刷新或切换会话后可恢复当前计划，同时保留关闭/删除计划的状态。
+
 ## v1.10.0 - 2026-05-23
 
 ### Added
