@@ -392,7 +392,7 @@ class SessionStore:
                 if inc_model_id and cur_model_id and inc_model_id == cur_model_id:
                     return True
                 if cur_status in {"running", "pending"} and inc_name and inc_name == cur_name:
-                    if not inc_stdin or not cur_stdin or inc_stdin == cur_stdin:
+                    if inc_stdin and cur_stdin and inc_stdin == cur_stdin:
                         return True
                 return False
 

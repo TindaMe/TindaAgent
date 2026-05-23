@@ -9,6 +9,7 @@ import shutil
 import gzip
 import signal
 import threading
+import uuid
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
@@ -20,6 +21,16 @@ from TindaAgent.Process.Observability import audit_event
 from TindaAgent.Process.Observability.audit import redact_sensitive_text
 from TindaAgent.Process.Architecture.paths import get_log_root, get_legacy_log_root
 from TindaAgent.Process.Security import terminal_policy
+from TindaAgent.Tool.editing import apply_text_edit, read_text_file, search_text_files
+from TindaAgent.Tool.web_search import search_web as perform_web_search
+from TindaAgent.Tool.mcp_client import (
+    cancel_mcp_call,
+    call_mcp_tool,
+    list_mcp_servers as list_configured_mcp_servers,
+    list_mcp_tools as list_remote_mcp_tools,
+    upsert_mcp_server,
+)
+from TindaAgent.Tool.skills import discover_skills, read_skill
 from TindaAgent.Permission import (
     has_perm,
     validate_registered_tool_perm,
@@ -33,6 +44,8 @@ SYSTEM_TOOL: dict[str, dict[str, Any]] = {}
 # 备用工具注册表 {func_name: {"des": str, "perm": int, "func": function}}
 SPARE_TOOL: dict[str, dict[str, Any]] = {}
 _TOOL_SCHEMA_CACHE: dict[int, list[dict[str, Any]]] = {}
+_MCP_TOOL_SCHEMA_CACHE: dict[int, list[dict[str, Any]]] = {}
+_MCP_TOOL_ALIAS_CACHE: dict[int, dict[str, dict[str, Any]]] = {}
 _RUNNING_TOOL_CONTEXTS: dict[str, dict[str, Any]] = {}
 _RUNNING_TOOL_LOCK = threading.RLock()
 
@@ -40,6 +53,44 @@ MAX_TEXT_LEN = 8000
 DEFAULT_TIMEZONE = "Asia/Shanghai"
 MEMORY_MAX_ITEMS = 500
 MEMORY_MAX_DATA_LEN = 2000
+ASK_USER_NONE_OF_THEM_VALUE = "__none_of_them__"
+ASK_USER_NONE_OF_THEM_LABEL = "以上都不是，我自己补充"
+ASK_USER_QUESTION_TOOL_DESCRIPTION = (
+    "Ask the human user exactly one concise clarification question and pause the current workflow until the user answers. "
+    "HARD RULES: use this tool only when a missing requirement, unsafe ambiguity, required choice, permission-sensitive decision, or user preference blocks correct execution; do not use it for small details you can safely infer; do not ask multiple questions in one call; do not continue the task, call other task tools, fabricate an answer, or simulate the user's answer until the tool result is returned; after the tool result arrives, treat its answer/choice as authoritative user input for the current request. "
+    "Arguments: question is required and must be user-facing; options is optional and should be newline/semicolon/pipe separated mutually exclusive choices. For options, provide one clean answer label per line or separator, for example `A. ...\\nB. ...\\nC. ...`; do not include explanatory prefixes like 'these are options' inside the options string, and do not pack multiple choices into one option. allow_custom_answer controls whether the user may type a free-form answer; placeholder is a short input hint."
+)
+ASK_USER_QUESTION_PARAMETER_DESCRIPTIONS = {
+    "question": (
+        "Required. One concise, user-facing clarification question. Ask only one thing. "
+        "Do not include hidden reasoning, implementation details, or multiple subquestions."
+    ),
+    "options": (
+        "Optional. Mutually exclusive answer choices separated by newline, semicolon, or pipe. "
+        "Use only when choices are clear. Put exactly one clean choice per separator, such as `A. first\\nB. second\\nC. third`; do not include explanatory prefixes or combine multiple choices in one item. "
+        "The system will add a 'none of them / custom answer' option automatically."
+    ),
+    "allow_custom_answer": (
+        "Optional string boolean, default true. Keep true when the user may need to provide details not covered by options; use false only for strict closed choices."
+    ),
+    "placeholder": (
+        "Optional. Short placeholder text for the custom answer input, describing what useful information the user should provide."
+    ),
+}
+PLAN_PARAMETER_DESCRIPTIONS = {
+    "goal": "Plan objective. Keep it concise and user-facing.",
+    "steps": "Execution steps separated by newline, semicolon, or Chinese semicolon. Keep each step short.",
+    "status": (
+        "Plan lifecycle status: planned, revised, blocked, awaiting_completion_confirmation, or complete. "
+        "Use awaiting_completion_confirmation when the work appears done but the user should confirm before final completion."
+    ),
+    "notes": "Optional assumptions, risks, or constraints for the plan.",
+    "completed": "Boolean. Set true only when the plan is actually complete.",
+    "requires_completion_confirmation": (
+        "Boolean. Set true when the plan should wait for explicit user confirmation before being marked complete."
+    ),
+    "completion_note": "Optional short note explaining what was completed or what needs confirmation.",
+}
 _MEMORY_FILE = get_memory_file()
 PROFILE_SNIPPETS = {
     "bio": "我是Tinda，来自中国的一名开发者。自2025.8.23学习计算机相关知识。",
@@ -70,11 +121,55 @@ def _parse_int(raw_value: str | None, default: int, minimum: int, maximum: int) 
     return max(minimum, min(maximum, value))
 
 
+def _parse_boolish(raw_value: Any, default: bool = False) -> bool:
+    if isinstance(raw_value, bool):
+        return raw_value
+    if raw_value is None:
+        return bool(default)
+    text = str(raw_value).strip().lower()
+    if text in {"1", "true", "yes", "y", "on", "complete", "completed"}:
+        return True
+    if text in {"0", "false", "no", "n", "off", "none", "null", ""}:
+        return False
+    return bool(default)
+
+
 def _split_sentences(text: str) -> list[str]:
     parts = [x.strip() for x in re.split(r"[。！？!?]\s*|\n+", text) if x.strip()]
     if len(parts) <= 1:
         parts = [x.strip() for x in re.split(r"[；;，,]\s*", text) if x.strip()]
     return parts
+
+
+def _split_options(raw_options: Any) -> list[str]:
+    if isinstance(raw_options, list):
+        values = raw_options
+    else:
+        text = str(raw_options or "")
+        text = re.sub(r"^\s*[（(][^）)]{0,40}(?:选项|option|choices?)[^）)]{0,40}[）)]\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"^\s*(?:以下|下面|这些|these|the following)[^。\n:：]{0,40}(?:选项|options?|choices?)[：:]\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"(?<![\w])([A-Ha-h])\s*([.．、)])\s*", r"\n\1\2 ", text)
+        values = re.split(r"[\n|；;]+", text)
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        item = str(value or "").strip()
+        if not item:
+            continue
+        if item == ASK_USER_NONE_OF_THEM_VALUE:
+            continue
+        if len(item) > 120:
+            item = item[:120]
+        key = item.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(item)
+        if len(out) >= 8:
+            break
+    if out:
+        out.append(ASK_USER_NONE_OF_THEM_VALUE)
+    return out
 
 
 def _now_iso() -> str:
@@ -182,7 +277,7 @@ def skip_running_tool(call_id: str) -> bool:
     with _RUNNING_TOOL_LOCK:
         ctx = _RUNNING_TOOL_CONTEXTS.get(cid)
     if not isinstance(ctx, dict):
-        return False
+        return cancel_mcp_call(cid)
     handle = ctx.get("handle")
     try:
         if isinstance(handle, subprocess.Popen):
@@ -199,7 +294,7 @@ def skip_running_tool(call_id: str) -> bool:
             return True
     except Exception:
         pass
-    return False
+    return cancel_mcp_call(cid)
 
 
 def tool(tool_perm: int, tool_des: str, must: bool = False) -> Callable:
@@ -226,6 +321,8 @@ def tool(tool_perm: int, tool_des: str, must: bool = False) -> Callable:
         else:
             SPARE_TOOL[tool_name] = tool_info
         _TOOL_SCHEMA_CACHE.clear()
+        _MCP_TOOL_SCHEMA_CACHE.clear()
+        _MCP_TOOL_ALIAS_CACHE.clear()
 
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
@@ -364,10 +461,71 @@ def list_tools(user_perm: int | None = None) -> dict[str, str]:
     return result
 
 
-def build_agent_tool_schemas(user_perm: int) -> list[dict[str, Any]]:
-    """Build OpenAI tool schemas — each tool exposed directly, params from signature."""
+def _safe_tool_alias(raw: str) -> str:
+    text = re.sub(r"[^A-Za-z0-9_-]+", "_", str(raw or "").strip())
+    text = re.sub(r"_+", "_", text).strip("_")
+    if not text:
+        return "tool"
+    if not re.match(r"^[A-Za-z_]", text):
+        text = f"tool_{text}"
+    return text[:64]
+
+
+def _local_tool_schema(tool_name: str, tool_desc: str, info: dict[str, Any] | None) -> dict[str, Any]:
     import inspect
 
+    properties: dict[str, Any] = {}
+    required: list[str] = []
+
+    if info:
+        has_var_positional = False
+        try:
+            sig = inspect.signature(info["func"])
+            for pname, param in sig.parameters.items():
+                if pname.startswith("_") or pname in ("call_id", "command"):
+                    continue
+                if param.kind == inspect.Parameter.VAR_POSITIONAL:
+                    has_var_positional = True
+                    continue
+                if param.kind == inspect.Parameter.VAR_KEYWORD:
+                    continue
+                ptype = "string"
+                if param.annotation is not inspect.Parameter.empty:
+                    a = param.annotation
+                    if a is int:
+                        ptype = "integer"
+                    elif a is bool:
+                        ptype = "boolean"
+                properties[pname] = {"type": ptype}
+                if tool_name == "ask_user_question" and pname in ASK_USER_QUESTION_PARAMETER_DESCRIPTIONS:
+                    properties[pname]["description"] = ASK_USER_QUESTION_PARAMETER_DESCRIPTIONS[pname]
+                if tool_name == "plan" and pname in PLAN_PARAMETER_DESCRIPTIONS:
+                    properties[pname]["description"] = PLAN_PARAMETER_DESCRIPTIONS[pname]
+                if param.default is inspect.Parameter.empty:
+                    required.append(pname)
+            if has_var_positional and not properties:
+                properties["text"] = {"type": "string"}
+        except Exception:
+            pass
+
+    schema_params: dict[str, Any] = {"type": "object"}
+    if properties:
+        schema_params["properties"] = {k: properties[k] for k in sorted(properties)}
+        if tool_name == "ask_user_question" and "question" in properties:
+            required = sorted(set(required) | {"question"})
+        schema_params["required"] = sorted(required)
+    return {
+        "type": "function",
+        "function": {
+            "name": tool_name,
+            "description": tool_desc,
+            "parameters": schema_params,
+        },
+    }
+
+
+def build_agent_tool_schemas(user_perm: int) -> list[dict[str, Any]]:
+    """Build OpenAI tool schemas — each tool exposed directly, params from signature."""
     perm_key = int(user_perm)
     cached = _TOOL_SCHEMA_CACHE.get(perm_key)
     if cached is not None:
@@ -378,49 +536,182 @@ def build_agent_tool_schemas(user_perm: int) -> list[dict[str, Any]]:
 
     for tool_name, tool_desc in sorted(tools.items()):
         info = find_tool(tool_name)
-        properties: dict[str, Any] = {}
-        required: list[str] = []
+        schemas.append(_local_tool_schema(tool_name, tool_desc, info))
+    _TOOL_SCHEMA_CACHE[perm_key] = json.loads(json.dumps(schemas, ensure_ascii=False))
+    return schemas
 
-        if info:
-            has_var_positional = False
-            try:
-                sig = inspect.signature(info["func"])
-                for pname, param in sig.parameters.items():
-                    if pname.startswith("_") or pname in ("call_id", "command"):
-                        continue  # 内部参数/别名，不暴露给 LLM
-                    if param.kind == inspect.Parameter.VAR_POSITIONAL:
-                        has_var_positional = True
-                        continue
-                    if param.kind == inspect.Parameter.VAR_KEYWORD:
-                        continue
-                    ptype = "string"
-                    if param.annotation is not inspect.Parameter.empty:
-                        a = param.annotation
-                        if a is int: ptype = "integer"
-                        elif a is bool: ptype = "boolean"
-                    properties[pname] = {"type": ptype}
-                    if param.default is inspect.Parameter.empty:
-                        required.append(pname)
-                # 变长位置参数工具（如 echo）暴露 text 属性
-                if has_var_positional and not properties:
-                    properties["text"] = {"type": "string"}
-            except Exception:
-                pass
 
-        schema_params: dict[str, Any] = {"type": "object"}
-        if properties:
-            schema_params["properties"] = {k: properties[k] for k in sorted(properties)}
-            schema_params["required"] = sorted(required)
+def _mcp_input_schema_to_openai(schema: Any) -> dict[str, Any]:
+    if isinstance(schema, dict):
+        out = json.loads(json.dumps(schema, ensure_ascii=False, default=str))
+        if str(out.get("type", "") or "") != "object":
+            out["type"] = "object"
+        out.setdefault("properties", {})
+        if not isinstance(out.get("properties"), dict):
+            out["properties"] = {}
+        return out
+    return {"type": "object", "properties": {}}
+
+
+def _build_mcp_catalog(user_perm: int) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
+    perm_key = int(user_perm)
+    cached_schema = _MCP_TOOL_SCHEMA_CACHE.get(perm_key)
+    cached_alias = _MCP_TOOL_ALIAS_CACHE.get(perm_key)
+    if cached_schema is not None and cached_alias is not None:
+        return (
+            json.loads(json.dumps(cached_schema, ensure_ascii=False)),
+            json.loads(json.dumps(cached_alias, ensure_ascii=False)),
+        )
+
+    schemas: list[dict[str, Any]] = []
+    aliases: dict[str, dict[str, Any]] = {}
+    used_aliases: set[str] = set()
+
+    def add_schema(alias: str, schema: dict[str, Any], route: dict[str, Any]) -> None:
+        clean_alias = _safe_tool_alias(alias)
+        base = clean_alias
+        suffix = 2
+        while clean_alias in used_aliases:
+            clean_alias = _safe_tool_alias(f"{base}_{suffix}")
+            suffix += 1
+        used_aliases.add(clean_alias)
+        fn = schema.get("function") if isinstance(schema.get("function"), dict) else {}
         schemas.append({
             "type": "function",
             "function": {
-                "name": tool_name,
-                "description": tool_desc,
-                "parameters": schema_params,
+                "name": clean_alias,
+                "description": str(fn.get("description", "") or ""),
+                "parameters": _mcp_input_schema_to_openai(fn.get("parameters")),
             },
         })
-    _TOOL_SCHEMA_CACHE[perm_key] = json.loads(json.dumps(schemas, ensure_ascii=False))
+        aliases[clean_alias] = dict(route)
+
+    for local_tool in local_mcp_list_tools(perm_key).get("tools", []):
+        if not isinstance(local_tool, dict):
+            continue
+        tool_name = str(local_tool.get("name", "") or "").strip()
+        if not tool_name:
+            continue
+        schema = {
+            "type": "function",
+            "function": {
+                "name": tool_name,
+                "description": f"[MCP local] {str(local_tool.get('description') or '')}",
+                "parameters": _mcp_input_schema_to_openai(local_tool.get("inputSchema")),
+            },
+        }
+        add_schema(tool_name, schema, {
+            "backend": "local",
+            "tool_name": tool_name,
+            "display_name": tool_name,
+        })
+
+    try:
+        server_rows = list_configured_mcp_servers().get("servers", [])
+    except Exception:
+        server_rows = []
+    for server in server_rows if isinstance(server_rows, list) else []:
+        server_name = str(server.get("name", "") or "").strip() if isinstance(server, dict) else ""
+        if not server_name:
+            continue
+        try:
+            listed = list_remote_mcp_tools(server_name)
+        except Exception as exc:
+            audit_event(
+                op_type="TOOL_READ",
+                subsystem="tool",
+                func="_build_mcp_catalog",
+                file_path=_THIS_FILE,
+                content=f"mcp_list_tools_failed server={server_name} err={exc}",
+                extra={"server": server_name, "ok": False, "error": str(exc)},
+            )
+            continue
+        for remote in listed.get("tools", []) if isinstance(listed, dict) else []:
+            if not isinstance(remote, dict):
+                continue
+            remote_name = str(remote.get("name", "") or "").strip()
+            if not remote_name:
+                continue
+            desc = str(remote.get("description", "") or "")
+            input_schema = remote.get("inputSchema") or remote.get("input_schema") or {}
+            schema = {
+                "type": "function",
+                "function": {
+                    "name": remote_name,
+                    "description": f"[MCP {server_name}] {desc}".strip(),
+                    "parameters": _mcp_input_schema_to_openai(input_schema),
+                },
+            }
+            add_schema(f"{server_name}__{remote_name}", schema, {
+                "backend": "remote",
+                "server": server_name,
+                "tool_name": remote_name,
+                "display_name": f"{server_name}:{remote_name}",
+            })
+
+    _MCP_TOOL_SCHEMA_CACHE[perm_key] = json.loads(json.dumps(schemas, ensure_ascii=False))
+    _MCP_TOOL_ALIAS_CACHE[perm_key] = json.loads(json.dumps(aliases, ensure_ascii=False))
+    return schemas, aliases
+
+
+def build_mcp_tool_schemas(user_perm: int) -> list[dict[str, Any]]:
+    """Build OpenAI-compatible tool schemas from the MCP aggregate catalog."""
+    schemas, _aliases = _build_mcp_catalog(user_perm)
     return schemas
+
+
+def resolve_mcp_tool_alias(user_perm: int, alias: str) -> dict[str, Any] | None:
+    _schemas, aliases = _build_mcp_catalog(user_perm)
+    return aliases.get(str(alias or "").strip())
+
+
+def find_any_mcp_tool_alias(alias: str) -> dict[str, Any] | None:
+    clean = str(alias or "").strip()
+    if not clean:
+        return None
+    info = find_tool(clean)
+    if info is not None:
+        return {"backend": "local", "tool_name": clean, "display_name": clean}
+    try:
+        _schemas, aliases = _build_mcp_catalog(0x7FFFFFFF)
+        return aliases.get(clean)
+    except Exception:
+        return None
+
+
+def display_name_for_mcp_tool(user_perm: int, alias: str) -> str:
+    route = resolve_mcp_tool_alias(user_perm, alias)
+    if isinstance(route, dict):
+        return str(route.get("display_name") or route.get("tool_name") or alias)
+    return str(alias or "")
+
+
+def local_mcp_list_tools(user_perm: int) -> dict[str, Any]:
+    """Return built-in tools in MCP tools/list shape."""
+    tools: list[dict[str, Any]] = []
+    for schema in build_agent_tool_schemas(user_perm):
+        fn = schema.get("function") if isinstance(schema, dict) else {}
+        name = str(fn.get("name", "") or "")
+        if not name:
+            continue
+        tools.append({
+            "name": name,
+            "description": str(fn.get("description", "") or ""),
+            "inputSchema": _mcp_input_schema_to_openai(fn.get("parameters")),
+        })
+    return {"ok": True, "server": "local", "tools": tools}
+
+
+def local_mcp_call_tool(tool_name: str, user_perm: int, arguments: dict[str, Any] | None = None, *, call_id: str = "") -> dict[str, Any]:
+    """Call a built-in tool through the local MCP backend."""
+    raw = run_agent_tool(tool_name, user_perm, arguments if isinstance(arguments, dict) else {}, call_id=call_id)
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        parsed = {"ok": True, "tool_name": str(tool_name), "result": raw}
+    if isinstance(parsed, dict):
+        return parsed
+    return {"ok": True, "tool_name": str(tool_name), "result": parsed}
 
 
 def run_agent_tool(
@@ -586,6 +877,97 @@ def run_agent_tool(
     return json.dumps(payload, ensure_ascii=False, default=str)
 
 
+def run_mcp_agent_tool(
+    agent_tool_name: str,
+    user_perm: int,
+    arguments: dict[str, Any] | None,
+    *,
+    call_id: str | None = None,
+    skip_token: Any = None,
+) -> str:
+    """
+    Execute an LLM-selected tool through the MCP aggregate catalog.
+
+    Local Python tools are treated as the built-in MCP backend. External MCP
+    servers are resolved from the configured MCP server catalog by stable alias.
+    """
+    alias = str(agent_tool_name or "").strip()
+    call_id_text = str(call_id or "").strip()
+    route = resolve_mcp_tool_alias(user_perm, alias)
+    if not isinstance(route, dict):
+        # Legacy compatibility for old conversation replay or tests that still
+        # call registered tool names directly.
+        return run_agent_tool(alias, user_perm, arguments, call_id=call_id_text, skip_token=skip_token)
+
+    if skip_token:
+        out = {
+            "ok": False,
+            "tool_name": str(route.get("display_name") or route.get("tool_name") or alias),
+            "mcp_alias": alias,
+            "mcp_backend": str(route.get("backend") or ""),
+            "error": "tool skipped",
+            "error_code": "user_skipped",
+            "pending_confirmation": False,
+        }
+        if call_id_text:
+            out["call_id"] = call_id_text
+        return json.dumps(out, ensure_ascii=False)
+
+    backend = str(route.get("backend") or "").strip()
+    tool_name = str(route.get("tool_name") or alias).strip()
+    display_name = str(route.get("display_name") or tool_name).strip()
+    payload = arguments if isinstance(arguments, dict) else {}
+
+    if backend == "local":
+        parsed = local_mcp_call_tool(tool_name, user_perm, payload, call_id=call_id_text)
+        if isinstance(parsed, dict):
+            parsed.setdefault("mcp_backend", "local")
+            parsed.setdefault("mcp_alias", alias)
+            parsed.setdefault("display_tool_name", display_name)
+            return json.dumps(parsed, ensure_ascii=False, default=str)
+        return json.dumps({"ok": True, "tool_name": display_name, "result": parsed}, ensure_ascii=False, default=str)
+
+    if backend == "remote":
+        server = str(route.get("server") or "").strip()
+        try:
+            result = call_mcp_tool(server, tool_name, payload, call_id=call_id_text)
+            mcp_result = result.get("result") if isinstance(result, dict) else result
+            is_error = bool(isinstance(mcp_result, dict) and mcp_result.get("isError") is True)
+            out: dict[str, Any] = {
+                "ok": not is_error,
+                "tool_name": display_name,
+                "mcp_backend": "remote",
+                "mcp_alias": alias,
+                "server": server,
+                "remote_tool_name": tool_name,
+                "result": mcp_result,
+                "pending_confirmation": False,
+            }
+            if is_error:
+                out["error"] = "MCP tool returned isError=true"
+            if call_id_text:
+                out["call_id"] = call_id_text
+            return json.dumps(out, ensure_ascii=False, default=str)
+        except Exception as exc:
+            out = {
+                "ok": False,
+                "tool_name": display_name,
+                "mcp_backend": "remote",
+                "mcp_alias": alias,
+                "server": server,
+                "remote_tool_name": tool_name,
+                "error": str(exc),
+            }
+            if call_id_text:
+                out["call_id"] = call_id_text
+            return json.dumps(out, ensure_ascii=False, default=str)
+
+    out = {"ok": False, "tool_name": display_name or alias, "mcp_alias": alias, "error": f"Unknown MCP backend: {backend}"}
+    if call_id_text:
+        out["call_id"] = call_id_text
+    return json.dumps(out, ensure_ascii=False)
+
+
 @tool(perm.PUBLIC_EXECUTE, "Print text to tool stdout (param: text)", must=True)
 def echo(text: str = "", *content_list: str) -> None:
     """Print text to stdout."""
@@ -593,6 +975,110 @@ def echo(text: str = "", *content_list: str) -> None:
         print(text)
     for content in content_list:
         print(content)
+
+
+@tool(
+    perm.PUBLIC_READ,
+    ASK_USER_QUESTION_TOOL_DESCRIPTION,
+    must=True,
+)
+def ask_user_question(
+    question: str = "",
+    options: str = "",
+    allow_custom_answer: str = "true",
+    placeholder: str = "",
+    call_id: str = "",
+) -> dict[str, Any]:
+    question_text = _normalize_text(question, 1000)
+    if not question_text:
+        return {"ok": False, "error": "question is required", "pending_confirmation": False}
+    choices = _split_options(options)
+    allow_custom = str(allow_custom_answer or "true").strip().lower() not in {"0", "false", "no", "off"}
+    confirm_id = str(call_id or "").strip() or f"ask_{uuid.uuid4().hex[:12]}"
+    return {
+        "ok": True,
+        "pending_confirmation": True,
+        "kind": "question",
+        "confirm_id": confirm_id,
+        "call_id": confirm_id,
+        "question": question_text,
+        "options": choices,
+        "none_of_them_value": ASK_USER_NONE_OF_THEM_VALUE,
+        "none_of_them_label": ASK_USER_NONE_OF_THEM_LABEL,
+        "allow_custom_answer": allow_custom,
+        "placeholder": _normalize_text(placeholder, 160) or "补充你的答案或限制条件...",
+        "message": "Waiting for the user to answer a clarification question.",
+    }
+
+
+@tool(
+    perm.PUBLIC_READ,
+    "Create or update a concise execution plan without performing the task. "
+    "Use when the user asks for /plan, planning mode, or when complex work needs a visible plan. "
+    "Parameters: goal=objective, steps=newline/semicolon separated plan steps, "
+    "status=planned|revised|blocked|awaiting_completion_confirmation|complete, "
+    "completed=true only after the plan is actually done, "
+    "requires_completion_confirmation=true when the user must confirm before completion, "
+    "completion_note=short completion/confirmation note, notes=optional assumptions/risks. "
+    "Use this same tool to update an existing visible plan state; do not invent a separate plan API.",
+    must=True,
+)
+def plan(
+    goal: str = "",
+    steps: str = "",
+    status: str = "planned",
+    notes: str = "",
+    completed: str = "false",
+    requires_completion_confirmation: str = "false",
+    completion_note: str = "",
+) -> dict[str, Any]:
+    goal_text = _normalize_text(goal, 1200)
+    raw_steps = re.split(r"[\n；;]+", str(steps or ""))
+    step_rows: list[dict[str, Any]] = []
+    for idx, raw in enumerate(raw_steps, start=1):
+        text = _normalize_text(raw, 800)
+        if not text:
+            continue
+        step_rows.append({"index": len(step_rows) + 1, "text": text, "status": "pending"})
+        if len(step_rows) >= 12:
+            break
+    status_text = str(status or "planned").strip().lower()
+    completed_flag = _parse_boolish(completed, default=False)
+    needs_completion_confirmation = _parse_boolish(requires_completion_confirmation, default=False)
+    if completed_flag:
+        status_text = "complete"
+        needs_completion_confirmation = False
+    elif needs_completion_confirmation and status_text in {"planned", "revised", "complete"}:
+        status_text = "awaiting_completion_confirmation"
+    if status_text not in {"planned", "revised", "blocked", "awaiting_completion_confirmation", "complete"}:
+        status_text = "planned"
+    notes_text = _normalize_text(notes, 1600)
+    completion_note_text = _normalize_text(completion_note, 1200)
+    if not goal_text and not step_rows and not notes_text and not completion_note_text:
+        return {
+            "ok": False,
+            "error": "goal, steps, or notes is required",
+            "kind": "plan",
+            "status": status_text,
+        }
+    return {
+        "ok": True,
+        "kind": "plan",
+        "status": status_text,
+        "completed": bool(completed_flag or status_text == "complete"),
+        "requires_completion_confirmation": bool(needs_completion_confirmation),
+        "goal": goal_text,
+        "steps": step_rows,
+        "notes": notes_text,
+        "completion_note": completion_note_text,
+        "message": (
+            "Plan marked complete."
+            if completed_flag or status_text == "complete"
+            else "Plan is waiting for user completion confirmation."
+            if needs_completion_confirmation
+            else "Plan recorded. Do not execute the task until the user confirms or asks to continue."
+        ),
+    }
 
 
 @tool(perm.PUBLIC_READ, "Get Tinda's profile for context about the user", must=True)
@@ -817,6 +1303,132 @@ def delete_memory(contains: str) -> dict[str, Any]:
         "count": len(saved.get("items", [])),
         "updated_at": saved.get("updated_at", ""),
     }
+
+
+@tool(perm.TOOL_READ | perm.PUBLIC_READ, "Read a UTF-8 text file before editing. Parameters: path", must=True)
+def read_file(path: str) -> dict[str, Any]:
+    """
+    读取文本文件，返回内容和 sha256，供 edit_file 做并发保护。
+    """
+    return read_text_file(path)
+
+
+@tool(perm.TOOL_READ | perm.PUBLIC_READ, "Search files by name and/or content. Parameters: root='.', query filename/path substring optional, content text optional, glob='*', max_results=1-200, max_depth=0-32.", must=True)
+def search_files(
+    root: str = ".",
+    query: str = "",
+    content: str = "",
+    glob: str = "*",
+    max_results: str = "50",
+    max_depth: str = "8",
+) -> dict[str, Any]:
+    """
+    搜索文件名/路径和可读文本内容，返回有限结果，避免大输出污染上下文。
+    """
+    return search_text_files(
+        root=root,
+        query=query,
+        content=content,
+        glob=glob,
+        max_results=_parse_int(max_results, default=50, minimum=1, maximum=200),
+        max_depth=_parse_int(max_depth, default=8, minimum=0, maximum=32),
+    )
+
+
+@tool(perm.TOOL_READ | perm.PUBLIC_READ, "Search the web. Parameters: query, max_results=1-20, source=auto|tavily|builtin|index, site optional index id/domain/category, topic=general|news|finance, search_depth=basic|advanced. Uses Tavily when TAVILY_API_KEY is set, otherwise built-in DuckDuckGo/index fallback.", must=True)
+def search_web(
+    query: str,
+    max_results: str = "5",
+    source: str = "auto",
+    site: str = "",
+    topic: str = "general",
+    search_depth: str = "basic",
+    time_range: str = "",
+    include_answer: str = "true",
+    include_raw_content: str = "false",
+    exclude_domains: str = "",
+    timeout: str = "",
+) -> dict[str, Any]:
+    """
+    Network search tool with Tavily primary path and a local no-key fallback.
+    """
+    return perform_web_search(
+        query=query,
+        max_results=max_results,
+        source=source,
+        site=site,
+        topic=topic,
+        search_depth=search_depth,
+        time_range=time_range,
+        include_answer=include_answer,
+        include_raw_content=include_raw_content,
+        exclude_domains=exclude_domains,
+        timeout=timeout,
+    )
+
+
+@tool(perm.TOOL_WRITE | perm.PUBLIC_WRITE, "Edit a UTF-8 text file by exact replacement. Parameters: path, old_text, new_text, expected_sha256 optional, create=false, dry_run=false. Use read_file first for sha256; old_text must be unique.", must=True)
+def edit_file(
+    path: str,
+    old_text: str = "",
+    new_text: str = "",
+    expected_sha256: str = "",
+    create: str = "false",
+    dry_run: str = "false",
+) -> dict[str, Any]:
+    """
+    类似 Claude Code/Codex 的最小编辑工具：精确替换，不做隐式猜测。
+    """
+    return apply_text_edit(
+        path,
+        old_text=old_text,
+        new_text=new_text,
+        expected_sha256=expected_sha256,
+        create=str(create).strip().lower() in {"1", "true", "yes", "on"},
+        dry_run=str(dry_run).strip().lower() in {"1", "true", "yes", "on"},
+    )
+
+
+@tool(perm.TOOL_WRITE, "Configure a local stdio MCP server. Parameters: name, command, args_json optional, env_json optional", must=True)
+def mcp_add_server(name: str, command: str, args_json: str = "[]", env_json: str = "{}") -> dict[str, Any]:
+    args_raw = json.loads(args_json) if str(args_json or "").strip() else []
+    env_raw = json.loads(env_json) if str(env_json or "").strip() else {}
+    if not isinstance(args_raw, list):
+        raise ValueError("args_json must be a JSON array")
+    if not isinstance(env_raw, dict):
+        raise ValueError("env_json must be a JSON object")
+    result = upsert_mcp_server(name, command, args_raw, env_raw)
+    _MCP_TOOL_SCHEMA_CACHE.clear()
+    _MCP_TOOL_ALIAS_CACHE.clear()
+    return result
+
+
+@tool(perm.TOOL_READ, "List configured MCP servers", must=True)
+def mcp_list_servers() -> dict[str, Any]:
+    return list_configured_mcp_servers()
+
+
+@tool(perm.TOOL_READ, "List tools exposed by a configured MCP server. Parameters: server", must=True)
+def mcp_list_tools(server: str) -> dict[str, Any]:
+    return list_remote_mcp_tools(server)
+
+
+@tool(perm.TOOL_EXECUTE, "Call a tool on a configured MCP server. Parameters: server, tool_name, arguments_json optional", must=True)
+def mcp_call_tool(server: str, tool_name: str, arguments_json: str = "{}") -> dict[str, Any]:
+    args = json.loads(arguments_json) if str(arguments_json or "").strip() else {}
+    if not isinstance(args, dict):
+        raise ValueError("arguments_json must be a JSON object")
+    return call_mcp_tool(server, tool_name, args)
+
+
+@tool(perm.TOOL_READ | perm.PUBLIC_READ, "List local TindaAgent skills from runtime skills directory and TINDA_SKILL_PATHS", must=True)
+def skill_list() -> dict[str, Any]:
+    return discover_skills()
+
+
+@tool(perm.TOOL_READ | perm.PUBLIC_READ, "Read one local skill instruction file. Parameters: name", must=True)
+def skill_read(name: str) -> dict[str, Any]:
+    return read_skill(name)
 
 
 @tool(perm.USER_ADMIN, "No-op tool for admin permission verification only", must=True)

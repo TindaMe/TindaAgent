@@ -4,24 +4,132 @@
 
 > **分类**: `Added` 新增 | `Changed` 变更 | `Fixed` 修复 | `Removed` 移除 | `BREAKING` 破坏性变更 | `Defense` 防御性加固 | `Known Issues` 已知待修
 
+## v1.10.0 - 2026-05-23
+
+### Added
+
+- **Codex/Claude Code 风格文件编辑工具** — 新增 `read_file` / `edit_file`，支持 UTF-8 文本读取、唯一 `old_text` 精确替换、`expected_sha256` 并发保护、`dry_run` diff、新文件创建和写入前校验。
+- **文件搜索工具** — 新增 `search_files`，支持按 root、文件名/路径子串、文本内容、glob 与结果上限搜索，返回路径、行号和 snippet，便于 LLM 编辑前定位目标文件。
+- **本地 Web 搜索工具** — 新增 `search_web`，按 Tavily API、DuckDuckGo HTML、内置站点索引三层降级，支持 answer/raw_content、site 限定、结果数量控制和离线索引兜底。
+- **常用站点索引表** — 内置搜索引擎、开发者文档、社区、AI 文档、包仓库、GitHub、arXiv 等常用直达入口，离线时仍能给 LLM 返回结构化链接。
+- **MCP stdio 桥接** — 新增 `mcp_add_server`、`mcp_list_servers`、`mcp_list_tools`、`mcp_call_tool`，提供最小 MCP JSON-RPC 初始化、工具列表和工具调用链路。
+- **本地 Skill 系统** — 新增 `skill_list` / `skill_read`，从 `~/.tinda/agent/skills/{name}/SKILL.md` 与 `TINDA_SKILL_PATHS` 发现并按需读取技能，避免技能全文常驻上下文。
+- **用户澄清提问工具** — 新增 `ask_user_question` 原生工具，支持选择题、填空、自定义补充和“以上都不是，我自己补充”，LLM 可暂停当前轮等待用户补充条件。
+- **Plan 工具** — 新增 `plan` 原生工具，用于记录目标、步骤、状态和备注；Plan 模式下只允许 `ask_user_question` 与 `plan`，阻止执行型工具误跑。
+- **Deep 对齐模式** — Chat 输入栏新增 `Deep` 开关，发送前先生成用户可确认的理解摘要；用户可确认、补充、返回上一版、取消或折叠查看历史轮次。
+- **Deep 对齐持久化** — 未确认 Deep 对齐状态保存到 `Data/DeepAlignment`，刷新或服务重启后可恢复原请求、附件、轮次、当前页和待回答问题。
+- **Deep 内嵌澄清交互** — Deep 模式兼容 `ask_user_question`，可在理解摘要前弹出卡片内问题，用户回答后继续生成新的对齐摘要。
+- **Plan 可移动便签 UI** — Chat 新增可拖拽、折叠、关闭的玻璃便签窗口，用于展示 `plan` 工具生成的目标、步骤、状态和备注。
+- **输入框工具选择行** — Chat 输入区新增 `+` 工具选择入口和已选工具 chip，支持把 Web Search 显式注入当前请求，避免默认污染所有请求上下文。
+- **模型数据面板调用参数区** — 新增可编辑 `temperature`、`top_p`、presence/frequency penalty、`max_tokens`、`seed`、`timeout`、`tool_choice`、`max_tool_steps`、Thinking、Reasoning Effort 等参数。
+- **模型数据 hover 说明** — provider、模型、余额、请求摘要和调用参数字段增加悬浮提示，截断字段可查看完整值和用途。
+- **请求体与余额面板扩展** — 模型数据面板继续展示真实 SDK 请求体、provider、模型、payload 字符、上下文字符、token 明细、DeepSeek 余额和最近请求统计。
+- **工具权限声明补齐** — `tool_min_permissions.json` 新增 `ask_user_question`、`plan`、文件编辑、文件搜索、Web 搜索、MCP、Skill 等工具的最低权限和说明。
+- **上下文压缩模块** — 新增 `context_compaction.py`，集中处理 Markdown、终端上下文、tool result JSON、assistant/tool message 的请求前压缩。
+- **前端 Markdown 渲染能力** — Markdown renderer 支持宽松管道表格、标准表格、BBCode 风格 `[code]...[/code]` / `[code=lang]...[/code]` 和受控 `toolskip:` 链接。
+- **自动化回归用例扩展** — 补充工具、Deep、Plan、Web 搜索、MCP/Skill、Markdown、provider 参数、reasoning_content、工具跳过和澄清取消等测试。
+
+### Changed
+
+- **版本提升** — 项目版本从 `1.9.0` 提升到 `1.10.0`，同步更新 `pyproject.toml`、Web 版本徽章、Chat/Settings fallback 和主题脚本标识。
+- **LLM 调度 provider-aware** — `LLMClient` 与 `LlmDispatcher` 增加 provider 透传，请求清洗、DeepSeek 兼容、OpenAI-compatible 调用和模型检测统一走调度层。
+- **请求边界清洗统一** — 新增 `prepare_llm_request_payload()`，所有真实发送和记录的请求体在边界统一处理 provider/model 特定字段。
+- **DeepSeek V4 thinking 语义调整** — DeepSeek V4 thinking 场景保留带 `tool_calls` assistant 的 `reasoning_content`；非工具 assistant 推理内容不再进入后续请求。
+- **旧 reasoner 兼容策略** — `deepseek-reasoner` 继续作为旧模型 ID 兼容分支，请求前剥离 `reasoning_content`，避免 400。
+- **非 DeepSeek provider 隔离** — OpenAI/Google/Anthropic/自定义 provider 不接收 DeepSeek 专属 `reasoning_content` 字段，降低跨 provider 请求失败概率。
+- **系统提示词英文化** — Deep、Plan、记忆策略、工具模式等 LLM 注入提示调整为英文，用户可见 UI 仍保留中文。
+- **Deep 与 Plan 职责分离** — Deep 只做意图对齐和澄清，不制定执行计划；Plan 模式负责计划记录，不执行任务工具。
+- **ask_user_question 提示词强化** — `ask_user_question` 的工具 schema 描述和参数说明改为英文强约束，要求 LLM 只问一个阻塞问题、等待工具结果、不模拟用户回答、不在 pending 状态继续执行。
+- **Plan 模式工具拦截** — Plan 模式下即使工具 schema 可见，执行型工具也会被后端返回 `plan_mode_execution_blocked`，防止模型绕过计划模式。
+- **Web Search 显式启用** — `search_web` 只有当前请求带 `[WEB_SEARCH_MODE]` 时可执行，未启用时返回 `web_search_disabled`，减少工具注入和缓存前缀抖动。
+- **工具轮回改为模型主导** — 只要模型返回 `tool_calls` 就执行并回填结果；模型不再请求工具才结束，不再提前关闭工具。
+- **工具上限语义重算** — `max_tool_steps` 表示完整可执行工具轮数；达到上限后注入最终总结系统消息，并强制 `tool_choice=none`。
+- **工具上限回复兜底** — 如果模型把内部上限提示原样返回，前端/后端会替换为用户可读的中文上限说明。
+- **工具结果请求前压缩** — tool result 写入 LLM request 前会压缩 `stdout/output`、去重 `ok/success`、稳定 JSON key，降低长工具输出 token 压力。
+- **上下文请求前压缩** — Markdown 展示性符号、代码围栏、终端 ANSI、超长终端输出和工具 JSON 在进入 LLM 前被压缩，存储层和前端展示仍保留原结构。
+- **记忆上下文插入顺序调整** — memory/transient system context 插入到最后一条 user 前，保持当前用户请求后缀稳定。
+- **Chat 发送链路默认流式** — Chat 发送优先使用流式链路，前端按节流渲染流式文本、reasoning 和 tool marker，减少长回复卡顿。
+- **输入框高度自适应** — Composer 随输入增长并同步消息区底部 padding，避免最后一条消息被增高的输入框遮挡。
+- **Chat 快捷栏配置化** — 右上角功能入口按用户设置和权限动态渲染，模型数据、日志、用户管理、会话管理、终端等入口统一图标按钮。
+- **账号切换菜单玻璃化** — Chat 左上角用户切换菜单沿用登录用户选择界面的透明玻璃视觉，降低视觉割裂。
+- **HOME/Chat/Settings 版本显示同步** — HOME、Chat、Settings 的 fallback 文案全部改为 `v1.10.0`，运行时版本仍以 `/system/version` 为准。
+
+### Fixed
+
+- **ask_user_question 取消状态丢失** — 修复普通 assistant 澄清弹窗复用终端确认接口时后端强制 `approval=True` 的问题；取消现在会以 `approval:false` / `action:deny` 回填给 LLM。
+- **ask_user_question 选项污染** — 修复 LLM 把“（这是一个选项）A/B/C...”写进 options 时前端第一项带说明性前缀的问题；工具提示要求一项一行，后端兼容拆分并清理说明前缀。
+- **ask_user_question 锁定文案** — 修复澄清问题 pending 时输入框仍提示“存在待确认终端命令”的问题；前端锁定态现在按 question/terminal 显示对应文案。
+- **澄清回答后的错误系统提示** — 修复 `ask_user_question` 回答后仍注入“终端命令已执行”的系统提示，导致 LLM 不继续使用工具的问题；现在按回答/取消分别注入澄清语义。
+- **Deep ask 交互不可继续** — 修复 Deep 卡片内 `ask_user_question` 回答/取消后未正确恢复 Deep 对齐状态的问题。
+- **Deep 请求上下文缺失** — 修复 Deep 模式只携带当前用户原文、未带入上文有效上下文，导致“好了/继续/就这样”被孤立解析的问题。
+- **Deep 与 Plan 混淆** — 修复 Deep 阶段模型因为实际工具列表受限而声称“没有 plan 工具”的问题；Deep 只暴露澄清工具，但会告知确认后主运行时可能有更多工具。
+- **Plan 工具不可见** — 修复 `/plan` 语义只靠文本提示、没有原生 `plan` tool marker 展示的问题。
+- **工具调用覆盖 thinking/正文** — 修复 DSML/tool_calls 流式替换时覆盖已输出 thinking、正文或前序 tool marker 的问题。
+- **tool marker 合并/乱序** — 修复多个工具调用时 start/done marker 被合并、完成提示跑到准备提示前、刷新后 marker 状态分裂的问题。
+- **tool marker 保真** — 修复工具 marker 字段被改写导致 `stdout`、`arguments`、`result`、`tool_call_id` 不稳定的问题，继续按存储顺序续写和渲染。
+- **reasoning_content 400** — 修复 DeepSeek 请求中不该回传 `reasoning_content` 的轮次导致 `invalid_request_error` 的问题。
+- **工具调用 assistant reasoning 缺失** — 修复 DeepSeek thinking + tool_calls 场景下后续请求缺失必需 `reasoning_content` 的问题。
+- **工具上限提前触发** — 修复 `max_tool_steps` 在真实工具轮数未达到时提前禁用工具、四轮左右就停止的问题。
+- **工具上限提示污染气泡** — 修复内部 “Maximum tool call iterations reached” 文本直接出现在 assistant 气泡里的问题。
+- **工具跳过假生效** — 修复 skip 只更新前端、后端工具仍等待的问题；跳过会写入 `user_skipped` tool result 并让 LLM 继续总结或换方案。
+- **长工具调用无反馈** — 修复长搜索/终端执行时前端像卡死的问题，heartbeat 会显示“连接中 / 执行中 · 已等待 Ns”。
+- **后台 late result 覆盖** — 修复跳过工具后后台线程返回结果覆盖前端/会话状态的问题。
+- **`/sessions/{sid}/context-usage` 404** — 修复真实 session 已创建但 meta 尚未落盘时 context-usage 返回 404 的竞态。
+- **工具事件 403 刷屏** — 修复切换账户、删除会话或不可访问会话时 `/tool-events` 持续 403 刷日志的问题。
+- **会话删除/切换残留** — 修复删除当前会话或新建草稿后旧消息 DOM、终端回放、分页状态和 pending confirm 残留的问题。
+- **新会话草稿逻辑** — 修复进入 Chat 或点击新建就创建空会话文件的问题；只有真正发送用户消息/附件时才创建真实会话并出现在列表。
+- **消息底部遮挡** — 修复输入框增高后消息区底部 padding 不足，最后消息被挡住的问题。
+- **流式工具后一次性输出** — 优化工具调用后的流式恢复与前端节流渲染，降低工具后回复一次性刷出的概率。
+- **Markdown 宽松表格** — 修复 LLM 输出 `源 | 条件 | 方式` 这种无分隔行表格时不渲染的问题。
+- **BBCode 代码块** — 修复 `[code]...[/code]` 和 `[code=lang]...[/code]` 在气泡中原样显示的问题。
+- **Plan marker 渲染** — `plan` 工具结果现在渲染为计划便签/计划 marker，而不是普通工具 JSON。
+- **Deep 卡片翻页** — 修复 Deep 确认后仍需手动翻页才能看到最新理解的问题。
+- **Deep 状态清理** — 删除会话、reset 或确认/取消后会清理 Deep alignment 持久化状态，避免刷新恢复过期卡片。
+- **模型参数写入不完整** — 修复模型数据面板展示了参数但未完整写入后续真实请求的问题。
+- **请求日志与真实 body 偏移** — 请求日志记录经过 provider 清洗后的真实 SDK body，减少模型数据面板与实际请求不一致。
+- **前端暗色按钮/Deep 按钮状态** — 补齐 Deep 按钮在暗色模式、hover、active 状态下的玻璃层级。
+- **账号切换浮层视觉割裂** — 用户切换弹窗与登录选择界面统一透明玻璃样式。
+
+### Defense
+
+- **Deep/Plan 回归** — 覆盖 Deep 英文系统提示、Deep 上下文带入、Deep ask 恢复、Plan 前缀剥离、Plan tool marker 和 Plan 模式工具拦截。
+- **DeepSeek 请求兼容回归** — 覆盖 V4 thinking 带工具 assistant 保留 `reasoning_content`、非工具 assistant 剥离、旧 reasoner 剥离和非 DeepSeek provider 剥离。
+- **工具轮回回归** — 覆盖工具上限完整执行、超过上限后 finalize、内部提示不外露、运行中 skip 立即返回、skip alias 命中和 provider 参数 900 上限。
+- **Web Search 回归** — 覆盖 Tavily、有网 DuckDuckGo、离线内置索引、工具权限注册和 disabled 状态。
+- **文件/MCP/Skill 回归** — 覆盖编辑唯一替换、dry-run diff、文件搜索内容定位、MCP/Skill 工具注册和权限表。
+- **Markdown/前端回归** — 覆盖宽松表格、BBCode 代码块、Deep/ask UI、Plan 浮窗、输入框工具选择和 toolskip 安全链接。
+- **会话/上下文回归** — 覆盖 context-usage live session 兜底、请求顺序、工具/终端上下文回放、压缩展示和 ask_user_question 取消状态。
+
 ## v1.9.0 - 2026-05-20
 
 ### Added
 
+- **Codex/Claude Code 风格编辑工具** — 新增 `read_file` / `edit_file` 原生工具，支持 UTF-8 文本读取、唯一 old_text 精确替换、`expected_sha256` 并发保护、`dry_run` diff 和新文件创建。
+- **文件搜索工具** — 新增 `search_files`，支持按 root、文件名/路径子串、文本内容和 glob 搜索，返回有限数量的路径、行号和 snippet，便于编辑前定位文件且避免大输出污染上下文。
+- **MCP stdio 桥接工具** — 新增 `mcp_add_server`、`mcp_list_servers`、`mcp_list_tools`、`mcp_call_tool`，按 MCP JSON-RPC `initialize`、`tools/list`、`tools/call` 最小链路接入本地 stdio MCP server。
+- **本地 Skill 系统** — 新增 `skill_list` / `skill_read`，从 `~/.tinda/agent/skills/{name}/SKILL.md` 与 `TINDA_SKILL_PATHS` 发现并按需读取技能说明，不把技能内容常驻注入上下文。
 - **Agent 集群工具跳过控制** — Chat 工具调用气泡在运行中显示 `跳过` 操作，长时间搜索、终端命令或工具执行可由用户主动中止，不再只能等待工具自然返回。
 - **工具跳过后端接口** — 新增 `POST /sessions/{sid}/tool-calls/{tool_call_id}/skip`，前端 `toolskip:` 动作统一转发到后端，由当前会话的 Agent/LLM client 消费跳过请求。
 - **工具执行进程可取消** — `run_terminal` 从阻塞式 `subprocess.run()` 调整为 `subprocess.Popen()` 执行，工具 call_id 与运行中进程绑定；用户跳过时向进程发送终止信号并返回结构化 `user_skipped` 结果。
 - **会话级工具调度上下文** — Agent、LLMClient 与 MultiProviderToolClient 支持透传 `session_id`，工具跳过、heartbeat 和工具执行状态可按会话隔离，避免不同会话工具状态串扰。
 - **模型调用参数面板** — 模型数据面板新增可编辑调用参数区，支持 `temperature`、`top_p`、presence/frequency penalty、`max_tokens`、`seed`、`timeout`、`tool_choice`、`max_tool_steps`、Thinking 与 Reasoning Effort，保存后写入 provider 配置并影响后续真实 LLM 请求。
 - **模型数据悬浮提示** — 供应商标签、provider 配置项、模型胶囊、调用参数、余额明细和最近请求统计项增加 hover title，截断名称可查看完整值与字段作用。
+- **网络搜索工具** — 新增 `search_web` 原生工具，`TAVILY_API_KEY` 存在时优先走 Tavily Search API，无 key、Tavily 失败或强制 `source=builtin/index` 时使用内置 DuckDuckGo HTML 解析与常用站点索引兜底。
+- **常用网络索引表** — 内置 Codex-like 搜索目标索引，覆盖通用搜索、GitHub/Stack Overflow/Reddit/Hacker News、官方开发文档、包仓库、AI API 文档、arXiv 等常用入口，供 `search_web(source=index)` 或兜底搜索返回结构化链接。
+- **用户澄清提问工具** — 新增 `ask_user_question` 原生工具，LLM 可在缺少关键条件时暂停当前轮并向用户展示可选项与补充输入；有选项时自动追加“以上都不是，我自己补充”，用户回答后以 tool result 回填给 LLM 继续执行，交互形态接近 Claude Code 的 clarify flow。
+- **Deep 对齐确认循环** — Chat 输入栏新增 `Deep` 独立开关；开启后用户发送消息会先生成“理解确认”交互块，用户可选择“一致继续执行”、补充说明后重新对齐、返回上一级理解或取消，直到确认后才复用原始 Chat 执行链路。
+- **Deep 对齐状态持久化** — 未确认的 Deep 对齐轮次保存到运行时 `Data/DeepAlignment` 独立 JSON 文件，刷新页面或服务重启后可恢复原用户气泡、附件 chip 与确认卡片；确认、取消、删除会话或 reset 时自动清理。
 
 ### Changed
 
+- **上下文输入压缩策略** — LLM 请求新增统一 context compaction 层：会话文件和前端继续保留 Markdown/工具详情，真实写入模型的历史 assistant/system/terminal/tool 内容会去除展示型 Markdown、压缩代码围栏、稳定 JSON key、去重 `stdout/output` 与 `ok/success`，减少“输入 token 比缓存收益还多”的情况，并保持稳定前缀优先命中缓存。
 - **版本提升** — 项目版本从 `1.8.3` 提升到 `1.9.0`，同步更新 Web 版本徽章、设置页 fallback、Chat fallback 和主题脚本标识。
 - **长工具调用交互策略** — 长工具调用不再依赖固定超时或前端拦截，改为“heartbeat/progress 持续反馈 + 用户显式跳过”的控制模型，保留长任务能力同时给用户可见进度和退出手段。
 - **工具循环跳过收束** — LLM 工具循环消费到 `user_skipped` 后会优雅结束当前工具链路，并向会话写入“工具调用已被用户跳过”的 assistant fallback，避免继续等待已取消工具。
 - **标准 Agent 工具轮回** — 工具循环改为模型主导：LLM 返回 `tool_calls` 就执行工具并回填结果，LLM 不再返回 `tool_calls` 才结束；不再用 `max_tool_steps - 1` 提前禁工具。
 - **工具上限语义调整** — `max_tool_steps` 表示可完整执行的工具轮次；只有执行满上限后模型仍继续请求工具时，后端才注入上限说明并以 `tool_choice=none` 做最终总结。
+- **Deep 对齐执行策略** — Deep 对齐走发送前拦截，不改动现有 `/chat`、`/chat/stream`、工具循环、tool marker 和会话存储主链路；确认后原始用户请求按原文进入会话，最终对齐摘要只作为本轮隐藏 system 上下文注入 LLM 请求。
+- **Deep 对齐上下文修正** — Deep alignment 请求会带入当前会话的有效 LLM 上下文最近消息，再结合当前用户请求生成理解确认，避免用户输入“好了/继续/就这样”这类承接上文时被错误地孤立解析。
 - **工具轮次上限放宽** — provider 配置、OpenAI-compatible client、dispatcher 与模型数据面板统一支持 `max_tool_steps` 范围 `1~900`，避免 900 被前端或后端截断为 20/6。
 - **Provider 参数贯通** — Web Chat 主链路默认读取 provider 级调用参数；DeepSeek 默认保留 Thinking enabled 与 Reasoning max，CLI 显式温度调用保持兼容。
 
@@ -36,6 +144,8 @@
 - **请求摘要参数缺失** — 最近一次真实 SDK 请求摘要补充展示 `top_p`、`max_tokens`、Thinking 类型和 Reasoning Effort，便于核对模型参数是否真实写入。
 - **自动化覆盖** — 增加 context-usage live session 兜底测试和 tool skip 消费测试，并补充长终端跳过 smoke 验证，覆盖本轮 Agent 集群工具控制链路。
 - **工具循环自动化覆盖** — 增加运行中 skip 立即返回、provider 参数 900 上限保留、工具预算完整使用后再 finalize 的回归测试。
+- **Markdown 宽松表格渲染** — 前端 Markdown 渲染器支持 LLM 常见的无分隔行管道表格，如 `源 | 条件 | 方式` 后直接跟数据行，避免工具/网络搜索总结在 Chat 气泡里退化成普通文本。
+- **BBCode 风格代码块渲染** — 前端 Markdown 渲染器兼容 `[code]...[/code]` 与 `[code=lang]...[/code]`，LLM 输出流程图/日志片段时会渲染为代码块而不是普通文本。
 
 ## v1.8.3 - 2026-05-17
 

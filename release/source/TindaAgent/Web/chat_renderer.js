@@ -238,6 +238,11 @@
     if (d.data && typeof d.data === "object") d = d.data;
     if (typeof d !== "object") d = {};
     var name = d.name || d.tool_name || d.agent_tool || options.name || "unknown";
+    var result = d.result && typeof d.result === "object" ? d.result : {};
+    var innerResult = result.result && typeof result.result === "object" ? result.result : result;
+    if (name === "plan" && innerResult.kind === "plan") {
+      return renderPlanMarkerMarkdown(innerResult, options);
+    }
     var cid = d.id || d.call_id || options.id || options.callId || "";
     var displayCid = String(cid || "").replace(/^tc_/, "");
     var toolCallId = d.tool_call_id || d.toolCallId || options.tool_call_id || options.toolCallId || "";
@@ -268,6 +273,35 @@
     if (done) {
       lines.push("> **已调用工具**: " + name + (displayCid ? " #" + displayCid : ""));
     }
+    return lines.join("\n") + (options.trailingNewline === false ? "" : "\n");
+  }
+
+  function renderPlanMarkerMarkdown(plan, options) {
+    options = options || {};
+    var d = plan && typeof plan === "object" ? plan : {};
+    var lines = ["> >_<", "> --计划已记录--"];
+    var status = String(d.status || "").trim();
+    var completed = d.completed === true || status === "complete";
+    var needsConfirm = d.requires_completion_confirmation === true || status === "awaiting_completion_confirmation";
+    if (completed) lines.push("> **状态**: 已完成");
+    else if (needsConfirm) lines.push("> **状态**: 等待用户确认完成");
+    else if (status) lines.push("> **状态**: " + status);
+    var goal = String(d.goal || "").trim();
+    if (goal) lines.push("> **目标**: " + goal);
+    var steps = Array.isArray(d.steps) ? d.steps : [];
+    if (steps.length > 0) {
+      lines.push("> **步骤**:");
+      steps.forEach(function(step, idx) {
+        if (!step) return;
+        var text = typeof step === "object" ? String(step.text || "") : String(step || "");
+        text = text.trim();
+        if (text) lines.push("> " + String(idx + 1) + ". " + text);
+      });
+    }
+    var notes = String(d.notes || "").trim();
+    if (notes) lines.push("> **备注**: " + notes);
+    var completionNote = String(d.completion_note || d.completionNote || "").trim();
+    if (completionNote) lines.push("> **完成说明**: " + completionNote);
     return lines.join("\n") + (options.trailingNewline === false ? "" : "\n");
   }
 
@@ -446,6 +480,7 @@
     appendMarkdownToBubble: appendMarkdownToBubble,
     upsertAssistantBubble: upsertAssistantBubble,
     renderToolMarkerMarkdown: renderToolMarkerMarkdown,
+    renderPlanMarkerMarkdown: renderPlanMarkerMarkdown,
     rememberTurnBubble: rememberTurn,
     resolveTurnBubble: resolveTurnBubble,
     resetTurnBubbles: resetTurns,

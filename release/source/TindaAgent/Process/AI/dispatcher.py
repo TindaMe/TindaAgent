@@ -13,10 +13,12 @@ from openai import OpenAI
 from TindaAgent.Process.AI.client import (
     LLMClient,
     _build_tool_limit_system_message,
+    _finalize_tool_limit_reply,
     _parse_json,
     _result_has_pending_confirmation,
     _tool_failed,
     _tool_skipped,
+    prepare_llm_request_payload,
     record_llm_request,
     record_llm_response_usage,
 )
@@ -97,34 +99,6 @@ def _build_done(reply: str, working_msgs: list[dict], base_len: int, steps: int,
         "tool_steps": steps,
         "tool_trace": tool_trace,
     }
-
-
-def _build_tool_limit_fallback(tool_trace: list[dict]) -> str:
-    if not tool_trace:
-        return "Maximum tool call iterations reached. Provide your best answer based on the results obtained so far."
-    lines = ["Maximum tool call iterations reached. Summarize the results and provide a final answer."]
-    for idx, step in enumerate(tool_trace[-4:], start=1):
-        name = step.get("agent_tool", "unknown_tool")
-        result = step.get("result")
-        text = ""
-        if isinstance(result, dict):
-            if result.get("ok") is False:
-                text = str(result.get("error", ""))
-            elif result.get("result") is not None:
-                text = str(result.get("result"))
-            elif result.get("stdout"):
-                text = str(result.get("stdout"))
-            else:
-                text = "completed"
-        elif result is not None:
-            text = str(result)
-        else:
-            text = str(step.get("raw_result", ""))
-        text = text.replace("\n", " ").strip()
-        if len(text) > 140:
-            text = text[:140] + "..."
-        lines.append(f"{idx}. {name}: {text or 'completed'}")
-    return "\n".join(lines)
 
 
 def _normalize_tool_call(*, call_id: str, function_name: str, function_arguments: Any, fallback_id: str) -> dict:
@@ -267,7 +241,7 @@ class MultiProviderToolClient:
                     force_finalize=True,
                     func=f"{func}.tool_limit_finalize",
                 )
-                final_text = str(final_text or "").strip() or _build_tool_limit_fallback(trace)
+                final_text = _finalize_tool_limit_reply(final_text, trace)
                 msg_out = {"role": "assistant", "content": final_text}
                 if final_reasoning:
                     msg_out["reasoning_content"] = final_reasoning
@@ -314,10 +288,14 @@ class MultiProviderToolClient:
             if not isinstance(args, dict):
                 args = {}
             model_id = str(call.get("id", "") or "")
+            try:
+                display_name = tool_registry.display_name_for_mcp_tool(user_perm, name)
+            except Exception:
+                display_name = name
             event_id = audit_event("TOOL_EXECUTE", "ai", func, _THIS_FILE, f"tool_start tool={name}",
-                                   extra={"tool_name": name, "has_arguments": bool(args), "model_id": model_id})
+                                   extra={"tool_name": display_name, "mcp_alias": name, "has_arguments": bool(args), "model_id": model_id})
             call_id = f"tc_{event_id:010d}"
-            raw = tool_registry.run_agent_tool(name, user_perm, args, call_id=call_id)
+            raw = tool_registry.run_mcp_agent_tool(name, user_perm, args, call_id=call_id)
             parsed = _parse_json(raw)
             user_safe = parsed if isinstance(parsed, dict) else {"ok": True, "output": raw}
             model_content = raw
@@ -335,13 +313,13 @@ class MultiProviderToolClient:
                                 "required_perm_bits", "user_perm", "user_perm_labels"):
                         safe.pop(key, None)
                     user_safe = safe
-            trace.append({"agent_tool": name, "call_id": call_id, "tool_call_id": model_id,
+            trace.append({"agent_tool": display_name, "mcp_alias": name, "call_id": call_id, "tool_call_id": model_id,
                           "arguments": args, "result": user_safe, "raw_result": raw})
-            steps.append({"agent_tool": name, "call_id": call_id, "tool_call_id": model_id,
+            steps.append({"agent_tool": display_name, "mcp_alias": name, "call_id": call_id, "tool_call_id": model_id,
                           "arguments": args, "result": user_safe, "raw_result": raw})
             msgs.append({"role": "tool", "tool_call_id": model_id, "name": name, "content": model_content})
             audit_event("TOOL_EXECUTE", "ai", func, _THIS_FILE, f"tool_done tool={name}",
-                        extra={"tool_name": name, "ok": True, "call_id": call_id})
+                        extra={"tool_name": display_name, "mcp_alias": name, "ok": True, "call_id": call_id})
         return steps, has_pending_confirmation
 
     def _provider_tool_completion(
@@ -571,7 +549,7 @@ class MultiProviderToolClient:
     @staticmethod
     def _anthropic_tools(user_perm: int) -> list[dict[str, Any]]:
         tools: list[dict[str, Any]] = []
-        for schema in tool_registry.build_agent_tool_schemas(user_perm):
+        for schema in tool_registry.build_mcp_tool_schemas(user_perm):
             fn = schema.get("function", {}) if isinstance(schema, dict) else {}
             tools.append({
                 "name": str(fn.get("name", "")),
@@ -583,7 +561,7 @@ class MultiProviderToolClient:
     @staticmethod
     def _google_function_declarations(user_perm: int) -> list[dict[str, Any]]:
         declarations: list[dict[str, Any]] = []
-        for schema in tool_registry.build_agent_tool_schemas(user_perm):
+        for schema in tool_registry.build_mcp_tool_schemas(user_perm):
             fn = schema.get("function", {}) if isinstance(schema, dict) else {}
             parameters = fn.get("parameters") if isinstance(fn.get("parameters"), dict) else {"type": "object"}
             declarations.append({
@@ -665,6 +643,7 @@ class LlmDispatcher:
                 base_url=self.base_url,
                 model=self._deepseek_model,
                 request_params=provider_request_params(deepseek),
+                provider="deepseek",
             )
         return self._primary_client
 
@@ -734,6 +713,7 @@ class LlmDispatcher:
                 base_url=base_url,
                 model=target_model,
                 request_params=provider_request_params(row),
+                provider=provider_key,
             )
         client = self._clients[cache_key]
         client.configure_request_params(provider_request_params(row))
@@ -815,6 +795,11 @@ class LlmDispatcher:
             raise ValueError("missing llm model")
         request_payload["model"] = target_model
         self._apply_provider_request_defaults(row, request_payload, stream=stream)
+        request_payload = prepare_llm_request_payload(
+            request_payload,
+            base_url=str(row.get("base_url") or ""),
+            provider=provider_key,
+        )
         if adapter == "openai_compatible":
             return self._create_openai_compatible(row, request_payload, purpose=purpose, stream=stream)
         if adapter == "anthropic_messages":
@@ -846,11 +831,20 @@ class LlmDispatcher:
         api_key = resolve_api_key(provider)
         if not api_key:
             raise ValueError(f"缺少 {provider.get('label') or provider.get('key')} API Key")
-        payload = dict(payload)
+        payload = prepare_llm_request_payload(
+            dict(payload),
+            base_url=str(provider.get("base_url") or ""),
+            provider=str(provider.get("key") or ""),
+        )
         if provider.get("reasoning_effort"):
             payload.setdefault("reasoning_effort", provider.get("reasoning_effort"))
         if isinstance(provider.get("extra_body"), dict):
             payload.setdefault("extra_body", provider.get("extra_body"))
+        payload = prepare_llm_request_payload(
+            payload,
+            base_url=str(provider.get("base_url") or ""),
+            provider=str(provider.get("key") or ""),
+        )
         record_llm_request(payload, source=purpose, stream=stream)
         chat_path = str(provider.get("chat_path") or "/chat/completions").strip()
         uses_default_sdk_path = chat_path in {"", "/chat/completions", "chat/completions"}

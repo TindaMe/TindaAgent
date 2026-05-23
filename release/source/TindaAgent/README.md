@@ -18,6 +18,7 @@ python run_web.py
 
 - **Dual interface** — CLI (`tinda`) with prompt_toolkit and Web UI (FastAPI) with streaming SSE
 - **Tool system** — Shell execution, memory, time, summarization, keyword extraction; decorator-based registration with permission gating
+- **Web search tool** — `search_web` uses Tavily when configured, then falls back to built-in DuckDuckGo search and a curated common-site index
 - **Session management** — Per-session JSON storage, context compression via LLM summarization, Markdown/text export
 - **Local user auth** — JSON-backed local accounts with token-based request isolation and permission bits
 - **Context token accounting** — Counts only content that is actually sent to the LLM request context, with DeepSeek tokenizer support
@@ -65,6 +66,9 @@ TindaAgent/
 | `DEEPSEEK_MODEL` | `deepseek-v4-flash` | Default model |
 | `TINDA_TITLE_MODEL` | `deepseek-v4-flash` | Title generation model |
 | `TINDA_COMPRESS_MODEL` | `deepseek-v4-flash` | Context compression model |
+| `TAVILY_API_KEY` | (optional) | Enables Tavily-backed `search_web` results |
+| `TAVILY_BASE_URL` | `https://api.tavily.com` | Tavily-compatible base URL |
+| `TAVILY_SEARCH_URL` | (optional) | Full Tavily-compatible search endpoint override |
 | `TINDA_HOME` | `~/.tinda/agent` | Runtime data root |
 
 Set these in `.env` at the project root.
@@ -87,8 +91,21 @@ The runtime now assembles LLM requests in a cache-friendlier order:
 - Conversation history is replayed in chronological order.
 - Terminal history is merged into the LLM context as `[Terminal Context]` blocks in time order.
 - Dynamic memory context is injected near the end of the request, right before the latest user message, instead of mutating the leading system prompt.
+- Display-rich content is compacted only for the LLM request: Markdown decorations, code fences, terminal output, and tool-result JSON duplicates are normalized before being sent to the model, while session files and frontend rendering keep the original rich content.
 
 This keeps the prefix more stable while preserving strict permission-based tool visibility.
+
+## Agent Tools
+
+TindaAgent exposes native tools through the same permission-aware registry used by Chat:
+
+- `read_file` / `edit_file` provide Codex/Claude Code style exact text edits with optional `expected_sha256`, `dry_run`, and create support.
+- `search_files` finds files by path/name substring and optional text content, returning bounded path, line, and snippet results for edit planning.
+- `search_web` searches the network with `source=auto|tavily|builtin|index`: Tavily is used when `TAVILY_API_KEY` exists, built-in mode parses DuckDuckGo HTML without a paid API key, and index mode returns curated search links for common engines, docs, repositories, Q&A, package registries, AI docs, and research sites.
+- MCP stdio servers can be configured with `mcp_add_server`, discovered with `mcp_list_servers` / `mcp_list_tools`, and called through `mcp_call_tool`.
+- Local skills live under `~/.tinda/agent/skills/{name}/SKILL.md`, with extra roots available through `TINDA_SKILL_PATHS`; use `skill_list` and `skill_read` to load instructions on demand.
+
+MCP tools and skills are intentionally exposed through compact bridge tools instead of injecting every external tool or skill into the prompt, keeping request bodies smaller and cache-friendlier.
 
 ## Web Motion
 

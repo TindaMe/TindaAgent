@@ -7,6 +7,16 @@
       "required_perm_labels": ["PUBLIC_EXECUTE"],
       "description": "按行输出文本到工具 stdout"
     },
+    "ask_user_question": {
+      "required_perm_bits": 1,
+      "required_perm_labels": ["PUBLIC_READ"],
+      "description": "向用户提出澄清问题并暂停等待回答"
+    },
+    "plan": {
+      "required_perm_bits": 1,
+      "required_perm_labels": ["PUBLIC_READ"],
+      "description": "制定或更新计划，不执行任务"
+    },
     "get_tinda_profile": {
       "required_perm_bits": 1,
       "required_perm_labels": ["PUBLIC_READ"],
@@ -46,6 +56,56 @@
       "required_perm_bits": 2,
       "required_perm_labels": ["PUBLIC_WRITE"],
       "description": "删除全局记忆"
+    },
+    "read_file": {
+      "required_perm_bits": 9,
+      "required_perm_labels": ["PUBLIC_READ", "TOOL_READ"],
+      "description": "读取 UTF-8 文本文件用于编辑前检查"
+    },
+    "search_files": {
+      "required_perm_bits": 9,
+      "required_perm_labels": ["PUBLIC_READ", "TOOL_READ"],
+      "description": "按文件名/路径/文本内容搜索文件"
+    },
+    "search_web": {
+      "required_perm_bits": 9,
+      "required_perm_labels": ["PUBLIC_READ", "TOOL_READ"],
+      "description": "通过 Tavily 或内置索引/搜索兜底进行网络搜索"
+    },
+    "edit_file": {
+      "required_perm_bits": 18,
+      "required_perm_labels": ["PUBLIC_WRITE", "TOOL_WRITE"],
+      "description": "按唯一 old_text 精确替换 UTF-8 文本文件"
+    },
+    "mcp_add_server": {
+      "required_perm_bits": 16,
+      "required_perm_labels": ["TOOL_WRITE"],
+      "description": "配置本地 stdio MCP server"
+    },
+    "mcp_list_servers": {
+      "required_perm_bits": 8,
+      "required_perm_labels": ["TOOL_READ"],
+      "description": "列出已配置 MCP server"
+    },
+    "mcp_list_tools": {
+      "required_perm_bits": 8,
+      "required_perm_labels": ["TOOL_READ"],
+      "description": "列出指定 MCP server 暴露的工具"
+    },
+    "mcp_call_tool": {
+      "required_perm_bits": 32,
+      "required_perm_labels": ["TOOL_EXECUTE"],
+      "description": "调用指定 MCP server 的远程工具"
+    },
+    "skill_list": {
+      "required_perm_bits": 9,
+      "required_perm_labels": ["PUBLIC_READ", "TOOL_READ"],
+      "description": "列出本地 Skill"
+    },
+    "skill_read": {
+      "required_perm_bits": 9,
+      "required_perm_labels": ["PUBLIC_READ", "TOOL_READ"],
+      "description": "读取本地 Skill 指令"
     },
     "admin_noop": {
       "required_perm_bits": 511,

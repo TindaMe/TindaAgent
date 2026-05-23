@@ -66,6 +66,38 @@
     return cells.every((cell) => /^:?-{2,}:?$/.test(cell));
   }
 
+  function findNextNonEmptyLine(lines, startIndex, maxBlankLines) {
+    const blankLimit = Number.isFinite(Number(maxBlankLines)) ? Number(maxBlankLines) : 0;
+    let blankCount = 0;
+    for (let i = startIndex; i < lines.length; i++) {
+      const trim = String(lines[i] ?? "").trim();
+      if (trim) return { index: i, trim };
+      blankCount += 1;
+      if (blankCount > blankLimit) break;
+    }
+    return null;
+  }
+
+  function isLoosePipeTableLine(line, expectedCellCount) {
+    const s = String(line ?? "").trim();
+    if (!s || !s.includes("|") || /^@@CODE_BLOCK_\d+@@$/.test(s)) return false;
+    if (isTableSeparatorLine(s)) return false;
+    const cells = parseTableCells(s);
+    if (cells.length < 2) return false;
+    if (expectedCellCount && cells.length !== expectedCellCount) return false;
+    return cells.every((cell) => cell.length > 0);
+  }
+
+  function findLooseTableStart(lines, headerIndex) {
+    const header = String(lines[headerIndex] ?? "").trim();
+    if (!isLoosePipeTableLine(header, 0)) return null;
+    const headerCells = parseTableCells(header);
+    const next = findNextNonEmptyLine(lines, headerIndex + 1, 1);
+    if (!next || isTableSeparatorLine(next.trim)) return null;
+    if (!isLoosePipeTableLine(next.trim, headerCells.length)) return null;
+    return next.index;
+  }
+
   function parseTableAlign(cell) {
     const s = String(cell ?? "").trim();
     if (s.startsWith(":") && s.endsWith(":")) return "center";
@@ -73,16 +105,37 @@
     return "left";
   }
 
+  function renderTableHtml(headers, aligns, rows) {
+    const thHtml = headers.map((h, idx) => `<th style="text-align:${aligns[idx] || "left"}">${renderInlineMarkdown(h)}</th>`).join("");
+    const trHtml = rows.map((cols) => {
+      const tds = headers.map((_, idx) => {
+        const cellText = cols[idx] ?? "";
+        return `<td style="text-align:${aligns[idx] || "left"}">${renderInlineMarkdown(cellText)}</td>`;
+      }).join("");
+      return `<tr>${tds}</tr>`;
+    }).join("");
+    const tbody = trHtml ? `<tbody>${trHtml}</tbody>` : "";
+    return `<div class="md-table-wrap"><table><thead><tr>${thHtml}</tr></thead>${tbody}</table></div>`;
+  }
+
+  function stashCodeBlock(codeBlocks, code, lang) {
+    const langClass = lang ? ` class="language-${escapeHtml(lang)}"` : "";
+    const token = `@@CODE_BLOCK_${codeBlocks.length}@@`;
+    const html = `<pre><code${langClass}>${escapeHtml(code)}</code></pre>`;
+    codeBlocks.push(html);
+    return token;
+  }
+
   function renderMarkdown(text) {
     const source = String(text ?? "").replace(/\r\n/g, "\n");
     const codeBlocks = [];
 
     let body = source.replace(/```([a-zA-Z0-9_-]+)?\n([\s\S]*?)```/g, (_, lang, code) => {
-      const langClass = lang ? ` class="language-${escapeHtml(lang)}"` : "";
-      const token = `@@CODE_BLOCK_${codeBlocks.length}@@`;
-      const html = `<pre><code${langClass}>${escapeHtml(code)}</code></pre>`;
-      codeBlocks.push(html);
-      return token;
+      return stashCodeBlock(codeBlocks, code, lang);
+    });
+
+    body = body.replace(/\[code(?:=([a-zA-Z0-9_-]+))?\]\n?([\s\S]*?)\n?\[\/code\]/gi, (_, lang, code) => {
+      return stashCodeBlock(codeBlocks, code, lang);
     });
 
     const lines = body.split("\n");
@@ -121,16 +174,36 @@
           rows.push(parseTableCells(rowTrim));
         }
 
-        const thHtml = headers.map((h, idx) => `<th style="text-align:${aligns[idx]}">${renderInlineMarkdown(h)}</th>`).join("");
-        const trHtml = rows.map((cols) => {
-          const tds = headers.map((_, idx) => {
-            const cellText = cols[idx] ?? "";
-            return `<td style="text-align:${aligns[idx]}">${renderInlineMarkdown(cellText)}</td>`;
-          }).join("");
-          return `<tr>${tds}</tr>`;
-        }).join("");
-        const tbody = trHtml ? `<tbody>${trHtml}</tbody>` : "";
-        parts.push(`<div class="md-table-wrap"><table><thead><tr>${thHtml}</tr></thead>${tbody}</table></div>`);
+        parts.push(renderTableHtml(headers, aligns, rows));
+        continue;
+      }
+
+      const looseTableRowStart = findLooseTableStart(lines, i);
+      if (looseTableRowStart !== null) {
+        if (inList) { parts.push("</ul>"); inList = false; }
+
+        const headers = parseTableCells(trim);
+        const aligns = headers.map(() => "left");
+        const rows = [];
+        let j = looseTableRowStart;
+
+        while (j < lines.length) {
+          const rowTrim = lines[j].trim();
+          if (!rowTrim) {
+            const next = findNextNonEmptyLine(lines, j + 1, 1);
+            if (next && isLoosePipeTableLine(next.trim, headers.length)) {
+              j = next.index;
+              continue;
+            }
+            break;
+          }
+          if (!isLoosePipeTableLine(rowTrim, headers.length)) break;
+          rows.push(parseTableCells(rowTrim));
+          j += 1;
+        }
+
+        i = j - 1;
+        parts.push(renderTableHtml(headers, aligns, rows));
         continue;
       }
 
@@ -195,6 +268,9 @@
     safeHref: safeHref,
     parseTableCells: parseTableCells,
     isTableSeparatorLine: isTableSeparatorLine,
+    findNextNonEmptyLine: findNextNonEmptyLine,
+    isLoosePipeTableLine: isLoosePipeTableLine,
+    findLooseTableStart: findLooseTableStart,
     parseTableAlign: parseTableAlign,
   };
 
@@ -205,5 +281,8 @@
   if (typeof window.renderInlineMarkdown !== "function") window.renderInlineMarkdown = renderInlineMarkdown;
   if (typeof window.parseTableCells !== "function") window.parseTableCells = parseTableCells;
   if (typeof window.isTableSeparatorLine !== "function") window.isTableSeparatorLine = isTableSeparatorLine;
+  if (typeof window.findNextNonEmptyLine !== "function") window.findNextNonEmptyLine = findNextNonEmptyLine;
+  if (typeof window.isLoosePipeTableLine !== "function") window.isLoosePipeTableLine = isLoosePipeTableLine;
+  if (typeof window.findLooseTableStart !== "function") window.findLooseTableStart = findLooseTableStart;
   if (typeof window.parseTableAlign !== "function") window.parseTableAlign = parseTableAlign;
 })();

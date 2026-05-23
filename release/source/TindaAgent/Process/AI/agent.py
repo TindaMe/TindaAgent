@@ -2,6 +2,7 @@ import json
 from typing import Any, Callable, Iterator
 from TindaAgent.Process.Architecture import perm
 from TindaAgent.Process.AI.client import LLMClient, _trace_has_pending_confirmation
+from TindaAgent.Process.AI.context_compaction import compact_messages_for_llm
 from TindaAgent.Process.AI.tokenizer import estimate_request_messages_tokens
 from TindaAgent.User import userdata
 
@@ -20,11 +21,13 @@ def _build_system_prompt(model_name: str | None) -> str:
         f"1. When introducing yourself, only say: \"I am TindaAgent, developed by Tinda.\"\n"
         f"2. If asked about the underlying model, always reply: \"Underlying technical details are confidential.\"\n"
         f"3. Be concise and accurate. Always respond in the same language as the user.\n"
-        f"4. You are a powerful agent assistant with access to tools. Use them when needed.\n"
-        f"5. TOOL CALLS MUST use the native tool_calls / function-calling API. Never describe, simulate, or fabricate tool invocations in your text response. If you need a tool, emit a real tool_call. If you cannot use tools for a request, explain why in natural language — do not pretend to have executed one.\n"
+        f"4. You are a powerful agent assistant with access to MCP-backed tools. Use them when needed.\n"
+        f"5. TOOL CALLS MUST use the native tool_calls / function-calling API exposed in this request. TindaAgent maps those tool calls to MCP tools internally. Never describe, simulate, or fabricate tool invocations in your text response. If you need a tool, emit a real tool_call. If you cannot use tools for a request, explain why in natural language — do not pretend to have executed one.\n"
         f"6. Never quote previous tool-call records or assume tool outputs. Everything must be based on actual tool results.\n"
         f"7. Fabrication of any kind is strictly forbidden.\n"
-        f"8. For complex tasks, use note= to describe each step. Chain related commands with && ; | || in a single run_terminal call when appropriate."
+        f"8. For complex tasks, use note= to describe each step. Chain related commands with && ; | || in a single run_terminal call when appropriate.\n"
+        f"9. If the user asks for /plan or planning mode, call the MCP-backed plan tool first and do not execute the task until the user confirms or asks to continue.\n"
+        f"10. When a missing requirement, unsafe ambiguity, required choice, or user preference blocks correct execution, call ask_user_question as a real tool_call. Ask exactly one concise question, provide clear options when useful, and then stop the workflow until the tool result is returned. Never simulate the user's answer, never continue task execution while waiting for ask_user_question, and treat the returned answer/choice as authoritative user input."
     )
 
 
@@ -54,18 +57,23 @@ class Agent:
     def _build_base_history(self) -> list[dict]:
         return [{"role": "system", "content": self.system_prompt}]
 
-    def _messages_for_llm_request(self, messages: list[dict]) -> list[dict]:
+    @staticmethod
+    def _insert_before_last_user(messages: list[dict], item: dict) -> None:
+        for idx in range(len(messages) - 1, -1, -1):
+            if isinstance(messages[idx], dict) and messages[idx].get("role") == "user":
+                messages.insert(idx, item)
+                return
+        messages.append(item)
+
+    def _messages_for_llm_request(self, messages: list[dict], transient_system_context: str | None = None) -> list[dict]:
         out = [m.copy() if isinstance(m, dict) else m for m in messages]
         memory_context = getattr(self, "_memory_context", None)
-        if not memory_context:
-            return out
-        memory_msg = {"role": "system", "content": memory_context}
-        for idx in range(len(out) - 1, -1, -1):
-            if isinstance(out[idx], dict) and out[idx].get("role") == "user":
-                out.insert(idx, memory_msg)
-                return out
-        out.append(memory_msg)
-        return out
+        if memory_context:
+            self._insert_before_last_user(out, {"role": "system", "content": memory_context})
+        transient = str(transient_system_context or "").strip()
+        if transient:
+            self._insert_before_last_user(out, {"role": "system", "content": transient})
+        return compact_messages_for_llm(out)
 
     def _refresh_tokens(self) -> None:
         self._tokens = int(estimate_request_messages_tokens(self._messages_for_llm_request(self.history)))
@@ -82,8 +90,9 @@ class Agent:
         memory_json = json.dumps(payload, ensure_ascii=False)
         self._memory_context = (
             "[MEMORY_POLICY]\n"
-            "你可自行判断是否调用 save_memory 写入长期记忆。仅写入长期有价值、稳定、可复用的信息；"
-            "闲聊、一次性任务过程、临时情绪不应写入。\n"
+            "You may decide whether to call save_memory for long-term memory. "
+            "Only save stable, reusable information with long-term value. "
+            "Do not save casual chat, one-off task steps, temporary emotions, or transient process details.\n"
             "[MEMORY_CONTEXT_JSON]\n"
             f"{memory_json}"
         )
@@ -157,7 +166,12 @@ class Agent:
             self._client = LLMClient()
         return self._client
 
-    def _chat_with_tools(self, messages: list[dict], user_perm: int, temperature: float | None = None) -> dict:
+    def _chat_with_tools(
+        self,
+        messages: list[dict],
+        user_perm: int,
+        temperature: float | None = None,
+    ) -> dict:
         client = self._ensure_client()
         kwargs = {
             "user_perm": user_perm,
@@ -174,7 +188,12 @@ class Agent:
             kwargs.pop("session_id", None)
             return client.chat_with_tools(messages, **kwargs)
 
-    def _stream_chat_with_tools(self, messages: list[dict], user_perm: int, temperature: float | None = None) -> Iterator[dict]:
+    def _stream_chat_with_tools(
+        self,
+        messages: list[dict],
+        user_perm: int,
+        temperature: float | None = None,
+    ) -> Iterator[dict]:
         client = self._ensure_client()
         kwargs = {
             "user_perm": user_perm,
@@ -205,7 +224,12 @@ class Agent:
             return True
         return False
 
-    def chat(self, user_message: str, temperature: float | None = None) -> str:
+    def chat(
+        self,
+        user_message: str,
+        temperature: float | None = None,
+        transient_system_context: str | None = None,
+    ) -> str:
         """
         用处： 发起一次多轮对话，自动维护历史
 
@@ -217,7 +241,7 @@ class Agent:
             str // 模型回复
         """
         self.history.append({"role": "user", "content": user_message})
-        request_messages = self._messages_for_llm_request(self.history)
+        request_messages = self._messages_for_llm_request(self.history, transient_system_context)
         result = self._chat_with_tools(
             request_messages,
             user_perm=self.perm,
@@ -230,13 +254,18 @@ class Agent:
         self._trim_history()
         return reply
 
-    def chat_with_meta(self, user_message: str, temperature: float | None = None) -> dict:
+    def chat_with_meta(
+        self,
+        user_message: str,
+        temperature: float | None = None,
+        transient_system_context: str | None = None,
+    ) -> dict:
         """
         用处：发起对话并返回回复 + 工具轨迹元信息（给 Web 层调试展示）
         """
         self._held_messages = None
         self.history.append({"role": "user", "content": user_message})
-        request_messages = self._messages_for_llm_request(self.history)
+        request_messages = self._messages_for_llm_request(self.history, transient_system_context)
         if self._context_logger is not None:
             try:
                 self._context_logger(request_messages, "llm_request")
@@ -266,18 +295,24 @@ class Agent:
                 pass
         return {
             "reply": reply,
+            "history_delta": delta,
             "tool_trace": trace,
             "tool_steps": steps,
             "pending_confirmation": self._held_messages is not None,
         }
 
-    def stream_chat_events(self, user_message: str, temperature: float | None = None) -> Iterator[dict]:
+    def stream_chat_events(
+        self,
+        user_message: str,
+        temperature: float | None = None,
+        transient_system_context: str | None = None,
+    ) -> Iterator[dict]:
         """
         用处：流式返回本轮对话事件，并在结束时写回历史
         """
         self._held_messages = None
         self.history.append({"role": "user", "content": user_message})
-        request_messages = self._messages_for_llm_request(self.history)
+        request_messages = self._messages_for_llm_request(self.history, transient_system_context)
         if self._context_logger is not None:
             try:
                 self._context_logger(request_messages, "llm_request")
@@ -333,6 +368,8 @@ class Agent:
 
         # 最小确认链路：按首条 decision 的 approval（或 action）决策
         approval: bool | None = None
+        question_answer: str = ""
+        question_choice: str = ""
         if isinstance(decisions, list) and decisions:
             first = decisions[0] if isinstance(decisions[0], dict) else {}
             if isinstance(first.get("approval"), bool):
@@ -341,17 +378,24 @@ class Agent:
                 act = str(first.get("action", "")).strip().lower()
                 if act in {"allow", "deny"}:
                     approval = act == "allow"
+            question_answer = str(first.get("answer", "") or "").strip()
+            question_choice = str(first.get("choice", "") or "").strip()
 
         # 兼容旧结构：将 decisions 按 confirm_id 索引
         decision_map: dict[str, str] = {}
         for d in decisions:
             cid = str(d.get("confirm_id", "")).strip()
-            act = str(d.get("action", "deny")).strip().lower()
+            if isinstance(d.get("approval"), bool):
+                act = "allow" if bool(d.get("approval")) else "deny"
+            else:
+                act = str(d.get("action", "deny")).strip().lower()
             if cid:
                 decision_map[cid] = "allow" if act == "allow" else "deny"
 
         # 在 msgs 中找到 tool 消息里含 pending_confirmation 的，重新执行并替换
         import json as _json
+        handled_question = False
+        cancelled_question = False
         for idx, m in enumerate(msgs):
             if m.get("role") != "tool":
                 continue
@@ -366,6 +410,54 @@ class Agent:
             if not isinstance(inner, dict) or not inner.get("pending_confirmation"):
                 continue
             cid = str(inner.get("confirm_id", ""))
+            kind = str(inner.get("kind", "") or parsed.get("kind", "") or "").strip().lower()
+            if kind == "question":
+                handled_question = True
+                act = str(decision_map.get(cid, "") or "").strip().lower()
+                if act not in {"allow", "deny"} and isinstance(approval, bool):
+                    act = "allow" if approval else "deny"
+                if act == "deny":
+                    cancelled_question = True
+                    answer_text = "(User cancelled the clarification question.)"
+                    new_result = {
+                        "ok": False,
+                        "pending_confirmation": False,
+                        "kind": "question_answer",
+                        "approval": False,
+                        "action": "deny",
+                        "error_code": "user_cancelled",
+                        "confirm_id": cid,
+                        "question": str(inner.get("question", "") or ""),
+                        "answer": answer_text,
+                        "message": "The user cancelled the clarification question. Ask a simpler question only if absolutely necessary; otherwise proceed with reasonable assumptions.",
+                    }
+                    msgs[idx] = {
+                        "role": "tool",
+                        "tool_call_id": m.get("tool_call_id", ""),
+                        "content": _json.dumps(new_result, ensure_ascii=False),
+                    }
+                    continue
+                answer_text = question_answer or question_choice
+                if not answer_text:
+                    answer_text = "(User did not provide an answer.)"
+                new_result = {
+                    "ok": True,
+                    "pending_confirmation": False,
+                    "kind": "question_answer",
+                    "approval": True,
+                    "action": "allow",
+                    "confirm_id": cid,
+                    "question": str(inner.get("question", "") or ""),
+                    "choice": question_choice,
+                    "answer": answer_text,
+                    "message": "The user answered the clarification question. Continue the task using this answer.",
+                }
+                msgs[idx] = {
+                    "role": "tool",
+                    "tool_call_id": m.get("tool_call_id", ""),
+                    "content": _json.dumps(new_result, ensure_ascii=False),
+                }
+                continue
             action = decision_map.get(cid, "deny")
             cmd = str(inner.get("cmd", ""))
             resolved_approval = approval if isinstance(approval, bool) else (action == "allow")
@@ -392,6 +484,11 @@ class Agent:
                 break
         if any_denied:
             msgs.append({"role": "system", "content": "The user denied the terminal command execution. You MUST inform the user that the command was not executed and ask if they need anything else. Do NOT call the same or similar tools again unless the user explicitly requests it."})
+        elif handled_question:
+            if cancelled_question:
+                msgs.append({"role": "system", "content": "The user cancelled the clarification question. Continue the original task with reasonable assumptions only if safe; otherwise ask one simpler clarification question. You may use tools if needed."})
+            else:
+                msgs.append({"role": "system", "content": "The user answered the clarification question. Continue the original task using that answer. You may use tools if needed."})
         else:
             msgs.append({"role": "system", "content": "The terminal command above has been executed per your request. You MUST now respond to the user in natural language: describe what was executed, show the key results, and ask if they need anything else. Do NOT call more tools unless the user explicitly asks for another action."})
         request_messages = self._messages_for_llm_request(msgs)
@@ -430,6 +527,7 @@ class Agent:
         self._trim_history()
         return {
             "reply": reply,
+            "history_delta": delta,
             "tool_trace": trace,
             "tool_steps": steps,
             "pending_confirmation": self._held_messages is not None,

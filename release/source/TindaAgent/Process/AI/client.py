@@ -14,6 +14,7 @@ except ImportError:
     BadRequestError = None
 from dotenv import load_dotenv
 from TindaAgent.Tool import tool as tool_registry
+from TindaAgent.Process.AI.context_compaction import compact_tool_result_for_llm
 from TindaAgent.Process.Architecture.paths import get_log_root
 from TindaAgent.Process.Observability import audit_event
 
@@ -167,16 +168,104 @@ def _build_skipped_tool_result(name: str, call_id: str, model_id: str, args: dic
     return raw, step
 
 
+def _is_plan_mode_request(messages: list[dict]) -> bool:
+    for msg in messages or []:
+        if not isinstance(msg, dict) or msg.get("role") != "system":
+            continue
+        if "[PLAN_MODE]" in str(msg.get("content", "")):
+            return True
+    return False
+
+
+def _plan_mode_allows_tool(name: str) -> bool:
+    clean = str(name or "").strip()
+    if clean in {"ask_user_question", "plan"}:
+        return True
+    return clean.endswith("__ask_user_question") or clean.endswith("__plan")
+
+
+def _web_search_enabled_for_request(messages: list[dict]) -> bool:
+    for msg in messages or []:
+        if not isinstance(msg, dict) or msg.get("role") != "system":
+            continue
+        content = str(msg.get("content", ""))
+        if "[WEB_SEARCH_MODE]" in content and "Web search is enabled" in content:
+            return True
+    return False
+
+
+def _build_plan_mode_blocked_tool_result(name: str, call_id: str, model_id: str, args: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    payload = {
+        "ok": False,
+        "tool_name": str(name or "unknown"),
+        "call_id": str(call_id or ""),
+        "error": (
+            "Plan mode is active. This tool was not executed. "
+            "Use ask_user_question if required information is missing, or use plan to record the execution plan. "
+            "Wait for user confirmation before executing task tools."
+        ),
+        "error_code": "plan_mode_execution_blocked",
+        "status": "blocked",
+        "pending_confirmation": False,
+    }
+    raw = json.dumps(payload, ensure_ascii=False)
+    step = {
+        "agent_tool": str(name or "unknown"),
+        "call_id": str(call_id or ""),
+        "tool_call_id": str(model_id or ""),
+        "arguments": args if isinstance(args, dict) else {},
+        "result": dict(payload),
+        "raw_result": raw,
+    }
+    return raw, step
+
+
+def _build_web_search_disabled_tool_result(name: str, call_id: str, model_id: str, args: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    payload = {
+        "ok": False,
+        "tool_name": str(name or "search_web"),
+        "call_id": str(call_id or ""),
+        "error": "Web Search is disabled for this request. Ask the user to enable Web Search before calling search_web.",
+        "error_code": "web_search_disabled",
+        "status": "blocked",
+        "pending_confirmation": False,
+    }
+    raw = json.dumps(payload, ensure_ascii=False)
+    step = {
+        "agent_tool": str(name or "search_web"),
+        "call_id": str(call_id or ""),
+        "tool_call_id": str(model_id or ""),
+        "arguments": args if isinstance(args, dict) else {},
+        "result": dict(payload),
+        "raw_result": raw,
+    }
+    return raw, step
+
+
 def _tool_result_message(model_id: str, name: str, content: str) -> dict[str, Any]:
     """Build a tool role message compatible with OpenAI-shaped chat history."""
     message: dict[str, Any] = {
         "role": "tool",
         "tool_call_id": str(model_id or ""),
-        "content": str(content or ""),
+        "content": compact_tool_result_for_llm(content, tool_name=str(name or "")),
     }
     if name:
         message["name"] = str(name)
     return message
+
+
+def _display_tool_name(user_perm: int, name: str) -> str:
+    try:
+        return tool_registry.display_name_for_mcp_tool(user_perm, str(name or ""))
+    except Exception:
+        return str(name or "")
+
+
+def _canonical_tool_name(user_perm: int, name: str) -> str:
+    display = _display_tool_name(user_perm, name)
+    if ":" in display:
+        return display.split(":", 1)[1]
+    return display or str(name or "")
 
 
 def _extract_api_error(exc: Exception) -> str:
@@ -241,6 +330,77 @@ def _request_body_from_sdk_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if isinstance(extra_body, dict):
         body.update(extra_body)
     return body
+
+
+def _is_deepseek_request(payload: dict[str, Any], *, base_url: str = "", provider: str = "") -> bool:
+    provider_text = str(provider or "").strip().lower()
+    base_text = str(base_url or "").strip().lower()
+    if provider_text in {"deepseek", "dpsk", "ds"}:
+        return True
+    return "api.deepseek.com" in base_text
+
+
+def _is_deepseek_reasoner_model(model: Any) -> bool:
+    text = str(model or "").strip().lower()
+    return text == "deepseek-reasoner" or text.endswith("/deepseek-reasoner")
+
+
+def _payload_thinking_enabled(payload: dict[str, Any]) -> bool:
+    thinking = payload.get("thinking")
+    if not isinstance(thinking, dict):
+        extra_body = payload.get("extra_body")
+        if isinstance(extra_body, dict):
+            thinking = extra_body.get("thinking")
+    if not isinstance(thinking, dict):
+        return False
+    return str(thinking.get("type", "enabled") or "enabled").strip().lower() != "disabled"
+
+
+def prepare_llm_request_payload(
+    payload: dict[str, Any],
+    *,
+    base_url: str = "",
+    provider: str = "",
+) -> dict[str, Any]:
+    """Normalize provider-specific fields before logging and sending a request.
+
+    Storage keeps full thinking substeps for the UI.  The API request must obey
+    model-specific rules: deepseek-reasoner rejects any historical
+    reasoning_content, while DeepSeek V4 thinking requires reasoning_content
+    on assistant messages that contain tool_calls.
+    """
+    safe = _json_safe(payload)
+    if not isinstance(safe, dict):
+        return {}
+    out = json.loads(json.dumps(safe, ensure_ascii=False))
+    messages = out.get("messages")
+    if not isinstance(messages, list):
+        return out
+
+    model = out.get("model", "")
+    is_deepseek = _is_deepseek_request(out, base_url=base_url, provider=provider)
+    is_reasoner = is_deepseek and _is_deepseek_reasoner_model(model)
+    thinking_enabled = is_deepseek and _payload_thinking_enabled(out)
+
+    for msg in messages:
+        if not isinstance(msg, dict):
+            continue
+        if is_reasoner or not thinking_enabled:
+            msg.pop("reasoning_content", None)
+            continue
+
+        role = str(msg.get("role", "") or "")
+        if role != "assistant":
+            msg.pop("reasoning_content", None)
+            continue
+
+        has_tool_calls = isinstance(msg.get("tool_calls"), list) and bool(msg.get("tool_calls"))
+        if has_tool_calls:
+            msg.setdefault("reasoning_content", "")
+        else:
+            msg.pop("reasoning_content", None)
+
+    return out
 
 
 def _usage_to_dict(usage: Any) -> dict[str, Any]:
@@ -378,15 +538,17 @@ def _normalize_tool_call(*, call_id, call_type, function_name, function_argument
     }
 
 
-def _tool_call_preview(call: dict, *, fallback_id: str) -> dict:
+def _tool_call_preview(call: dict, *, fallback_id: str, user_perm: int = 0) -> dict:
     if not isinstance(call, dict):
         call = {}
     fn = call.get("function", {}) if isinstance(call.get("function"), dict) else {}
     name = str(fn.get("name", "") or "")
     args = _parse_args(fn.get("arguments", ""))
     model_id = str(call.get("id", "") or fallback_id)
+    display_name = _display_tool_name(user_perm, name)
     return {
-        "agent_tool": name,
+        "agent_tool": display_name,
+        "mcp_alias": name,
         "tool_call_id": model_id,
         "arguments": args,
     }
@@ -539,7 +701,7 @@ def _detect_dsml_tool_calls(content: str, *, prefix: str) -> list[dict]:
         fn = html.unescape(name).strip()
         if not fn:
             continue
-        if tool_registry.find_tool(fn) is None:
+        if tool_registry.find_tool(fn) is None and tool_registry.find_any_mcp_tool_alias(fn) is None:
             continue
 
         result.append({
@@ -556,10 +718,10 @@ def _detect_dsml_tool_calls(content: str, *, prefix: str) -> list[dict]:
     return result
 
 
-def _build_tool_limit_fallback(tool_trace: list[dict]) -> str:
+def _build_tool_limit_request_summary(tool_trace: list[dict]) -> str:
     if not tool_trace:
-        return "Maximum tool call iterations reached. Provide your best answer based on the results obtained so far."
-    lines = ["Maximum tool call iterations reached. Summarize the results and provide a final answer."]
+        return "No executed tool results are available yet."
+    lines = ["Executed tool results available to summarize:"]
     for idx, step in enumerate(tool_trace[-4:], start=1):
         name = step.get("agent_tool", "unknown_tool")
         result = step.get("result")
@@ -584,6 +746,31 @@ def _build_tool_limit_fallback(tool_trace: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _build_tool_limit_fallback(tool_trace: list[dict]) -> str:
+    count = len(tool_trace) if isinstance(tool_trace, list) else 0
+    if count > 0:
+        return f"本轮工具调用已达到上限，已停止继续调用工具。已完成 {count} 个工具调用，请基于当前结果继续。"
+    return "本轮工具调用已达到上限，已停止继续调用工具。"
+
+
+def _looks_like_tool_limit_internal_text(content: str) -> bool:
+    text = str(content or "")
+    lower = text.lower()
+    return (
+        "maximum tool call iterations reached" in lower
+        or "configured maximum tool-call iterations" in lower
+        or "do not call any more tools. summarize" in lower
+        or "executed tool results available to summarize" in lower
+    )
+
+
+def _finalize_tool_limit_reply(content: str, tool_trace: list[dict]) -> str:
+    clean = strip_tool_protocol_artifacts(str(content or "")).strip()
+    if not clean or _looks_like_tool_limit_internal_text(clean):
+        return _build_tool_limit_fallback(tool_trace)
+    return clean
+
+
 def _build_tool_limit_system_message(tool_trace: list[dict]) -> dict[str, str]:
     return {
         "role": "system",
@@ -592,7 +779,7 @@ def _build_tool_limit_system_message(tool_trace: list[dict]) -> dict[str, str]:
             "Do not call any more tools. Summarize the actual tool results already available "
             "and provide the best final answer. If the task cannot be completed with the "
             "available results, state the limitation clearly.\n\n"
-            + _build_tool_limit_fallback(tool_trace)
+            + _build_tool_limit_request_summary(tool_trace)
         ),
     }
 
@@ -662,10 +849,11 @@ class LLMClient:
     """
 
     def __init__(self, api_key: str = None, base_url: str = None, model: str = None,
-                 request_params: dict[str, Any] | None = None) -> None:
+                 request_params: dict[str, Any] | None = None, provider: str = "deepseek") -> None:
         self.api_key = api_key or os.getenv("DEEPSEEK_API_KEY")
         self.base_url = base_url or os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
         self.model = model or os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
+        self.provider = str(provider or "deepseek").strip().lower() or "deepseek"
         if not self.api_key:
             raise ValueError("缺少 DEEPSEEK_API_KEY，请在 .env 中配置")
         self._client = OpenAI(api_key=self.api_key, base_url=self.base_url)
@@ -756,15 +944,25 @@ class LLMClient:
             payload.setdefault("extra_body", dict(self._extra_body))
         return payload
 
+    def _prepare_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return prepare_llm_request_payload(payload, base_url=self.base_url, provider=self.provider)
+
+    def _supports_reasoning_echo(self) -> bool:
+        return (
+            _is_deepseek_request({"model": self.model}, base_url=self.base_url, provider=self.provider)
+            and _payload_thinking_enabled({"extra_body": self._extra_body})
+            and not _is_deepseek_reasoner_model(self.model)
+        )
+
     def chat(self, messages: list[dict], temperature: float | None = None) -> str:
         effective_temperature = self._effective_temperature(temperature)
         audit_event("SYSTEM_EXECUTE", "ai", "LLMClient.chat", _THIS_FILE, "llm_chat_start",
                      extra={"model": self.model, "messages_count": len(messages), "temperature": effective_temperature})
         try:
-            payload = self._apply_request_params({
+            payload = self._prepare_payload(self._apply_request_params({
                 "model": self.model,
                 "messages": messages,
-            }, temperature=temperature)
+            }, temperature=temperature))
             _record_llm_request(payload, source="LLMClient.chat", stream=False)
             resp = self._client.chat.completions.create(**payload)
             record_llm_response_usage(getattr(resp, "usage", None))
@@ -785,19 +983,37 @@ class LLMClient:
         has_pending_confirmation = False
         for call in tool_calls:
             name = call["function"]["name"]
+            display_name = _display_tool_name(user_perm, name)
+            canonical_name = _canonical_tool_name(user_perm, name)
             args = _parse_args(call["function"].get("arguments", ""))
             model_id = call.get("id", "")
             event_id = audit_event("TOOL_EXECUTE", "ai", func, _THIS_FILE, f"tool_start tool={name}",
-                                    extra={"tool_name": name, "has_arguments": bool(args), "model_id": model_id})
+                                    extra={"tool_name": display_name, "mcp_alias": name, "has_arguments": bool(args), "model_id": model_id})
             call_id = f"tc_{event_id:010d}"
             _bind_tool_skip_alias(session_id, model_id, call_id)
+            if _is_plan_mode_request(msgs) and not _plan_mode_allows_tool(canonical_name):
+                raw, blocked_step = _build_plan_mode_blocked_tool_result(display_name, call_id, model_id, args)
+                trace.append(blocked_step)
+                steps.append(blocked_step)
+                msgs.append(_tool_result_message(model_id, name, raw))
+                audit_event("TOOL_EXECUTE", "ai", func, _THIS_FILE, f"tool_blocked_plan_mode tool={name}",
+                            extra={"tool_name": display_name, "mcp_alias": name, "call_id": call_id, "model_id": model_id})
+                continue
+            if canonical_name == "search_web" and not _web_search_enabled_for_request(msgs):
+                raw, blocked_step = _build_web_search_disabled_tool_result(display_name, call_id, model_id, args)
+                trace.append(blocked_step)
+                steps.append(blocked_step)
+                msgs.append(_tool_result_message(model_id, name, raw))
+                audit_event("TOOL_EXECUTE", "ai", func, _THIS_FILE, f"tool_blocked_web_search_disabled tool={name}",
+                            extra={"tool_name": display_name, "mcp_alias": name, "call_id": call_id, "model_id": model_id})
+                continue
             if _consume_tool_skip(session_id, model_id, call_id):
-                raw, skipped_step = _build_skipped_tool_result(name, call_id, model_id, args)
+                raw, skipped_step = _build_skipped_tool_result(display_name, call_id, model_id, args)
                 trace.append(skipped_step)
                 steps.append(skipped_step)
                 msgs.append(_tool_result_message(model_id, name, raw))
                 continue
-            raw = tool_registry.run_agent_tool(name, user_perm, args, call_id=call_id)
+            raw = tool_registry.run_mcp_agent_tool(name, user_perm, args, call_id=call_id)
             parsed = _parse_json(raw)
 
             user_safe = parsed
@@ -821,13 +1037,13 @@ class LLMClient:
             if _result_has_pending_confirmation(user_safe):
                 has_pending_confirmation = True
 
-            trace.append({"agent_tool": name, "call_id": call_id, "tool_call_id": model_id,
+            trace.append({"agent_tool": display_name, "mcp_alias": name, "call_id": call_id, "tool_call_id": model_id,
                           "arguments": args, "result": user_safe, "raw_result": raw})
-            steps.append({"agent_tool": name, "call_id": call_id, "tool_call_id": model_id,
+            steps.append({"agent_tool": display_name, "mcp_alias": name, "call_id": call_id, "tool_call_id": model_id,
                           "arguments": args, "result": user_safe, "raw_result": raw})
             msgs.append(_tool_result_message(model_id, name, model_content))
             audit_event("TOOL_EXECUTE", "ai", func, _THIS_FILE, f"tool_done tool={name}",
-                         extra={"tool_name": name, "ok": True, "call_id": call_id})
+                         extra={"tool_name": display_name, "mcp_alias": name, "ok": True, "call_id": call_id})
         return steps, has_pending_confirmation
 
     def _run_tools_iter(
@@ -856,38 +1072,56 @@ class LLMClient:
                     if stop_worker.is_set():
                         break
                     name = call["function"]["name"]
+                    display_name = _display_tool_name(user_perm, name)
+                    canonical_name = _canonical_tool_name(user_perm, name)
                     args = _parse_args(call["function"].get("arguments", ""))
                     model_id = call.get("id", "")
                     with state_lock:
-                        current.update({"name": name, "tool_call_id": model_id, "call_id": "", "arguments": args})
+                        current.update({"name": display_name, "mcp_alias": name, "tool_call_id": model_id, "call_id": "", "arguments": args})
                     event_id = audit_event("TOOL_EXECUTE", "ai", func, _THIS_FILE, f"tool_start tool={name}",
-                                            extra={"tool_name": name, "has_arguments": bool(args), "model_id": model_id})
+                                            extra={"tool_name": display_name, "mcp_alias": name, "has_arguments": bool(args), "model_id": model_id})
                     call_id = f"tc_{event_id:010d}"
                     with state_lock:
                         current["call_id"] = call_id
                     _bind_tool_skip_alias(session_id, model_id, call_id)
+                    if _is_plan_mode_request(msgs) and not _plan_mode_allows_tool(canonical_name):
+                        raw, blocked_step = _build_plan_mode_blocked_tool_result(display_name, call_id, model_id, args)
+                        trace.append(blocked_step)
+                        steps.append(blocked_step)
+                        msgs.append(_tool_result_message(model_id, name, raw))
+                        audit_event("TOOL_EXECUTE", "ai", func, _THIS_FILE, f"tool_blocked_plan_mode tool={name}",
+                                    extra={"tool_name": display_name, "mcp_alias": name, "call_id": call_id, "model_id": model_id})
+                        continue
+                    if canonical_name == "search_web" and not _web_search_enabled_for_request(msgs):
+                        raw, blocked_step = _build_web_search_disabled_tool_result(display_name, call_id, model_id, args)
+                        trace.append(blocked_step)
+                        steps.append(blocked_step)
+                        msgs.append(_tool_result_message(model_id, name, raw))
+                        audit_event("TOOL_EXECUTE", "ai", func, _THIS_FILE, f"tool_blocked_web_search_disabled tool={name}",
+                                    extra={"tool_name": display_name, "mcp_alias": name, "call_id": call_id, "model_id": model_id})
+                        continue
                     if _consume_tool_skip(session_id, model_id, call_id):
-                        raw, skipped_step = _build_skipped_tool_result(name, call_id, model_id, args)
+                        raw, skipped_step = _build_skipped_tool_result(display_name, call_id, model_id, args)
                         trace.append(skipped_step)
                         steps.append(skipped_step)
                         msgs.append(_tool_result_message(model_id, name, raw))
                         audit_event("TOOL_EXECUTE", "ai", func, _THIS_FILE, f"tool_skipped_before_run tool={name}",
-                                    extra={"tool_name": name, "call_id": call_id, "model_id": model_id})
+                                    extra={"tool_name": display_name, "mcp_alias": name, "call_id": call_id, "model_id": model_id})
                         continue
-                    raw = tool_registry.run_agent_tool(name, user_perm, args, call_id=call_id)
+                    raw = tool_registry.run_mcp_agent_tool(name, user_perm, args, call_id=call_id)
                     with state_lock:
                         is_abandoned = (model_id, call_id) in abandoned
                     if is_abandoned:
                         audit_event("TOOL_EXECUTE", "ai", func, _THIS_FILE, f"tool_result_abandoned_after_skip tool={name}",
-                                    extra={"tool_name": name, "call_id": call_id, "model_id": model_id})
+                                    extra={"tool_name": display_name, "mcp_alias": name, "call_id": call_id, "model_id": model_id})
                         break
                     if _consume_tool_skip(session_id, model_id, call_id):
-                        raw, skipped_step = _build_skipped_tool_result(name, call_id, model_id, args)
+                        raw, skipped_step = _build_skipped_tool_result(display_name, call_id, model_id, args)
                         trace.append(skipped_step)
                         steps.append(skipped_step)
                         msgs.append(_tool_result_message(model_id, name, raw))
                         audit_event("TOOL_EXECUTE", "ai", func, _THIS_FILE, f"tool_skipped_after_run tool={name}",
-                                    extra={"tool_name": name, "call_id": call_id, "model_id": model_id})
+                                    extra={"tool_name": display_name, "mcp_alias": name, "call_id": call_id, "model_id": model_id})
                         continue
                     parsed = _parse_json(raw)
 
@@ -912,13 +1146,13 @@ class LLMClient:
                     if _result_has_pending_confirmation(user_safe):
                         has_pending_confirmation = True
 
-                    trace.append({"agent_tool": name, "call_id": call_id, "tool_call_id": model_id,
+                    trace.append({"agent_tool": display_name, "mcp_alias": name, "call_id": call_id, "tool_call_id": model_id,
                                   "arguments": args, "result": user_safe, "raw_result": raw})
-                    steps.append({"agent_tool": name, "call_id": call_id, "tool_call_id": model_id,
+                    steps.append({"agent_tool": display_name, "mcp_alias": name, "call_id": call_id, "tool_call_id": model_id,
                                   "arguments": args, "result": user_safe, "raw_result": raw})
                     msgs.append(_tool_result_message(model_id, name, model_content))
                     audit_event("TOOL_EXECUTE", "ai", func, _THIS_FILE, f"tool_done tool={name}",
-                                extra={"tool_name": name, "ok": True, "call_id": call_id})
+                                extra={"tool_name": display_name, "mcp_alias": name, "ok": True, "call_id": call_id})
                 with state_lock:
                     current.clear()
                 if not stop_worker.is_set():
@@ -950,6 +1184,7 @@ class LLMClient:
                 )
                 if cur["skip_requested"]:
                     name = str(cur.get("name", "") or "unknown")
+                    alias = str(cur.get("mcp_alias", "") or name)
                     model_id = str(cur.get("tool_call_id", "") or "")
                     call_id = str(cur.get("call_id", "") or "")
                     args = cur.get("arguments") if isinstance(cur.get("arguments"), dict) else {}
@@ -965,9 +1200,9 @@ class LLMClient:
                     except Exception:
                         pass
                     trace.append(skipped_step)
-                    msgs.append(_tool_result_message(model_id, name, raw))
+                    msgs.append(_tool_result_message(model_id, alias, raw))
                     audit_event("TOOL_EXECUTE", "ai", func, _THIS_FILE, f"tool_skipped_during_run tool={name}",
-                                extra={"tool_name": name, "call_id": call_id, "model_id": model_id})
+                                extra={"tool_name": name, "mcp_alias": alias, "call_id": call_id, "model_id": model_id})
                     yield {
                         "type": "tool_result",
                         "steps": [skipped_step],
@@ -994,18 +1229,18 @@ class LLMClient:
                            func: str, *, session_id: str = "") -> tuple[str, list[dict], int, list[dict]]:
         """核心工具调用循环（同步与流式共用）。"""
         msgs = [m.copy() for m in messages]
-        tools = tool_registry.build_agent_tool_schemas(user_perm)
+        tools = tool_registry.build_mcp_tool_schemas(user_perm)
         steps = 0
         trace = []
         max_tool_steps = self._effective_max_tool_steps(max_tool_steps)
 
         while True:
-            payload = self._apply_request_params({
+            payload = self._prepare_payload(self._apply_request_params({
                 "model": self.model,
                 "tools": tools,
                 "tool_choice": self._tool_choice_for_request(force_finalize=False),
                 "messages": msgs,
-            }, temperature=temperature)
+            }, temperature=temperature))
             _record_llm_request(payload, source=func, stream=stream)
             resp = self._client.chat.completions.create(**payload)
             record_llm_response_usage(getattr(resp, "usage", None))
@@ -1033,26 +1268,26 @@ class LLMClient:
 
             if steps >= max_tool_steps:
                 msgs.append(_build_tool_limit_system_message(trace))
-                final_payload = self._apply_request_params({
+                final_payload = self._prepare_payload(self._apply_request_params({
                     "model": self.model,
                     "tools": tools,
                     "tool_choice": self._tool_choice_for_request(force_finalize=True),
                     "messages": msgs,
-                }, temperature=temperature)
+                }, temperature=temperature))
                 _record_llm_request(final_payload, source=f"{func}.tool_limit_finalize", stream=stream)
                 final_resp = self._client.chat.completions.create(**final_payload)
                 record_llm_response_usage(getattr(final_resp, "usage", None))
                 final_msg = final_resp.choices[0].message
                 final_rc = _concat_reasoning(getattr(final_msg, "reasoning_content", None))
-                final_content = strip_tool_protocol_artifacts(final_msg.content or "")
-                if not final_content:
-                    final_content = _build_tool_limit_fallback(trace)
+                final_content = _finalize_tool_limit_reply(final_msg.content or "", trace)
                 msg_out = _attach_reasoning({"role": "assistant", "content": final_content}, final_rc)
                 msgs.append(msg_out)
                 return final_content, msgs[base_len:], steps, trace
 
             msg_out = _attach_reasoning(
                 {"role": "assistant", "content": content_for_history, "tool_calls": calls}, rc)
+            if self._supports_reasoning_echo():
+                msg_out.setdefault("reasoning_content", "")
             msgs.append(msg_out)
             step_trace, has_pending_confirmation = self._run_tools(
                 calls,
@@ -1091,7 +1326,7 @@ class LLMClient:
                                session_id: str = "") -> Iterator[dict]:
         """流式对话（支持工具调用循环），自动纠正模型假调用。"""
         msgs = [m.copy() for m in messages]
-        tools = tool_registry.build_agent_tool_schemas(user_perm)
+        tools = tool_registry.build_mcp_tool_schemas(user_perm)
         base_len = len(msgs)
         steps = 0
         trace = []
@@ -1102,13 +1337,13 @@ class LLMClient:
 
         while True:
             try:
-                payload = self._apply_request_params({
+                payload = self._prepare_payload(self._apply_request_params({
                     "model": self.model,
                     "tools": tools,
                     "tool_choice": self._tool_choice_for_request(force_finalize=False),
                     "messages": msgs,
                     "stream": True,
-                }, temperature=temperature)
+                }, temperature=temperature))
                 _record_llm_request(payload, source="LLMClient.stream_chat_with_tools", stream=True)
                 stream = self._client.chat.completions.create(**payload)
             except Exception as e:
@@ -1203,20 +1438,18 @@ class LLMClient:
                 if stream_visible_sent < len(content):
                     yield {"type": "replace_segment", "content": content_for_history}
                 msgs.append(_build_tool_limit_system_message(trace))
-                final_payload = self._apply_request_params({
+                final_payload = self._prepare_payload(self._apply_request_params({
                     "model": self.model,
                     "tools": tools,
                     "tool_choice": self._tool_choice_for_request(force_finalize=True),
                     "messages": msgs,
-                }, temperature=temperature)
+                }, temperature=temperature))
                 _record_llm_request(final_payload, source="LLMClient.stream_chat_with_tools.tool_limit_finalize", stream=False)
                 final_resp = self._client.chat.completions.create(**final_payload)
                 record_llm_response_usage(getattr(final_resp, "usage", None))
                 final_msg = final_resp.choices[0].message
                 final_rc = _concat_reasoning(getattr(final_msg, "reasoning_content", None))
-                final_content = strip_tool_protocol_artifacts(final_msg.content or "")
-                if not final_content:
-                    final_content = _build_tool_limit_fallback(trace)
+                final_content = _finalize_tool_limit_reply(final_msg.content or "", trace)
                 msg_out = _attach_reasoning({"role": "assistant", "content": final_content}, final_rc)
                 msgs.append(msg_out)
                 yield {"type": "delta", "content": final_content}
@@ -1235,12 +1468,14 @@ class LLMClient:
             yield {
                 "type": "tool_call_start",
                 "calls": [
-                    _tool_call_preview(call, fallback_id=f"call_{steps}_{idx}")
+                    _tool_call_preview(call, fallback_id=f"call_{steps}_{idx}", user_perm=user_perm)
                     for idx, call in enumerate(calls)
                 ],
             }
             msg_out = _attach_reasoning(
                 {"role": "assistant", "content": content_for_history, "tool_calls": calls}, rc)
+            if self._supports_reasoning_echo():
+                msg_out.setdefault("reasoning_content", "")
             msgs.append(msg_out)
             step_trace = []
             has_pending_confirmation = False

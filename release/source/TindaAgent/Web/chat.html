@@ -114,6 +114,7 @@
     }
     [data-theme="dark"] .time-btn,
     [data-theme="dark"] .file-btn,
+    [data-theme="dark"] .deep-btn,
     [data-theme="dark"] .time-custom input {
       background: var(--ios-glass-strong);
       border-color: var(--border);
@@ -124,6 +125,8 @@
     }
     [data-theme="dark"] .time-btn.on,
     [data-theme="dark"] .time-btn:hover,
+    [data-theme="dark"] .deep-btn.on,
+    [data-theme="dark"] .deep-btn:hover,
     [data-theme="dark"] .file-btn:hover {
       background: rgba(216, 92, 149, 0.12);
       border-color: var(--border-strong);
@@ -317,6 +320,7 @@
     [data-theme="dark"] .model-btn.on,
     [data-theme="dark"] .model-item.active,
     [data-theme="dark"] .time-btn.on,
+    [data-theme="dark"] .deep-btn.on,
     [data-theme="dark"] .file-btn.has-file,
     [data-theme="dark"] .account-item.active {
       background: rgba(216, 92, 149, 0.18);
@@ -373,6 +377,7 @@
     }
     [data-theme="dark"] #sendBtn:hover:not(:disabled),
     [data-theme="dark"] .file-btn:hover,
+    [data-theme="dark"] .deep-btn:hover,
     [data-theme="dark"] .time-btn:hover {
       box-shadow:
         0 12px 28px rgba(0, 0, 0, 0.26),
@@ -1165,7 +1170,7 @@
     #messages {
       max-width: 780px;
       margin: 0 auto;
-      padding: 28px 20px 144px;
+      padding: 28px 20px var(--composer-bottom-space, 176px);
       display: flex;
       flex-direction: column;
       gap: 14px;
@@ -1422,6 +1427,499 @@
       border-color: rgba(255, 110, 180, 0.42);
     }
 
+    .deep-align-row {
+      display: flex;
+      justify-content: center;
+      margin: 10px 0 14px;
+      animation: messageIn 0.28s var(--ease-smooth) both;
+    }
+    .deep-align-card {
+      width: min(760px, calc(100% - 24px));
+      border: 1.5px solid rgba(255, 110, 180, 0.22);
+      border-radius: 18px;
+      background: rgba(255, 255, 255, 0.58);
+      color: var(--text);
+      box-shadow:
+        0 16px 42px rgba(120, 55, 82, 0.10),
+        inset 1px 1px 0 rgba(255, 255, 255, 0.54);
+      backdrop-filter: blur(24px) saturate(155%);
+      -webkit-backdrop-filter: blur(24px) saturate(155%);
+      overflow: hidden;
+      transition: width 0.24s var(--ease-smooth), opacity 0.24s var(--ease-smooth), transform 0.24s var(--ease-smooth);
+    }
+    .deep-align-card.collapsed {
+      width: min(360px, calc(100% - 42px));
+      opacity: 0.86;
+    }
+    .deep-align-card.readonly .deep-align-head {
+      cursor: pointer;
+    }
+    .deep-align-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 10px 14px 8px;
+      border-bottom: 1px solid rgba(255, 110, 180, 0.12);
+    }
+    .deep-align-title {
+      font-size: 12px;
+      font-weight: 800;
+      color: var(--accent-deep);
+      letter-spacing: 0.04em;
+    }
+    .deep-align-round {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 11px;
+      color: var(--text-faint);
+      white-space: nowrap;
+    }
+    .deep-align-page-btn {
+      width: 18px;
+      height: 18px;
+      display: inline-grid;
+      place-items: center;
+      border: 1px solid rgba(255, 110, 180, 0.18);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.38);
+      color: var(--accent-deep);
+      font-size: 11px;
+      line-height: 1;
+      cursor: pointer;
+      transition: transform 0.16s var(--ease-smooth), background 0.16s var(--ease-smooth), opacity 0.16s var(--ease-smooth);
+    }
+    .deep-align-page-btn:hover:not(:disabled) {
+      transform: translateY(-1px);
+      background: rgba(255, 110, 180, 0.13);
+    }
+    .deep-align-page-btn:disabled {
+      opacity: 0.36;
+      cursor: default;
+    }
+    .deep-align-body {
+      padding: 12px 14px 10px;
+      font-size: 13.5px;
+      line-height: 1.68;
+      color: var(--text-dim);
+    }
+    .deep-align-body p { margin: 0.35em 0; }
+    .deep-align-body blockquote { margin: 0; }
+    .deep-align-card.collapsed .deep-align-body,
+    .deep-align-card.collapsed .deep-align-actions,
+    .deep-align-card.readonly .deep-align-actions {
+      display: none;
+    }
+    .deep-align-card.collapsed .deep-align-head {
+      padding: 9px 12px;
+      border-bottom: 0;
+    }
+    .deep-align-card.collapsed .deep-align-title {
+      font-size: 11.5px;
+    }
+    .deep-align-actions {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+      padding: 0 14px 14px;
+    }
+    .deep-align-actions button {
+      min-height: 28px;
+      padding: 4px 12px;
+      border-radius: 999px;
+      border: 1px solid rgba(255, 110, 180, 0.24);
+      background: rgba(255, 110, 180, 0.10);
+      color: var(--accent-deep);
+      font-size: 12px;
+      font-family: inherit;
+      font-weight: 800;
+      cursor: pointer;
+      transition: transform 0.16s var(--ease-smooth), background 0.16s var(--ease-smooth), border-color 0.16s var(--ease-smooth);
+    }
+    .deep-align-actions button:hover:not(:disabled) {
+      transform: translateY(-1px);
+      background: rgba(255, 110, 180, 0.16);
+      border-color: rgba(255, 110, 180, 0.42);
+    }
+    .deep-align-actions button:disabled {
+      opacity: 0.42;
+      cursor: not-allowed;
+      transform: none;
+    }
+    .deep-align-actions .deep-primary {
+      background: rgba(255, 110, 180, 0.18);
+      border-color: rgba(255, 110, 180, 0.38);
+    }
+    .deep-align-revision {
+      display: none;
+      width: 100%;
+      gap: 8px;
+      align-items: center;
+      padding-top: 2px;
+    }
+    .deep-align-card.revising .deep-align-revision {
+      display: flex;
+    }
+    .deep-align-revision textarea {
+      flex: 1;
+      min-height: 34px;
+      max-height: 96px;
+      resize: vertical;
+      border: 1px solid rgba(255, 110, 180, 0.18);
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.54);
+      color: var(--text);
+      font-family: inherit;
+      font-size: 13px;
+      line-height: 1.55;
+      padding: 8px 10px;
+      outline: none;
+    }
+    [data-theme="dark"] .deep-align-card {
+      background: rgba(25, 19, 27, 0.78);
+      border-color: rgba(255, 176, 211, 0.14);
+      box-shadow: 0 14px 34px rgba(0, 0, 0, 0.24), inset 0 1px 0 rgba(168, 189, 255, 0.028);
+    }
+    [data-theme="dark"] .deep-align-head {
+      border-bottom-color: rgba(255, 176, 211, 0.10);
+    }
+    [data-theme="dark"] .deep-align-title,
+    [data-theme="dark"] .deep-align-actions button {
+      color: #ffadc9;
+    }
+    [data-theme="dark"] .deep-align-actions button {
+      background: rgba(216, 92, 149, 0.12);
+      border-color: rgba(255, 137, 190, 0.18);
+    }
+    [data-theme="dark"] .deep-align-page-btn {
+      background: rgba(255, 176, 211, 0.08);
+      border-color: rgba(255, 176, 211, 0.14);
+      color: #ffadc9;
+    }
+    [data-theme="dark"] .deep-align-revision textarea {
+      background: rgba(16, 12, 18, 0.70);
+      border-color: rgba(255, 176, 211, 0.12);
+      color: var(--text);
+    }
+    .deep-ask-panel {
+      display: none;
+      margin: 0 14px 14px;
+      padding: 12px;
+      border: 1px solid rgba(255, 110, 180, 0.16);
+      border-radius: 16px;
+      background: rgba(255, 255, 255, 0.42);
+      box-shadow: inset 1px 1px 0 rgba(255, 255, 255, 0.34);
+    }
+    .deep-align-card.asking .deep-ask-panel {
+      display: block;
+    }
+    .deep-ask-question {
+      margin: 0 0 10px;
+      color: var(--text-dim);
+      font-size: 13px;
+      font-weight: 800;
+      line-height: 1.55;
+    }
+    .deep-ask-options {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    .deep-ask-option {
+      border: 1px solid rgba(236, 72, 153, 0.20);
+      background: rgba(255, 255, 255, 0.50);
+      color: var(--text);
+      border-radius: 999px;
+      padding: 7px 12px;
+      font: inherit;
+      font-size: 12px;
+      font-weight: 800;
+      cursor: pointer;
+      transition: transform 0.16s ease, border-color 0.16s ease, background 0.16s ease;
+    }
+    .deep-ask-option:hover,
+    .deep-ask-option.selected {
+      transform: translateY(-1px);
+      border-color: rgba(219, 39, 119, 0.50);
+      background: rgba(255, 241, 247, 0.82);
+    }
+    .deep-ask-input {
+      width: 100%;
+      min-height: 62px;
+      resize: vertical;
+      border: 1px solid rgba(236, 72, 153, 0.18);
+      border-radius: 14px;
+      padding: 9px 10px;
+      font: inherit;
+      font-size: 13px;
+      line-height: 1.55;
+      color: var(--text);
+      background: rgba(255, 255, 255, 0.56);
+      outline: none;
+    }
+    .deep-ask-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .deep-ask-actions button {
+      min-height: 28px;
+      padding: 4px 12px;
+      border-radius: 999px;
+      border: 1px solid rgba(255, 110, 180, 0.22);
+      background: rgba(255, 110, 180, 0.10);
+      color: var(--accent-deep);
+      font: inherit;
+      font-size: 12px;
+      font-weight: 800;
+      cursor: pointer;
+    }
+    .deep-ask-actions .deep-ask-submit {
+      background: rgba(255, 110, 180, 0.18);
+      border-color: rgba(255, 110, 180, 0.38);
+    }
+    [data-theme="dark"] .deep-ask-panel {
+      background: rgba(255, 176, 211, 0.06);
+      border-color: rgba(255, 176, 211, 0.12);
+      box-shadow: inset 0 1px 0 rgba(168, 189, 255, 0.028);
+    }
+    [data-theme="dark"] .deep-ask-option,
+    [data-theme="dark"] .deep-ask-input {
+      background: rgba(255, 255, 255, 0.08);
+      border-color: rgba(255, 149, 200, 0.18);
+      color: var(--text);
+    }
+    [data-theme="dark"] .deep-ask-actions button {
+      color: #ffadc9;
+      background: rgba(216, 92, 149, 0.12);
+      border-color: rgba(255, 137, 190, 0.18);
+    }
+
+    .plan-float {
+      position: fixed;
+      right: 26px;
+      top: 92px;
+      z-index: 65;
+      width: min(420px, calc(100vw - 32px));
+      max-height: min(72vh, 620px);
+      display: none;
+      flex-direction: column;
+      border: 1px solid rgba(255, 110, 180, 0.18);
+      border-radius: 24px;
+      background: rgba(255, 255, 255, 0.62);
+      color: var(--text);
+      box-shadow:
+        0 26px 72px rgba(120, 55, 82, 0.16),
+        inset 1px 1px 0 rgba(255, 255, 255, 0.56);
+      backdrop-filter: blur(28px) saturate(165%);
+      -webkit-backdrop-filter: blur(28px) saturate(165%);
+      overflow: hidden;
+      opacity: 0;
+      transform: translateY(16px) scale(0.97);
+      transition: opacity 0.28s var(--ease-out-terminal), transform 0.34s var(--ease-spring), width 0.24s var(--ease-smooth), max-height 0.24s var(--ease-smooth);
+    }
+    .plan-float.show {
+      display: flex;
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+    .plan-float.collapsed {
+      width: min(300px, calc(100vw - 32px));
+      max-height: 52px;
+    }
+    .plan-float.dragging {
+      transition: none;
+      user-select: none;
+    }
+    .plan-float-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      min-height: 50px;
+      padding: 11px 13px 10px 15px;
+      border-bottom: 1px solid rgba(255, 110, 180, 0.12);
+      cursor: grab;
+    }
+    .plan-float.dragging .plan-float-head {
+      cursor: grabbing;
+    }
+    .plan-float-title {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
+    }
+    .plan-float-title strong {
+      font-size: 12px;
+      font-weight: 900;
+      color: var(--accent-deep);
+      letter-spacing: 0.05em;
+    }
+    .plan-float-title span {
+      font-size: 11px;
+      color: var(--text-faint);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 260px;
+    }
+    .plan-float-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+    .plan-float-actions button {
+      width: 24px;
+      height: 24px;
+      display: inline-grid;
+      place-items: center;
+      border: 1px solid rgba(255, 110, 180, 0.20);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.40);
+      color: var(--accent-deep);
+      font-family: inherit;
+      font-weight: 900;
+      cursor: pointer;
+      transition: transform 0.16s var(--ease-smooth), background 0.16s var(--ease-smooth), opacity 0.16s var(--ease-smooth);
+    }
+    .plan-float-actions button:hover {
+      transform: translateY(-1px);
+      background: rgba(255, 110, 180, 0.14);
+    }
+    .plan-float-body {
+      padding: 13px 15px 15px;
+      overflow: auto;
+      font-size: 13px;
+      line-height: 1.62;
+    }
+    .plan-float.collapsed .plan-float-body {
+      display: none;
+    }
+    .plan-goal {
+      margin: 0 0 10px;
+      color: var(--text-dim);
+    }
+    .plan-state {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      width: fit-content;
+      margin: 0 0 10px;
+      padding: 5px 9px;
+      border: 1px solid rgba(255, 110, 180, 0.18);
+      border-radius: 999px;
+      background: rgba(255, 110, 180, 0.10);
+      color: var(--accent-deep);
+      font-size: 11px;
+      font-weight: 900;
+    }
+    .plan-state.complete {
+      background: rgba(80, 180, 130, 0.12);
+      border-color: rgba(80, 180, 130, 0.22);
+      color: #257a55;
+    }
+    .plan-state.confirm {
+      background: rgba(255, 172, 64, 0.14);
+      border-color: rgba(255, 172, 64, 0.26);
+      color: #9a5b13;
+    }
+    .plan-steps {
+      display: grid;
+      gap: 8px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+    .plan-step {
+      display: grid;
+      grid-template-columns: 24px 1fr;
+      gap: 8px;
+      align-items: start;
+      color: var(--text-dim);
+    }
+    .plan-step-index {
+      width: 22px;
+      height: 22px;
+      display: inline-grid;
+      place-items: center;
+      border-radius: 999px;
+      background: rgba(255, 110, 180, 0.12);
+      color: var(--accent-deep);
+      font-size: 11px;
+      font-weight: 900;
+    }
+    .plan-notes {
+      margin-top: 12px;
+      padding-top: 10px;
+      border-top: 1px solid rgba(255, 110, 180, 0.12);
+      color: var(--text-faint);
+    }
+    .plan-completion-note {
+      margin-top: 12px;
+      padding: 9px 10px;
+      border: 1px solid rgba(255, 110, 180, 0.12);
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.32);
+      color: var(--text-dim);
+      font-size: 12px;
+    }
+    [data-theme="dark"] .plan-float {
+      background: rgba(25, 19, 27, 0.82);
+      border-color: rgba(255, 176, 211, 0.14);
+      box-shadow: 0 26px 70px rgba(0, 0, 0, 0.32), inset 0 1px 0 rgba(168, 189, 255, 0.035);
+    }
+    [data-theme="dark"] .plan-float-head,
+    [data-theme="dark"] .plan-notes {
+      border-color: rgba(255, 176, 211, 0.10);
+    }
+    [data-theme="dark"] .plan-float-title strong,
+    [data-theme="dark"] .plan-float-actions button,
+    [data-theme="dark"] .plan-step-index {
+      color: #ffadc9;
+    }
+    [data-theme="dark"] .plan-state {
+      background: rgba(216, 92, 149, 0.13);
+      border-color: rgba(255, 137, 190, 0.18);
+      color: #ffadc9;
+    }
+    [data-theme="dark"] .plan-state.complete {
+      background: rgba(98, 190, 145, 0.12);
+      border-color: rgba(98, 190, 145, 0.22);
+      color: #9ad8b8;
+    }
+    [data-theme="dark"] .plan-state.confirm {
+      background: rgba(255, 172, 64, 0.12);
+      border-color: rgba(255, 172, 64, 0.22);
+      color: #e8b872;
+    }
+    [data-theme="dark"] .plan-completion-note {
+      background: rgba(255, 255, 255, 0.06);
+      border-color: rgba(255, 149, 200, 0.12);
+    }
+    [data-theme="dark"] .plan-float-actions button {
+      background: rgba(255, 176, 211, 0.08);
+      border-color: rgba(255, 176, 211, 0.14);
+    }
+    [data-theme="dark"] .plan-step-index {
+      background: rgba(216, 92, 149, 0.13);
+    }
+    @media (max-width: 720px) {
+      .plan-float {
+        right: 12px;
+        top: 78px;
+        width: calc(100vw - 24px);
+      }
+      .plan-float-title span {
+        max-width: 190px;
+      }
+    }
+
     /* System pill */
 	    .sys-notice {
       align-self: center;
@@ -1642,11 +2140,12 @@
       pointer-events: auto;
       background: var(--ios-glass);
       border: 1.5px solid var(--ios-border);
-      border-radius: 999px;
-      padding: 5px 5px 5px 20px;
+      border-radius: 28px;
+      padding: 12px;
       display: flex;
-	      align-items: center;
-      gap: 8px;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 7px;
       transition: border-color 0.24s ease, box-shadow 0.24s ease, transform 0.24s var(--ease-smooth);
       box-shadow:
         var(--ios-shadow),
@@ -1668,8 +2167,242 @@
 	      transform: translateY(-2px);
 	    }
 
+    .composer-input-row {
+      display: flex;
+      width: 100%;
+      min-height: 36px;
+    }
+
+    .composer-selected-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      min-height: 26px;
+      padding: 0 2px;
+      opacity: 1;
+      transform: translateY(0);
+      transition: opacity 0.2s var(--ease-smooth), min-height 0.22s var(--ease-smooth), transform 0.22s var(--ease-smooth);
+    }
+
+    .composer-selected-row.empty {
+      min-height: 0;
+      opacity: 0;
+      transform: translateY(-3px);
+      pointer-events: none;
+    }
+
+    .composer-chip {
+      height: 26px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 0 10px;
+      border: 1px solid rgba(255, 110, 180, 0.18);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.48);
+      color: var(--accent-deep);
+      font-size: 12px;
+      font-weight: 800;
+      line-height: 1;
+      box-shadow: inset 1px 1px 0 rgba(255, 255, 255, 0.42);
+      backdrop-filter: blur(14px) saturate(145%);
+      -webkit-backdrop-filter: blur(14px) saturate(145%);
+      cursor: default;
+    }
+
+    .composer-chip button {
+      border: 0;
+      background: transparent;
+      color: inherit;
+      width: 16px;
+      height: 16px;
+      border-radius: 999px;
+      display: inline-grid;
+      place-items: center;
+      padding: 0;
+      cursor: pointer;
+      font: inherit;
+      line-height: 1;
+      opacity: 0.68;
+    }
+
+    .composer-chip button:hover {
+      background: rgba(255, 110, 180, 0.14);
+      opacity: 1;
+    }
+
+    .composer-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .composer-left,
+    .composer-right {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .composer-left {
+      position: relative;
+    }
+
+    .composer-plus {
+      width: 36px;
+      height: 36px;
+      border: 1.5px solid var(--ios-border);
+      border-radius: 999px;
+      background: var(--ios-glass-strong);
+      color: var(--text-dim);
+      display: inline-grid;
+      place-items: center;
+      font-family: inherit;
+      font-size: 22px;
+      font-weight: 500;
+      line-height: 1;
+      cursor: pointer;
+      transition: transform 0.2s var(--ease-smooth), color 0.2s ease, border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
+      box-shadow:
+        0 8px 18px rgba(120, 55, 82, 0.06),
+        inset 1px 1px 0 rgba(255, 255, 255, 0.52);
+    }
+
+    .input-box.tools-open .composer-plus,
+    .composer-plus:hover {
+      color: var(--accent-deep);
+      border-color: rgba(255, 110, 180, 0.32);
+      background: rgba(255, 250, 253, 0.86);
+      transform: translateY(-1px);
+    }
+
+    .input-box.tools-open .composer-plus {
+      transform: rotate(45deg);
+    }
+
+    .composer-menu {
+      position: absolute;
+      left: 0;
+      bottom: calc(100% + 10px);
+      width: min(250px, calc(100vw - 44px));
+      padding: 8px;
+      border: 1px solid rgba(255, 110, 180, 0.18);
+      border-radius: 18px;
+      background: rgba(255, 255, 255, 0.76);
+      box-shadow:
+        0 18px 46px rgba(120, 55, 82, 0.16),
+        inset 1px 1px 0 rgba(255, 255, 255, 0.58);
+      backdrop-filter: blur(24px) saturate(160%);
+      -webkit-backdrop-filter: blur(24px) saturate(160%);
+      opacity: 0;
+      transform: translateY(8px) scale(0.97);
+      transform-origin: bottom left;
+      pointer-events: none;
+      transition: opacity 0.2s var(--ease-out-terminal), transform 0.24s var(--ease-out-terminal);
+      z-index: 30;
+    }
+
+    .input-box.tools-open .composer-menu {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+      pointer-events: auto;
+    }
+
+    .composer-tool,
+    .composer-menu .time-btn,
+    .composer-menu .deep-btn,
+    .composer-menu .file-btn {
+      width: 100%;
+      min-width: 0;
+      height: 36px;
+      justify-content: flex-start;
+      gap: 8px;
+      padding: 0 11px;
+      border-radius: 13px;
+      box-shadow: none;
+      font-size: 13px;
+    }
+
+    .composer-tool {
+      background: transparent;
+      color: var(--text-dim);
+      border: 1px solid transparent;
+      cursor: pointer;
+      font-family: inherit;
+      font-weight: 800;
+      display: flex;
+      align-items: center;
+      line-height: 1;
+      transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease, transform 0.18s var(--ease-smooth);
+    }
+
+    .composer-tool:hover,
+    .composer-tool.on,
+    .composer-menu .time-btn:hover,
+    .composer-menu .deep-btn:hover,
+    .composer-menu .file-btn:hover,
+    .composer-menu .deep-btn.on,
+    .composer-menu .file-btn.has-file {
+      color: var(--accent-deep);
+      border-color: rgba(255, 110, 180, 0.18);
+      background: rgba(255, 110, 180, 0.10);
+      transform: none;
+    }
+
+    .composer-tool svg {
+      width: 17px;
+      height: 17px;
+      stroke: currentColor;
+      fill: none;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      flex-shrink: 0;
+    }
+
+    [data-theme="dark"] .composer-chip {
+      background: rgba(255, 176, 211, 0.08);
+      border-color: rgba(255, 176, 211, 0.14);
+      color: #ffadc9;
+      box-shadow: inset 0 1px 0 rgba(168, 189, 255, 0.035);
+    }
+
+    [data-theme="dark"] .composer-plus {
+      background: var(--ios-glass-strong);
+      border-color: var(--border);
+      color: var(--text-dim);
+      box-shadow: 0 10px 22px rgba(0, 0, 0, 0.18), inset 0 1px 0 rgba(168, 189, 255, 0.035);
+    }
+
+    [data-theme="dark"] .input-box.tools-open .composer-plus,
+    [data-theme="dark"] .composer-plus:hover {
+      background: rgba(216, 92, 149, 0.12);
+      border-color: rgba(255, 137, 190, 0.20);
+      color: #ffadc9;
+    }
+
+    [data-theme="dark"] .composer-menu {
+      background: rgba(25, 19, 27, 0.84);
+      border-color: rgba(255, 176, 211, 0.14);
+      box-shadow: 0 22px 56px rgba(0, 0, 0, 0.36), inset 0 1px 0 rgba(168, 189, 255, 0.035);
+    }
+
+    [data-theme="dark"] .composer-tool:hover,
+    [data-theme="dark"] .composer-tool.on,
+    [data-theme="dark"] .composer-menu .time-btn:hover,
+    [data-theme="dark"] .composer-menu .deep-btn:hover,
+    [data-theme="dark"] .composer-menu .file-btn:hover,
+    [data-theme="dark"] .composer-menu .deep-btn.on,
+    [data-theme="dark"] .composer-menu .file-btn.has-file {
+      color: #ffadc9;
+      background: rgba(216, 92, 149, 0.12);
+      border-color: rgba(255, 137, 190, 0.18);
+    }
+
     #input {
-      flex: 1;
+      width: 100%;
       background: transparent;
       border: none;
       color: var(--text);
@@ -1681,7 +2414,7 @@
       min-height: 28px;
       /* max 5 行 ≈ 5 × 14px × 1.6 + padding 18 ≈ 130 */
       max-height: 130px;
-	      padding: 8px 0;
+	      padding: 6px 2px 2px;
 	      margin: 0;
 	      overflow-y: auto;
 	    }
@@ -1748,7 +2481,8 @@
       align-items: center;
       flex-shrink: 0;
     }
-    .time-btn {
+    .time-btn,
+    .deep-btn {
       background: var(--ios-glass-strong);
       color: var(--text-dim);
       border: 1.5px solid var(--ios-border);
@@ -1778,7 +2512,8 @@
       backdrop-filter: blur(18px) saturate(150%);
       -webkit-backdrop-filter: blur(18px) saturate(150%);
     }
-    .time-btn:hover {
+    .time-btn:hover,
+    .deep-btn:hover {
       border-color: var(--accent-2);
       color: var(--accent-deep);
       transform: translateY(-1px);
@@ -1792,6 +2527,20 @@
       background: rgba(255, 110, 180, 0.10);
       border-color: rgba(255, 110, 180, 0.36);
       color: var(--accent-deep);
+    }
+    .deep-btn {
+      letter-spacing: 0.02em;
+      min-width: 54px;
+      padding: 0 13px;
+    }
+    .deep-btn.on {
+      background: rgba(255, 110, 180, 0.12);
+      border-color: rgba(255, 110, 180, 0.40);
+      color: var(--accent-deep);
+      box-shadow:
+        0 10px 22px rgba(255, 110, 180, 0.12),
+        inset 1px 1px 0 rgba(255, 255, 255, 0.58),
+        inset -1px -1px 0 rgba(255, 110, 180, 0.080);
     }
 	    .time-panel {
       position: absolute;
@@ -2578,7 +3327,7 @@
     }
 
     @media (max-width: 640px) {
-      #messages { padding: 16px 12px 126px; }
+      #messages { padding: 16px 12px var(--composer-bottom-space, 168px); }
       .input-dock { padding: 10px 12px 18px; }
       .brand { font-size: 14px; }
       .empty-state { padding-top: 8vh; }
@@ -2937,6 +3686,56 @@
       word-break: break-all;
       border: 1px solid rgba(148, 163, 184, 0.3);
     }
+    .pending-question-options {
+      display: none;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .pending-confirm-dialog.question-mode .pending-question-options {
+      display: flex;
+    }
+    .pending-question-option {
+      border: 1px solid rgba(236, 72, 153, 0.22);
+      background: rgba(255, 255, 255, 0.52);
+      color: var(--text);
+      border-radius: 999px;
+      padding: 7px 12px;
+      font: inherit;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: transform 0.16s ease, border-color 0.16s ease, background 0.16s ease;
+    }
+    .pending-question-option:hover,
+    .pending-question-option.selected {
+      transform: translateY(-1px);
+      border-color: rgba(219, 39, 119, 0.55);
+      background: rgba(255, 241, 247, 0.82);
+    }
+    .pending-question-input {
+      display: none;
+      width: 100%;
+      margin-top: 10px;
+      min-height: 64px;
+      resize: vertical;
+      border: 1px solid rgba(236, 72, 153, 0.18);
+      border-radius: 14px;
+      padding: 10px 12px;
+      font: inherit;
+      color: var(--text);
+      background: rgba(255, 255, 255, 0.56);
+      outline: none;
+    }
+    .pending-confirm-dialog.question-mode .pending-question-input {
+      display: block;
+    }
+    [data-theme="dark"] .pending-question-option,
+    [data-theme="dark"] .pending-question-input {
+      background: rgba(255, 255, 255, 0.08);
+      border-color: rgba(255, 149, 200, 0.2);
+      color: var(--text);
+    }
     .pending-confirm-actions {
       margin-top: 12px;
       display: flex;
@@ -3048,7 +3847,7 @@
   <div class="brand">
     <div class="brand-logo" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"></circle><path d="M12 2.8v4.2M12 17v4.2M2.8 12h4.2M17 12h4.2M5.3 5.3l3 3M15.7 15.7l3 3M18.7 5.3l-3 3M8.3 15.7l-3 3"></path></svg></div>
     <span class="brand-name">TindaAgent</span>
-    <button id="versionBadgeBtn" class="version-badge version-btn" onclick="showVersionTip()" title="版本信息">v1.9.0</button>
+    <button id="versionBadgeBtn" class="version-badge version-btn" onclick="showVersionTip()" title="版本信息">v1.10.0</button>
     <button id="accountBtn" class="icon-btn account-btn" onclick="showAccountPopup()" title="切换账户" aria-label="切换账户">
       <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 21a8 8 0 0 0-16 0"></path><circle cx="12" cy="8" r="3.2"></circle></svg>
     </button>
@@ -3096,11 +3895,27 @@
     <h3 class="pending-confirm-title">终端命令请求确认</h3>
     <div id="pendingConfirmMeta" class="pending-confirm-meta">等待确认</div>
     <div id="pendingConfirmCmd" class="pending-confirm-cmd"></div>
+    <div id="pendingQuestionOptions" class="pending-question-options"></div>
+    <textarea id="pendingQuestionAnswer" class="pending-question-input" rows="3" placeholder="补充你的答案或限制条件..."></textarea>
     <div class="pending-confirm-actions">
       <button id="pendingConfirmDenyBtn" class="deny" type="button">拒绝</button>
       <button id="pendingConfirmAllowBtn" class="allow" type="button">允许执行</button>
     </div>
   </div>
+</div>
+
+<div id="planFloat" class="plan-float" role="dialog" aria-label="计划面板" aria-live="polite">
+  <div id="planFloatHead" class="plan-float-head">
+    <div class="plan-float-title">
+      <strong>Plan 计划</strong>
+      <span id="planFloatSubtitle">等待 LLM 制定计划</span>
+    </div>
+    <div class="plan-float-actions">
+      <button id="planFloatCollapseBtn" type="button" aria-label="折叠计划面板">－</button>
+      <button id="planFloatCloseBtn" type="button" aria-label="关闭计划面板">×</button>
+    </div>
+  </div>
+  <div id="planFloatBody" class="plan-float-body"></div>
 </div>
 
 <div class="content-wrap">
@@ -3125,46 +3940,67 @@
           </span>
         </div>
       </div>
-      <div class="input-box">
-        <textarea id="input" rows="1" placeholder="跟 Tinda 说说话吧 ..."></textarea>
-        <div class="time-wrap">
-          <button id="timeModeBtn" class="time-btn on" type="button" title="时间注入模式" aria-label="时间注入模式">
-            <svg class="icon icon-clock" viewBox="0 0 24 24" aria-hidden="true">
-              <circle cx="12" cy="12" r="8"></circle>
-              <path d="M12 8v5l3 2"></path>
-            </svg>
-            <svg class="icon icon-calendar" viewBox="0 0 24 24" aria-hidden="true" style="display:none;">
-              <rect x="4" y="5" width="16" height="15" rx="2"></rect>
-              <path d="M8 3v4M16 3v4M4 10h16"></path>
-            </svg>
-            <svg class="icon icon-stop" viewBox="0 0 24 24" aria-hidden="true" style="display:none;">
-              <rect x="7" y="7" width="10" height="10" rx="1.5"></rect>
-            </svg>
-          </button>
-          <div id="timeModePanel" class="time-panel">
-            <button type="button" class="time-item active" data-mode="now">发送当前时间</button>
-            <button type="button" class="time-item" data-mode="none">不发送时间</button>
-            <button type="button" class="time-item" data-mode="custom">自定义时间</button>
-            <div id="timeCustomBox" class="time-custom">
-              <input id="timeCustomInput" type="datetime-local" />
-              <button id="timeCustomApplyBtn" type="button">确认</button>
+      <div id="inputBox" class="input-box">
+        <div class="composer-input-row">
+          <textarea id="input" rows="1" placeholder="跟 Tinda 说说话吧 ..."></textarea>
+        </div>
+        <div id="composerSelectedRow" class="composer-selected-row empty" aria-live="polite"></div>
+        <div class="composer-toolbar">
+          <div class="composer-left">
+            <button id="composerPlusBtn" class="composer-plus" type="button" title="添加工具" aria-label="添加工具" aria-expanded="false">+</button>
+            <div id="composerMenu" class="composer-menu" aria-hidden="true">
+              <button id="webSearchBtn" class="composer-tool" type="button" title="本轮允许 LLM 使用网络搜索" aria-label="网络搜索">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"></circle><path d="m16 16 4 4"></path><path d="M8.5 11h5M11 8.5v5"></path></svg>
+                <span>网络搜索</span>
+              </button>
+              <button id="deepBtn" class="composer-tool deep-btn" type="button" title="Deep 对齐" aria-label="Deep 对齐">
+                <span>Deep 对齐</span>
+              </button>
+              <div class="time-wrap">
+                <button id="timeModeBtn" class="time-btn on" type="button" title="时间注入模式" aria-label="时间注入模式">
+                  <svg class="icon icon-clock" viewBox="0 0 24 24" aria-hidden="true">
+                    <circle cx="12" cy="12" r="8"></circle>
+                    <path d="M12 8v5l3 2"></path>
+                  </svg>
+                  <svg class="icon icon-calendar" viewBox="0 0 24 24" aria-hidden="true" style="display:none;">
+                    <rect x="4" y="5" width="16" height="15" rx="2"></rect>
+                    <path d="M8 3v4M16 3v4M4 10h16"></path>
+                  </svg>
+                  <svg class="icon icon-stop" viewBox="0 0 24 24" aria-hidden="true" style="display:none;">
+                    <rect x="7" y="7" width="10" height="10" rx="1.5"></rect>
+                  </svg>
+                  <span>时间</span>
+                </button>
+                <div id="timeModePanel" class="time-panel">
+                  <button type="button" class="time-item active" data-mode="now">发送当前时间</button>
+                  <button type="button" class="time-item" data-mode="none">不发送时间</button>
+                  <button type="button" class="time-item" data-mode="custom">自定义时间</button>
+                  <div id="timeCustomBox" class="time-custom">
+                    <input id="timeCustomInput" type="datetime-local" />
+                    <button id="timeCustomApplyBtn" type="button">确认</button>
+                  </div>
+                </div>
+              </div>
+              <button id="fileBtn" class="composer-tool file-btn" type="button" title="导入文件" aria-label="导入文件" onclick="pickFile()">
+                <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                  <polyline points="14 2 14 8 20 8"></polyline>
+                  <line x1="12" y1="18" x2="12" y2="11"></line>
+                  <polyline points="9 14 12 11 15 14"></polyline>
+                </svg>
+                <span>导入文件</span>
+              </button>
             </div>
           </div>
+          <div class="composer-right">
+            <button id="sendBtn" onclick="sendMessage()" title="发送" aria-label="发送">
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M3 12 20 4l-5 16-3-6-9-2z"></path>
+              </svg>
+            </button>
+          </div>
         </div>
-        <button id="fileBtn" class="file-btn" type="button" title="导入文件" aria-label="导入文件" onclick="pickFile()">
-          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-            <polyline points="14 2 14 8 20 8"></polyline>
-            <line x1="12" y1="18" x2="12" y2="11"></line>
-            <polyline points="9 14 12 11 15 14"></polyline>
-          </svg>
-        </button>
         <input type="file" id="fileInput" style="display:none" multiple />
-        <button id="sendBtn" onclick="sendMessage()" title="发送" aria-label="发送">
-          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M3 12 20 4l-5 16-3-6-9-2z"></path>
-          </svg>
-        </button>
       </div>
       <div class="hint"><span class="hint-inner"><kbd>Enter</kbd> 发送 · <kbd>Shift</kbd>+<kbd>Enter</kbd> 换行 · 输入 <kbd>/help</kbd> 查看指令</span></div>
     </div>
@@ -3216,6 +4052,11 @@
   const messagesWrap = document.getElementById("messages-wrap");
   const inputEl      = document.getElementById("input");
   const sendBtn      = document.getElementById("sendBtn");
+  const inputBoxEl = document.getElementById("inputBox");
+  const composerPlusBtnEl = document.getElementById("composerPlusBtn");
+  const composerMenuEl = document.getElementById("composerMenu");
+  const composerSelectedRowEl = document.getElementById("composerSelectedRow");
+  const webSearchBtnEl = document.getElementById("webSearchBtn");
   const termBodyEl = document.getElementById("termBody");
   const termPanelEl = document.getElementById("termPanel");
   const resizerEl   = document.getElementById("resizer");
@@ -3237,6 +4078,14 @@
   const pendingConfirmCmdEl = document.getElementById("pendingConfirmCmd");
   const pendingConfirmAllowBtnEl = document.getElementById("pendingConfirmAllowBtn");
   const pendingConfirmDenyBtnEl = document.getElementById("pendingConfirmDenyBtn");
+  const pendingQuestionOptionsEl = document.getElementById("pendingQuestionOptions");
+  const pendingQuestionAnswerEl = document.getElementById("pendingQuestionAnswer");
+  const planFloatEl = document.getElementById("planFloat");
+  const planFloatHeadEl = document.getElementById("planFloatHead");
+  const planFloatBodyEl = document.getElementById("planFloatBody");
+  const planFloatSubtitleEl = document.getElementById("planFloatSubtitle");
+  const planFloatCollapseBtnEl = document.getElementById("planFloatCollapseBtn");
+  const planFloatCloseBtnEl = document.getElementById("planFloatCloseBtn");
   const toastEl = document.getElementById("tindaToast");
   const statusPillEl = document.getElementById("statusPill");
   const statusDotEl = statusPillEl ? statusPillEl.querySelector(".status-dot") : null;
@@ -3246,6 +4095,7 @@
   const timeCustomBoxEl = document.getElementById("timeCustomBox");
   const timeCustomInputEl = document.getElementById("timeCustomInput");
   const timeCustomApplyBtnEl = document.getElementById("timeCustomApplyBtn");
+  const deepBtnEl = document.getElementById("deepBtn");
   const fileBtnEl = document.getElementById("fileBtn");
   const fileBarWrapEl = document.getElementById("fileBarWrap");
   const fileBarEl = document.getElementById("fileBar");
@@ -3258,8 +4108,10 @@
   const DRAFT_SESSION_PREFIX = "draft_";
   const TERM_WIDTH_KEY = "tinda_term_width";
   const STREAM_ENABLED_KEY = "tinda_stream_enabled";
+  const DEEP_ENABLED_KEY = "tinda_deep_enabled";
   const TIME_MODE_KEY = "tinda_time_mode";
   const TIME_CUSTOM_KEY = "tinda_time_custom";
+  const WEB_SEARCH_ENABLED_KEY = "tinda_web_search_enabled";
   const RECORDS_PAGE_LIMIT = 200;
   const MODEL_CHOICES_FALLBACK = [
     { id: "deepseek-chat", label: "deepseek-chat" },
@@ -3281,7 +4133,7 @@
   };
   const USER_ADMIN_PERM = 511;
   const AUTH_TOKEN_KEY = "ta_auth_token";
-  const VERSION_FALLBACK = "v1.9.0";
+  const VERSION_FALLBACK = "v1.10.0";
   const CONTEXT_TOKEN_DEFAULT = 16000;
   const CONTEXT_TOKEN_MIN = 16000;
   const CONTEXT_TOKEN_MAX = 200000;
@@ -3444,6 +4296,16 @@
   let navigationPending = false;
   let terminalConfirmLockActive = false;
   let terminalConfirmPendingCount = 0;
+  let deepEnabled = false;
+  let webSearchEnabled = false;
+  let deepAlignmentBusy = false;
+  let deepPendingPayload = null;
+  let deepActiveCard = null;
+  let planFloatDragging = false;
+  let planFloatDragStartX = 0;
+  let planFloatDragStartY = 0;
+  let planFloatStartLeft = 0;
+  let planFloatStartTop = 0;
   let pendingConfirmCurrent = null;
   let pendingConfirmSubmitting = false;
   const TOOL_EVENTS_ERROR_REPORT_INTERVAL_MS = 15000;
@@ -3456,6 +4318,7 @@
   const CHAT_SESSION_LOADING_MIN_MS = 520;
   const INPUT_PLACEHOLDER_DEFAULT = "跟 Tinda 说说话吧 ...";
   const INPUT_PLACEHOLDER_CONFIRM_LOCK = "存在待确认终端命令，请先在弹窗中允许/拒绝";
+  const INPUT_PLACEHOLDER_QUESTION_LOCK = "存在待回答问题，请先在弹窗中提交回答或取消";
   let termPersistBuffer = [];
   let termPersistTimer = 0;
   let termRequestGroup = null;
@@ -3671,7 +4534,9 @@
     const hardLocked = terminalConfirmLockActive;
     if (inputEl) {
       inputEl.disabled = hardLocked;
-      inputEl.placeholder = hardLocked ? INPUT_PLACEHOLDER_CONFIRM_LOCK : INPUT_PLACEHOLDER_DEFAULT;
+      const pendingKind = String(pendingConfirmCurrent?.kind || "").trim().toLowerCase();
+      const lockPlaceholder = pendingKind === "question" ? INPUT_PLACEHOLDER_QUESTION_LOCK : INPUT_PLACEHOLDER_CONFIRM_LOCK;
+      inputEl.placeholder = hardLocked ? lockPlaceholder : INPUT_PLACEHOLDER_DEFAULT;
     }
     if (sendBtn) {
       sendBtn.disabled = hardLocked || messageSendInFlight;
@@ -3691,24 +4556,37 @@
 
   function normalizePendingConfirmItem(raw) {
     if (!raw || typeof raw !== "object") return null;
+    const kind = String(raw.kind || "").trim().toLowerCase() === "question" ? "question" : "terminal";
     const cmd = String(raw.cmd || "").trim();
-    if (!cmd) return null;
+    const question = String(raw.question || "").trim();
+    if (kind === "question" && !question) return null;
+    if (kind !== "question" && !cmd) return null;
     const callId = String(raw.call_id || raw.confirm_id || "").trim();
     const confirmId = String(raw.confirm_id || callId || "").trim() || ("tcf_" + Date.now().toString(36));
     return {
+      flow: String(raw.flow || "").trim(),
+      kind,
       confirm_id: confirmId,
       call_id: callId || confirmId,
       cmd,
+      question,
+      options: Array.isArray(raw.options) ? raw.options.map((x) => String(x || "").trim()).filter(Boolean).slice(0, 8) : [],
+      none_of_them_value: String(raw.none_of_them_value || "__none_of_them__"),
+      none_of_them_label: String(raw.none_of_them_label || "以上都不是，我自己补充"),
+      allow_custom_answer: raw.allow_custom_answer !== false,
+      placeholder: String(raw.placeholder || "补充你的答案或限制条件..."),
+      selected_choice: "",
       status: "pending",
     };
   }
 
   function setPendingConfirmFromList(items) {
     const list = Array.isArray(items) ? items : [];
-    const first = list.length > 0 ? normalizePendingConfirmItem(list[0]) : null;
+    const visibleList = list.filter((item) => String(item?.flow || "") !== "deep_alignment");
+    const first = visibleList.length > 0 ? normalizePendingConfirmItem(visibleList[0]) : null;
     pendingConfirmCurrent = first;
     renderPendingConfirmOverlay();
-    setTerminalConfirmLock(!!first, list.length);
+    setTerminalConfirmLock(!!first, visibleList.length);
   }
 
   function clearPendingConfirm() {
@@ -3736,15 +4614,50 @@
 
   function renderPendingConfirmOverlay() {
     if (!pendingConfirmOverlayEl || !pendingConfirmMetaEl || !pendingConfirmCmdEl) return;
+    const dialog = pendingConfirmOverlayEl.querySelector(".pending-confirm-dialog");
     if (!pendingConfirmCurrent) {
+      dialog?.classList.remove("question-mode");
       pendingConfirmMetaEl.textContent = "等待确认";
       pendingConfirmCmdEl.textContent = "";
+      if (pendingQuestionOptionsEl) pendingQuestionOptionsEl.innerHTML = "";
+      if (pendingQuestionAnswerEl) pendingQuestionAnswerEl.value = "";
       void hidePendingConfirmOverlay();
       setPendingConfirmButtonsDisabled(false);
       return;
     }
-    pendingConfirmMetaEl.textContent = "待确认";
-    pendingConfirmCmdEl.textContent = String(pendingConfirmCurrent.cmd || "");
+    const isQuestion = pendingConfirmCurrent.kind === "question";
+    dialog?.classList.toggle("question-mode", isQuestion);
+    pendingConfirmMetaEl.textContent = isQuestion ? "需要你补充条件" : "待确认";
+    pendingConfirmCmdEl.textContent = isQuestion ? String(pendingConfirmCurrent.question || "") : String(pendingConfirmCurrent.cmd || "");
+    if (pendingQuestionOptionsEl) {
+      pendingQuestionOptionsEl.innerHTML = "";
+      if (isQuestion) {
+        (pendingConfirmCurrent.options || []).forEach((option) => {
+          const isNoneOption = option === pendingConfirmCurrent.none_of_them_value;
+          const label = isNoneOption ? pendingConfirmCurrent.none_of_them_label : option;
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "pending-question-option";
+          btn.textContent = label;
+          if (pendingConfirmCurrent.selected_choice === option) btn.classList.add("selected");
+          btn.addEventListener("click", () => {
+            pendingConfirmCurrent.selected_choice = option;
+            if (pendingQuestionAnswerEl && !pendingQuestionAnswerEl.value.trim() && !isNoneOption) {
+              pendingQuestionAnswerEl.value = option;
+            }
+            if (pendingQuestionAnswerEl && isNoneOption) pendingQuestionAnswerEl.focus();
+            renderPendingConfirmOverlay();
+          });
+          pendingQuestionOptionsEl.appendChild(btn);
+        });
+      }
+    }
+    if (pendingQuestionAnswerEl) {
+      pendingQuestionAnswerEl.placeholder = String(pendingConfirmCurrent.placeholder || "补充你的答案或限制条件...");
+      pendingQuestionAnswerEl.style.display = isQuestion && pendingConfirmCurrent.allow_custom_answer ? "" : "none";
+    }
+    if (pendingConfirmAllowBtnEl) pendingConfirmAllowBtnEl.textContent = isQuestion ? "提交回答" : "允许执行";
+    if (pendingConfirmDenyBtnEl) pendingConfirmDenyBtnEl.textContent = isQuestion ? "取消" : "拒绝";
     showPendingConfirmOverlay();
     setPendingConfirmButtonsDisabled(pendingConfirmSubmitting);
   }
@@ -3784,27 +4697,76 @@
     pendingConfirmCurrent = null;
 
     try {
+      const isQuestion = currentEl.kind === "question";
+      const selectedChoice = String(currentEl.selected_choice || "").trim();
+      const isNoneChoice = selectedChoice && selectedChoice === String(currentEl.none_of_them_value || "__none_of_them__");
+      const answerText = isQuestion ? String(pendingQuestionAnswerEl?.value || selectedChoice || "").trim() : "";
+      if (isQuestion && approval && !answerText && !selectedChoice) {
+        pendingConfirmSubmitting = false;
+        pendingConfirmCurrent = currentEl;
+        renderPendingConfirmOverlay();
+        showToast("请先选择或补充回答", "warn");
+        return;
+      }
+      if (isQuestion && approval && isNoneChoice && !String(pendingQuestionAnswerEl?.value || "").trim()) {
+        pendingConfirmSubmitting = false;
+        pendingConfirmCurrent = currentEl;
+        renderPendingConfirmOverlay();
+        pendingQuestionAnswerEl?.focus();
+        showToast("选择“以上都不是”后请补充你的答案", "warn");
+        return;
+      }
       const res = await apiFetch("/terminal/confirm", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           session_id: sid,
           approval: !!approval,
+          kind: currentEl.kind || "terminal",
           call_id: currentEl.call_id || "",
           cmd: currentEl.cmd || "",
+          choice: isNoneChoice ? "" : selectedChoice,
+          answer: answerText,
         }),
       });
       const data = await res.json();
       if (!res.ok || data?.ok === false) {
         throw new Error(String(data?.error || `http ${res.status}`));
       }
+      if (data?.flow === "deep_alignment") {
+        const confirmPending = Array.isArray(data?.pending) ? data.pending : [];
+        if (data?.active && String(data?.alignment_text || "").trim()) {
+          removeDeepCard(deepActiveCard);
+          deepPendingPayload = normalizeDeepPayload({
+            sid,
+            message: String(data.original_message || deepPendingPayload?.message || ""),
+            file_names: Array.isArray(data.file_names) ? data.file_names : [],
+            file_contents: Array.isArray(data.file_contents) ? data.file_contents : [],
+            alignment_text: String(data.alignment_text || ""),
+            rounds: Array.isArray(data.rounds) ? data.rounds : [],
+            active_index: Number(data.active_index || 0),
+            can_back: !!data.can_back,
+            pending_deep_ask: data.pending_deep_ask || null,
+            force_latest: true,
+          });
+          renderDeepAlignmentCard(deepPendingPayload);
+          addSystemNotice("请确认 Deep 理解是否一致", { persist: false });
+        } else if (data?.state === "cancelled") {
+          deepPendingPayload = null;
+          removeDeepCard(deepActiveCard);
+        }
+        setPendingConfirmFromList(confirmPending);
+        showToast(data?.state === "cancelled" ? "已取消 Deep 对齐" : "已提交回答");
+        return;
+      }
       const replyText = sanitizeAssistantDisplayText(String(data?.reply || ""));
       const confirmPending = Array.isArray(data?.pending) ? data.pending : null;
       const toolSteps = Math.max(0, Number(data?.tool_steps || 0));
-      // confirm 不走 SSE，手动补 >_< 标记
-      const marker = (toolSteps > 0) ? "\n\n> >_<\n> --调用工具中--\n" : "";
+      const marker = buildToolTraceMarkerMarkdown(data?.tool_trace);
       const compressionText = absorbContextCompressionPayload(data.context_compression);
-      let finalReply = marker ? replyText + marker : replyText;
+      let finalReply = marker
+        ? (replyText ? `${replyText}\n\n${marker}` : marker)
+        : replyText;
       if (compressionText) {
         finalReply = String(finalReply || "").trim()
           ? `${finalReply}\n\n${compressionText}`
@@ -3821,7 +4783,7 @@
       } else {
         await syncPendingConfirmationsFromServer(sid, { silent: true });
       }
-      showToast(approval ? "已允许执行" : "已拒绝执行");
+      showToast(currentEl.kind === "question" ? "已提交回答" : (approval ? "已允许执行" : "已拒绝执行"));
     } catch (e) {
       showToast(`操作失败：${String(e?.message || e)}`, "err");
       await syncPendingConfirmationsFromServer(sid, { silent: false });
@@ -3836,6 +4798,12 @@
     const pending = pendingConfirmCurrent ? 1 : 0;
     setTerminalConfirmLock(pending > 0, pending);
     return pending;
+  }
+
+  function pendingConfirmLockMessage() {
+    const kind = String(pendingConfirmCurrent?.kind || "").trim().toLowerCase();
+    if (kind === "question") return "存在待回答问题，请先在弹窗中提交回答或取消。";
+    return "存在待确认终端命令，请先在弹窗中允许/拒绝。";
   }
 
   function reportErrorToTerminal(message, { source = "", sessionId = getSessionId(), persist = false } = {}) {
@@ -4166,8 +5134,11 @@
 
   function renderToolTraceToTerminal(trace, { sessionId = getSessionId(), persist = false } = {}) {
     if (!Array.isArray(trace) || trace.length === 0) return false;
+    const planShown = showPlanPanelsFromTrace(trace);
+    const terminalTrace = trace.filter((step) => !isPlanToolTraceStep(step));
+    if (terminalTrace.length === 0) return planShown;
     showTerm();
-    trace.forEach((step) => {
+    terminalTrace.forEach((step) => {
       const name = step?.agent_tool || "unknown_tool";
       const args = step?.arguments || {};
       addTermLine("cmd", `[tool] ${name} ${stringifyValue(args)}`, "", { sessionId, persist });
@@ -4217,6 +5188,33 @@
     });
     showToast("已同步工具调用到终端");
     return true;
+  }
+
+  function buildToolTraceMarkerMarkdown(trace) {
+    if (!Array.isArray(trace) || trace.length === 0) return "";
+    const renderer = window.ChatBubbleRenderer?.renderToolMarkerMarkdown;
+    if (typeof renderer !== "function") return "";
+    const blocks = [];
+    trace.forEach((step) => {
+      if (!step || typeof step !== "object") return;
+      const name = String(step.agent_tool || step.name || step.tool_name || "unknown").trim() || "unknown";
+      const callId = String(step.call_id || step.id || "").trim();
+      const toolCallId = String(step.tool_call_id || step.toolCallId || "").trim();
+      const marker = renderer(
+        {
+          name,
+          id: callId,
+          call_id: callId,
+          tool_call_id: toolCallId,
+          arguments: step.arguments && typeof step.arguments === "object" ? step.arguments : {},
+          result: step.result && typeof step.result === "object" ? step.result : {},
+          status: "done",
+        },
+        { done: true, tool_call_id: toolCallId, trailingNewline: false },
+      );
+      if (String(marker || "").trim()) blocks.push(String(marker).trim());
+    });
+    return blocks.join("\n\n");
   }
 
   // --- Resize drag ---
@@ -4972,6 +5970,9 @@
         preserveScroll,
       });
     }
+    if (!preserveScroll) {
+      showLatestPlanFromSessionEntries(entries);
+    }
     renderHistoryLoadMoreControl();
   }
 
@@ -5031,6 +6032,7 @@
         });
       }
       await syncPendingConfirmationsFromServer(sid, { silent: true });
+      await restoreDeepAlignmentCard(sid);
       await refreshContextUsageLength(sid);
       return true;
     } catch (e) {
@@ -5263,6 +6265,24 @@
     sb.setAttribute("data-tip", tip);
   }
 
+  function setDeepToggleUI() {
+    if (!deepBtnEl) return;
+    deepBtnEl.classList.toggle("on", deepEnabled);
+    deepBtnEl.innerHTML = "<span>Deep 对齐</span>";
+    const tip = deepEnabled ? "Deep 对齐已开启：发送前先确认理解" : "Deep 对齐已关闭";
+    deepBtnEl.title = tip;
+    deepBtnEl.setAttribute("data-tip", tip);
+    deepBtnEl.setAttribute("aria-pressed", deepEnabled ? "true" : "false");
+    renderComposerSelections();
+  }
+
+  function toggleDeepMode() {
+    deepEnabled = !deepEnabled;
+    localStorage.setItem(DEEP_ENABLED_KEY, deepEnabled ? "1" : "0");
+    setDeepToggleUI();
+    addSystemNotice(deepEnabled ? "Deep 对齐已开启" : "Deep 对齐已关闭", { persist: false });
+  }
+
   function toggleStream() {
     streamEnabled = !streamEnabled;
     localStorage.setItem(STREAM_ENABLED_KEY, streamEnabled ? "1" : "0");
@@ -5336,6 +6356,659 @@
       );
     }
     return pill;
+  }
+
+  function normalizePlanPayload(raw) {
+    const stack = [];
+    const seen = new Set();
+    if (raw && typeof raw === "object") stack.push(raw);
+    let result = null;
+    while (stack.length > 0) {
+      const source = stack.shift();
+      if (!source || typeof source !== "object" || seen.has(source)) continue;
+      seen.add(source);
+      const looksLikePlan = String(source.kind || "") === "plan"
+        || (Array.isArray(source.steps) && (
+          Object.prototype.hasOwnProperty.call(source, "goal")
+          || Object.prototype.hasOwnProperty.call(source, "status")
+          || Object.prototype.hasOwnProperty.call(source, "notes")
+        ));
+      if (looksLikePlan) {
+        result = source;
+        break;
+      }
+      ["data", "tool_marker", "result"].forEach((key) => {
+        const next = source[key];
+        if (next && typeof next === "object") stack.push(next);
+      });
+    }
+    if (!result || typeof result !== "object") return null;
+    const stepsRaw = Array.isArray(result.steps) ? result.steps : [];
+    const steps = stepsRaw.map((step, idx) => {
+      const text = typeof step === "object" ? String(step.text || "") : String(step || "");
+      return {
+        index: Number((step && typeof step === "object" ? step.index : 0) || idx + 1),
+        text: text.trim(),
+      status: String((step && typeof step === "object" ? step.status : "") || "pending"),
+      };
+    }).filter((step) => step.text);
+    const status = String(result.status || "planned").trim();
+    const completed = result.completed === true || status === "complete";
+    const requiresCompletionConfirmation = result.requires_completion_confirmation === true
+      || result.requiresCompletionConfirmation === true
+      || status === "awaiting_completion_confirmation";
+    return {
+      goal: String(result.goal || "").trim(),
+      status,
+      completed,
+      requires_completion_confirmation: requiresCompletionConfirmation,
+      notes: String(result.notes || "").trim(),
+      completion_note: String(result.completion_note || result.completionNote || "").trim(),
+      steps,
+    };
+  }
+
+  function renderPlanFloat(plan) {
+    if (!planFloatEl || !planFloatBodyEl || !planFloatSubtitleEl) return;
+    const payload = normalizePlanPayload(plan);
+    if (!payload) return;
+    const stateText = payload.completed
+      ? "已完成"
+      : payload.requires_completion_confirmation
+      ? "等待确认完成"
+      : payload.status || "planned";
+    planFloatSubtitleEl.textContent = payload.goal ? `${stateText} · ${payload.goal}` : `${stateText} · ${payload.steps.length || 0} 个步骤`;
+    const stateClass = payload.completed ? "complete" : payload.requires_completion_confirmation ? "confirm" : "";
+    const stateHtml = `<div class="plan-state ${stateClass}">${escapeHtml(stateText)}</div>`;
+    const goalHtml = payload.goal
+      ? `<p class="plan-goal">${escapeHtml(payload.goal)}</p>`
+      : `<p class="plan-goal">LLM 已记录一份执行计划。</p>`;
+    const stepsHtml = payload.steps.length
+      ? `<ol class="plan-steps">${payload.steps.map((step, idx) => `
+          <li class="plan-step">
+            <span class="plan-step-index">${escapeHtml(String(step.index || idx + 1))}</span>
+            <span>${escapeHtml(step.text)}</span>
+          </li>`).join("")}</ol>`
+      : "";
+    const notesHtml = payload.notes ? `<div class="plan-notes">${renderMarkdown(payload.notes)}</div>` : "";
+    const completionHtml = payload.completion_note
+      ? `<div class="plan-completion-note">${escapeHtml(payload.completion_note)}</div>`
+      : "";
+    planFloatBodyEl.innerHTML = stateHtml + goalHtml + stepsHtml + notesHtml + completionHtml;
+    showPlanFloat();
+  }
+
+  function showPlanFloat() {
+    if (!planFloatEl) return;
+    planFloatEl.style.display = "flex";
+    requestAnimationFrame(() => planFloatEl.classList.add("show"));
+  }
+
+  function hidePlanFloat() {
+    if (!planFloatEl) return;
+    planFloatEl.classList.remove("show");
+    window.setTimeout(() => {
+      if (!planFloatEl.classList.contains("show")) planFloatEl.style.display = "none";
+    }, 280);
+  }
+
+  function togglePlanFloatCollapsed() {
+    if (!planFloatEl || !planFloatCollapseBtnEl) return;
+    const collapsed = !planFloatEl.classList.contains("collapsed");
+    planFloatEl.classList.toggle("collapsed", collapsed);
+    planFloatCollapseBtnEl.textContent = collapsed ? "+" : "－";
+    planFloatCollapseBtnEl.setAttribute("aria-label", collapsed ? "展开计划面板" : "折叠计划面板");
+  }
+
+  function clampPlanFloat(left, top) {
+    const rect = planFloatEl?.getBoundingClientRect?.();
+    const width = rect?.width || 420;
+    const height = rect?.height || 220;
+    const maxLeft = Math.max(8, window.innerWidth - width - 8);
+    const maxTop = Math.max(8, window.innerHeight - Math.min(height, window.innerHeight - 16) - 8);
+    return {
+      left: Math.max(8, Math.min(Number(left) || 8, maxLeft)),
+      top: Math.max(8, Math.min(Number(top) || 8, maxTop)),
+    };
+  }
+
+  function startPlanFloatDrag(e) {
+    if (!planFloatEl || e.target?.closest?.(".plan-float-actions")) return;
+    planFloatDragging = true;
+    const rect = planFloatEl.getBoundingClientRect();
+    planFloatDragStartX = e.clientX;
+    planFloatDragStartY = e.clientY;
+    planFloatStartLeft = rect.left;
+    planFloatStartTop = rect.top;
+    planFloatEl.classList.add("dragging");
+    planFloatEl.style.left = `${rect.left}px`;
+    planFloatEl.style.top = `${rect.top}px`;
+    planFloatEl.style.right = "auto";
+    e.preventDefault();
+  }
+
+  function movePlanFloatDrag(e) {
+    if (!planFloatDragging || !planFloatEl) return;
+    const pos = clampPlanFloat(
+      planFloatStartLeft + e.clientX - planFloatDragStartX,
+      planFloatStartTop + e.clientY - planFloatDragStartY,
+    );
+    planFloatEl.style.left = `${pos.left}px`;
+    planFloatEl.style.top = `${pos.top}px`;
+  }
+
+  function stopPlanFloatDrag() {
+    if (!planFloatDragging) return;
+    planFloatDragging = false;
+    planFloatEl?.classList.remove("dragging");
+  }
+
+  function showPlanPanelFromToolResult(step) {
+    const name = String(step?.agent_tool || step?.name || step?.tool_name || "").trim();
+    if (name !== "plan") return false;
+    const payload = normalizePlanPayload(step?.result || step);
+    if (!payload) return false;
+    renderPlanFloat(payload);
+    return true;
+  }
+
+  function showPlanPanelsFromTrace(trace) {
+    if (!Array.isArray(trace)) return false;
+    let shown = false;
+    trace.forEach((step) => {
+      if (showPlanPanelFromToolResult(step)) shown = true;
+    });
+    return shown;
+  }
+
+  function showLatestPlanFromSessionEntries(entries) {
+    if (!Array.isArray(entries)) return false;
+    let latest = null;
+    entries.forEach((entry) => {
+      const content = entry?.content;
+      if (!Array.isArray(content)) return;
+      content.forEach((step) => {
+        if (!step || String(step.kind || "") !== "tool_marker") return;
+        const marker = step.data && typeof step.data === "object" ? step.data : {};
+        const name = String(marker.name || marker.tool_name || marker.agent_tool || "").trim();
+        if (name !== "plan") return;
+        const payload = normalizePlanPayload(marker);
+        if (payload) latest = payload;
+      });
+    });
+    if (!latest) return false;
+    renderPlanFloat(latest);
+    return true;
+  }
+
+  function isPlanToolTraceStep(step) {
+    return String(step?.agent_tool || step?.name || step?.tool_name || "").trim() === "plan";
+  }
+
+  function buildDeepAlignmentContext(payload) {
+    return String(payload?.alignment_text || "").trim();
+  }
+
+  function getDeepDisplayIndex(payload) {
+    const rounds = Array.isArray(payload?.rounds) ? payload.rounds : [];
+    const fallback = Math.max(0, Math.min(rounds.length - 1, Number(payload?.active_index ?? (rounds.length - 1)) || 0));
+    const raw = Number(payload?.display_index ?? fallback);
+    if (!rounds.length) return 0;
+    return Math.max(0, Math.min(rounds.length - 1, Number.isFinite(raw) ? raw : fallback));
+  }
+
+  function normalizeDeepPayload(payload) {
+    const next = payload && typeof payload === "object" ? payload : {};
+    const rounds = Array.isArray(next.rounds) ? next.rounds : [];
+    const latestIndex = Math.max(0, rounds.length - 1);
+    const activeIndex = Math.max(0, Math.min(latestIndex, Number(next.active_index ?? latestIndex) || 0));
+    next.active_index = activeIndex;
+    if (next.display_index === undefined || next.force_latest === true) {
+      next.display_index = activeIndex;
+    }
+    return next;
+  }
+
+  function getDeepPendingAsk(payload) {
+    const ask = payload?.pending_deep_ask;
+    return ask && typeof ask === "object" ? ask : null;
+  }
+
+  function getDeepDisplayText(payload) {
+    const rounds = Array.isArray(payload?.rounds) ? payload.rounds : [];
+    const idx = getDeepDisplayIndex(payload);
+    const row = rounds[idx] || {};
+    return String(row.alignment_text || payload?.alignment_text || "正在整理理解...");
+  }
+
+  function updateDeepCardView(wrapper) {
+    if (!wrapper?.card || !wrapper.payload) return;
+    const payload = wrapper.payload;
+    const rounds = Array.isArray(payload.rounds) ? payload.rounds : [];
+    const idx = getDeepDisplayIndex(payload);
+    const body = wrapper.card.querySelector(".deep-align-body");
+    if (body) body.innerHTML = renderMarkdown(getDeepDisplayText(payload));
+    const countEl = wrapper.card.querySelector("[data-deep-page-count]");
+    if (countEl) countEl.textContent = rounds.length > 0 ? `${idx + 1}/${rounds.length}` : "0/0";
+    const prevBtn = wrapper.card.querySelector('[data-action="prev-round"]');
+    const nextBtn = wrapper.card.querySelector('[data-action="next-round"]');
+    if (prevBtn) prevBtn.disabled = idx <= 0;
+    if (nextBtn) nextBtn.disabled = !rounds.length || idx >= rounds.length - 1;
+    wrapper.card.classList.toggle("collapsed", !!payload.collapsed);
+    wrapper.card.classList.toggle("readonly", !!payload.readonly);
+    const actions = wrapper.card.querySelector(".deep-align-actions");
+    const ask = getDeepPendingAsk(payload);
+    if (actions) actions.hidden = !!payload.collapsed || !!payload.readonly || !!ask;
+    const askPanel = wrapper.card.querySelector(".deep-ask-panel");
+    if (askPanel) {
+      renderDeepAskPanel(wrapper, askPanel, ask);
+    }
+    wrapper.card.classList.toggle("asking", !!ask);
+  }
+
+  function collapseDeepCard(card) {
+    if (!card?.payload || !card.card) return;
+    card.payload.collapsed = true;
+    card.payload.readonly = true;
+    card.card.classList.remove("busy", "revising");
+    updateDeepCardView(card);
+  }
+
+  function toggleDeepRecord(card) {
+    if (!card?.payload?.readonly) return;
+    card.payload.collapsed = !card.payload.collapsed;
+    updateDeepCardView(card);
+  }
+
+  function switchDeepRound(card, delta) {
+    if (!card?.payload) return;
+    const rounds = Array.isArray(card.payload.rounds) ? card.payload.rounds : [];
+    if (!rounds.length) return;
+    const next = Math.max(0, Math.min(rounds.length - 1, getDeepDisplayIndex(card.payload) + Number(delta || 0)));
+    card.payload.display_index = next;
+    card.payload.collapsed = false;
+    updateDeepCardView(card);
+    scrollToBottom();
+  }
+
+  function renderDeepAskPanel(wrapper, panel, ask) {
+    if (!panel) return;
+    if (!ask) {
+      panel.innerHTML = "";
+      return;
+    }
+    const options = Array.isArray(ask.options) ? ask.options : [];
+    const selected = String(ask.selected_choice || "");
+    const noneValue = String(ask.none_of_them_value || "__none_of_them__");
+    const allowCustom = ask.allow_custom_answer !== false;
+    const optionsHtml = options.map((option) => {
+      const value = String(option || "");
+      const label = value === noneValue ? String(ask.none_of_them_label || "以上都不是，我自己补充") : value;
+      const cls = value === selected ? "deep-ask-option selected" : "deep-ask-option";
+      return `<button type="button" class="${cls}" data-deep-ask-choice="${escapeHtml(value)}">${escapeHtml(label)}</button>`;
+    }).join("");
+    panel.innerHTML = `
+      <p class="deep-ask-question">${escapeHtml(String(ask.question || "需要你补充一个条件"))}</p>
+      <div class="deep-ask-options">${optionsHtml}</div>
+      ${allowCustom ? `<textarea class="deep-ask-input" rows="3" placeholder="${escapeHtml(String(ask.placeholder || "补充你的答案或限制条件..."))}">${escapeHtml(String(ask.answer_text || ""))}</textarea>` : ""}
+      <div class="deep-ask-actions">
+        <button type="button" data-action="cancel-deep-ask">取消</button>
+        <button type="button" class="deep-ask-submit" data-action="submit-deep-ask">提交回答</button>
+      </div>`;
+    panel.querySelectorAll("[data-deep-ask-choice]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const choice = String(btn.getAttribute("data-deep-ask-choice") || "");
+        ask.selected_choice = choice;
+        const isNone = choice === noneValue;
+        const input = panel.querySelector(".deep-ask-input");
+        if (input && !input.value.trim() && !isNone) input.value = choice;
+        if (input && isNone) input.focus();
+        renderDeepAskPanel(wrapper, panel, ask);
+      });
+    });
+    panel.querySelector(".deep-ask-input")?.addEventListener("input", (e) => {
+      ask.answer_text = String(e.target?.value || "");
+    });
+    panel.querySelector('[data-action="submit-deep-ask"]')?.addEventListener("click", () => submitDeepAskAnswer(wrapper));
+    panel.querySelector('[data-action="cancel-deep-ask"]')?.addEventListener("click", () => cancelDeepAskAnswer(wrapper));
+  }
+
+  async function sendDeepAskDecision(wrapper, approval) {
+    const ask = getDeepPendingAsk(wrapper?.payload);
+    if (!ask) return;
+    const sid = String(wrapper?.payload?.sid || getSessionId() || "").trim();
+    if (!sid) return;
+    const selectedChoice = String(ask.selected_choice || "").trim();
+    const noneValue = String(ask.none_of_them_value || "__none_of_them__");
+    const isNoneChoice = selectedChoice && selectedChoice === noneValue;
+    const answerText = String(ask.answer_text || "").trim() || (isNoneChoice ? "" : selectedChoice);
+    if (approval && !answerText && !selectedChoice) {
+      showToast("请先选择或补充回答", "warn");
+      return;
+    }
+    if (approval && isNoneChoice && !String(ask.answer_text || "").trim()) {
+      showToast("选择“以上都不是”后请补充你的答案", "warn");
+      wrapper.card?.querySelector(".deep-ask-input")?.focus();
+      return;
+    }
+    setDeepCardBusy(wrapper, true);
+    try {
+      const res = await apiFetch("/terminal/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          session_id: sid,
+          approval: !!approval,
+          kind: "question",
+          call_id: ask.call_id || ask.confirm_id || "",
+          choice: isNoneChoice ? "" : selectedChoice,
+          answer: answerText,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || data?.ok === false) throw new Error(String(data?.error || `http ${res.status}`));
+      const confirmPending = Array.isArray(data?.pending) ? data.pending : [];
+      if (data?.active && String(data?.alignment_text || "").trim()) {
+        removeDeepCard(deepActiveCard);
+        deepPendingPayload = normalizeDeepPayload({
+          sid,
+          message: String(data.original_message || wrapper.payload?.message || ""),
+          file_names: Array.isArray(data.file_names) ? data.file_names : [],
+          file_contents: Array.isArray(data.file_contents) ? data.file_contents : [],
+          alignment_text: String(data.alignment_text || ""),
+          rounds: Array.isArray(data.rounds) ? data.rounds : [],
+          active_index: Number(data.active_index ?? 0),
+          can_back: !!data.can_back,
+          force_latest: true,
+        });
+        renderDeepAlignmentCard(deepPendingPayload);
+        addSystemNotice("请确认 Deep 理解是否一致", { persist: false });
+      } else if (data?.state === "cancelled") {
+        deepPendingPayload = null;
+        removeDeepCard(deepActiveCard);
+      }
+      setPendingConfirmFromList(confirmPending);
+      showToast(data?.state === "cancelled" ? "已取消 Deep 对齐" : "已提交回答");
+    } catch (e) {
+      showToast(`Deep 回答提交失败：${String(e?.message || e)}`, "warn");
+      setDeepCardBusy(wrapper, false);
+    }
+  }
+
+  function submitDeepAskAnswer(wrapper) {
+    return sendDeepAskDecision(wrapper, true);
+  }
+
+  function cancelDeepAskAnswer(wrapper) {
+    return sendDeepAskDecision(wrapper, false);
+  }
+
+  function removeDeepCard(card) {
+    if (card?.row?.isConnected) card.row.remove();
+    if (deepActiveCard === card) deepActiveCard = null;
+  }
+
+  function setDeepCardBusy(card, busy) {
+    if (!card?.card) return;
+    card.card.classList.toggle("busy", !!busy);
+    card.card.querySelectorAll("button, textarea").forEach((el) => {
+      el.disabled = !!busy;
+    });
+  }
+
+  function showDeepRevisionInput(card) {
+    if (!card?.card) return;
+    card.payload.collapsed = false;
+    updateDeepCardView(card);
+    card.card.classList.add("revising");
+    const box = card.card.querySelector(".deep-align-revision textarea");
+    if (box) {
+      box.disabled = false;
+      box.focus();
+    }
+  }
+
+  async function submitDeepRevision(card) {
+    if (!card?.payload) return;
+    const textarea = card.card?.querySelector(".deep-align-revision textarea");
+    const revision = String(textarea?.value || "").trim();
+    if (!revision) {
+      showToast("请先输入需要修正的理解点", "warn");
+      textarea?.focus();
+      return;
+    }
+    setDeepCardBusy(card, true);
+    try {
+      const sid = String(card.payload.sid || getSessionId() || "").trim();
+      const res = await apiFetch(`/sessions/${encodeURIComponent(sid)}/deep/revise`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ revision }),
+      });
+      const data = await res.json();
+      if (!res.ok || data?.ok === false) throw new Error(String(data?.error || `http ${res.status}`));
+      removeDeepCard(card);
+      renderDeepAlignmentCard(normalizeDeepPayload({
+        ...card.payload,
+        alignment_text: String(data.alignment_text || ""),
+        rounds: Array.isArray(data.rounds) ? data.rounds : [],
+        active_index: Number(data.active_index || 0),
+        can_back: !!data.can_back,
+        pending_deep_ask: data.pending_deep_ask || null,
+        force_latest: true,
+      }));
+    } catch (e) {
+      showToast(`Deep 修正失败：${String(e?.message || e)}`, "warn");
+      setDeepCardBusy(card, false);
+    }
+  }
+
+  async function backDeepAlignment(card) {
+    if (!card?.payload) return;
+    setDeepCardBusy(card, true);
+    try {
+      const sid = String(card.payload.sid || getSessionId() || "").trim();
+      const res = await apiFetch(`/sessions/${encodeURIComponent(sid)}/deep/back`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok || data?.ok === false) throw new Error(String(data?.error || `http ${res.status}`));
+      removeDeepCard(card);
+      renderDeepAlignmentCard(normalizeDeepPayload({
+        ...card.payload,
+        alignment_text: String(data.alignment_text || ""),
+        rounds: Array.isArray(data.rounds) ? data.rounds : [],
+        active_index: Number(data.active_index || 0),
+        can_back: !!data.can_back,
+        pending_deep_ask: data.pending_deep_ask || null,
+        force_latest: true,
+      }));
+    } catch (e) {
+      showToast(`返回上一版失败：${String(e?.message || e)}`, "warn");
+      setDeepCardBusy(card, false);
+    }
+  }
+
+  async function cancelDeepAlignment(card) {
+    const sid = String(card?.payload?.sid || getSessionId() || "").trim();
+    if (sid) {
+      apiFetch(`/sessions/${encodeURIComponent(sid)}/deep/cancel`, { method: "POST" }).catch(() => {});
+    }
+    removeDeepCard(card);
+    deepPendingPayload = null;
+  }
+
+  async function confirmDeepAlignment(card) {
+    if (!card?.payload) return;
+    const payload = card.payload;
+    setDeepCardBusy(card, true);
+    try {
+      const sid = String(payload.sid || getSessionId() || "").trim();
+      if (sid) {
+        await apiFetch(`/sessions/${encodeURIComponent(sid)}/deep/confirm`, { method: "POST" }).catch(() => {});
+      }
+      collapseDeepCard(card);
+      deepPendingPayload = null;
+      inputEl.value = "";
+      autoResize();
+      await sendMessage({
+        bypassDeep: true,
+        skipDeepEcho: true,
+        messageOverride: String(payload.message || ""),
+        fileNamesOverride: Array.isArray(payload.file_names) ? payload.file_names : [],
+        fileContentsOverride: Array.isArray(payload.file_contents) ? payload.file_contents : [],
+        deepAlignmentContext: buildDeepAlignmentContext(payload),
+      });
+    } catch (e) {
+      showToast(`Deep 确认失败：${String(e?.message || e)}`, "warn");
+      setDeepCardBusy(card, false);
+    }
+  }
+
+  function renderDeepAlignmentCard(payload) {
+    payload = normalizeDeepPayload(payload);
+    const row = document.createElement("div");
+    row.className = "deep-align-row";
+    const card = document.createElement("div");
+    card.className = "deep-align-card";
+    const rounds = Array.isArray(payload.rounds) ? payload.rounds : [];
+    payload.display_index = getDeepDisplayIndex(payload);
+    card.innerHTML = `
+      <div class="deep-align-head">
+        <div class="deep-align-title">Deep 理解确认</div>
+        <div class="deep-align-round">
+          <button type="button" class="deep-align-page-btn" data-action="prev-round" aria-label="上一条 Deep 记录">&lt;</button>
+          <span data-deep-page-count>${escapeHtml(rounds.length > 0 ? `${payload.display_index + 1}/${rounds.length}` : "0/0")}</span>
+          <button type="button" class="deep-align-page-btn" data-action="next-round" aria-label="下一条 Deep 记录">&gt;</button>
+        </div>
+      </div>
+      <div class="deep-align-body"></div>
+      <div class="deep-ask-panel"></div>
+      <div class="deep-align-actions">
+        <button type="button" class="deep-primary" data-action="confirm">一致，继续执行</button>
+        <button type="button" data-action="revise">不一致，补充说明</button>
+        <button type="button" data-action="back">返回上一级</button>
+        <button type="button" data-action="cancel">取消</button>
+        <div class="deep-align-revision">
+          <textarea rows="2" placeholder="告诉我哪里理解错了，或补充你的真实要求..."></textarea>
+          <button type="button" class="deep-primary" data-action="submit-revision">重新对齐</button>
+        </div>
+      </div>`;
+    const wrapper = { row, card, payload };
+    card.querySelector('[data-action="confirm"]')?.addEventListener("click", () => confirmDeepAlignment(wrapper));
+    card.querySelector('[data-action="revise"]')?.addEventListener("click", () => showDeepRevisionInput(wrapper));
+    card.querySelector('[data-action="back"]')?.addEventListener("click", () => backDeepAlignment(wrapper));
+    card.querySelector('[data-action="cancel"]')?.addEventListener("click", () => cancelDeepAlignment(wrapper));
+    card.querySelector('[data-action="submit-revision"]')?.addEventListener("click", () => submitDeepRevision(wrapper));
+    card.querySelector('[data-action="prev-round"]')?.addEventListener("click", () => switchDeepRound(wrapper, -1));
+    card.querySelector('[data-action="next-round"]')?.addEventListener("click", () => switchDeepRound(wrapper, 1));
+    card.querySelector(".deep-align-head")?.addEventListener("click", (e) => {
+      if (e.target?.closest?.(".deep-align-page-btn")) return;
+      toggleDeepRecord(wrapper);
+    });
+    const backBtn = card.querySelector('[data-action="back"]');
+    if (backBtn) backBtn.disabled = !payload.can_back;
+    updateDeepCardView(wrapper);
+    row.appendChild(card);
+    messagesEl.appendChild(row);
+    deepActiveCard = wrapper;
+    scrollToBottom();
+    return wrapper;
+  }
+
+  async function startDeepAlignment(payload) {
+    deepAlignmentBusy = true;
+    setMessageSendInFlight(true);
+    try {
+      const res = await apiFetch(`/sessions/${encodeURIComponent(payload.sid)}/deep/align`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          session_id: payload.sid,
+          message: payload.message,
+          file_names: payload.file_names || [],
+          file_contents: payload.file_contents || [],
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || data?.ok === false) throw new Error(String(data?.error || `http ${res.status}`));
+      const pendingCount = Math.max(0, Number(data?.pending_confirm_count || 0));
+      if (pendingCount > 0 || data?.pending_confirmation === true) {
+        deepPendingPayload = normalizeDeepPayload({
+          ...payload,
+          alignment_text: "",
+          rounds: Array.isArray(data.rounds) ? data.rounds : [],
+          active_index: Number(data.active_index || 0),
+          can_back: !!data.can_back,
+          pending_deep_ask: data.pending_deep_ask || (Array.isArray(data.pending) ? data.pending.find((x) => String(x?.flow || "") === "deep_alignment") : null),
+          force_latest: true,
+        });
+        removeDeepCard(deepActiveCard);
+        renderDeepAlignmentCard(deepPendingPayload);
+        setPendingConfirmFromList(Array.isArray(data.pending) ? data.pending : []);
+        addSystemNotice("Deep 需要你先补充一个条件", { persist: false });
+        return;
+      }
+      deepPendingPayload = normalizeDeepPayload({
+        ...payload,
+        alignment_text: String(data.alignment_text || ""),
+        rounds: Array.isArray(data.rounds) ? data.rounds : [],
+        active_index: Number(data.active_index || 0),
+        can_back: !!data.can_back,
+        pending_deep_ask: data.pending_deep_ask || null,
+        force_latest: true,
+      });
+      renderDeepAlignmentCard(deepPendingPayload);
+      addSystemNotice("请确认 Deep 理解是否一致", { persist: false });
+    } catch (e) {
+      reportErrorToTerminal(`Deep 对齐失败：${String(e?.message || e)}`, { source: "deep_alignment", sessionId: payload.sid });
+      addBubble("Deep 对齐失败，请检查模型服务或关闭 Deep 后重试。", "bot");
+      if (payload.createdForThisMessage && String(getStoredSessionId() || "") === payload.sid) {
+        clearActiveSessionState({ title: "新会话" });
+      }
+    } finally {
+      deepAlignmentBusy = false;
+      setMessageSendInFlight(false);
+      inputEl.focus();
+      removeFile();
+    }
+  }
+
+  async function restoreDeepAlignmentCard(sid) {
+    const safeSid = String(sid || "").trim();
+    if (!safeSid || isDraftSessionId(safeSid)) return false;
+    try {
+      const res = await apiFetch(`/sessions/${encodeURIComponent(safeSid)}/deep`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data?.ok === false || !data?.active) return false;
+      removeDeepCard(deepActiveCard);
+      deepPendingPayload = normalizeDeepPayload({
+        sid: safeSid,
+        message: String(data.original_message || ""),
+        file_names: Array.isArray(data.file_names) ? data.file_names : [],
+        file_contents: Array.isArray(data.file_contents) ? data.file_contents : [],
+        alignment_text: String(data.alignment_text || ""),
+        rounds: Array.isArray(data.rounds) ? data.rounds : [],
+        active_index: Number(data.active_index || 0),
+        can_back: !!data.can_back,
+        pending_deep_ask: data.pending_deep_ask || null,
+        force_latest: true,
+      });
+      clearEmptyState();
+      if (deepPendingPayload.file_names.length > 0) {
+        deepPendingPayload.file_names.forEach(function(name) { if (name) addFileChipBubble(name); });
+      }
+      if (deepPendingPayload.message) {
+        addBubble(deepPendingPayload.message, "user");
+      }
+      renderDeepAlignmentCard(deepPendingPayload);
+      return true;
+    } catch (e) {
+      reportErrorToTerminal(`恢复 Deep 对齐状态失败：${String(e?.message || e)}`, {
+        source: "deep_alignment",
+        sessionId: safeSid,
+        persist: false,
+      });
+      return false;
+    }
   }
 
   async function showVersionTip() {
@@ -5427,6 +7100,8 @@
     fileBarWrapEl.classList.remove("closing", "file-list-closing");
     fileBarWrapEl.style.display = "block";
     fileBtnEl?.classList.add("has-file");
+    renderComposerSelections();
+    requestAnimationFrame(updateComposerBottomSpace);
     void fileBarWrapEl.offsetWidth;
   }
 
@@ -5459,6 +7134,8 @@
     }
     fileBarWrapEl.classList.remove("closing", "expanded", "file-list-closing");
     fileBarClosing = false;
+    renderComposerSelections();
+    updateComposerBottomSpace();
   }
 
   function removeFile() {
@@ -5466,6 +7143,8 @@
     hideFileBar();
     if (fileBtnEl) fileBtnEl.classList.remove("has-file");
     if (fileInputEl) fileInputEl.value = "";
+    renderComposerSelections();
+    updateComposerBottomSpace();
     window.setTimeout(() => {
       if (importedFiles.length === 0 && fileListPanelEl) fileListPanelEl.innerHTML = "";
     }, 380);
@@ -5508,6 +7187,8 @@
       fileListPanelEl.style.overflowY = "auto";
     }
     fileListPanelEl.style.display = "";
+    renderComposerSelections();
+    requestAnimationFrame(updateComposerBottomSpace);
   }
 
   function toggleFileList() {
@@ -5573,9 +7254,19 @@
     if (!e.target.closest(".file-list-delete")) toggleFileList();
   });
 
+  function updateComposerBottomSpace() {
+    const dockH = Math.ceil(document.querySelector(".input-dock")?.getBoundingClientRect?.().height || 0);
+    const next = Math.max(148, dockH + 24);
+    document.documentElement.style.setProperty("--composer-bottom-space", `${next}px`);
+  }
+
   function autoResize() {
+    const maxInputHeight = 168;
     inputEl.style.height = "auto";
-    inputEl.style.height = Math.min(inputEl.scrollHeight, 130) + "px";
+    const nextHeight = Math.min(inputEl.scrollHeight, maxInputHeight);
+    inputEl.style.height = nextHeight + "px";
+    inputEl.style.overflowY = inputEl.scrollHeight > maxInputHeight ? "auto" : "hidden";
+    updateComposerBottomSpace();
   }
 
   function sanitizeMetaText(v) {
@@ -5650,6 +7341,51 @@
     };
   }
 
+  function closeComposerMenu() {
+    inputBoxEl?.classList.remove("tools-open");
+    composerPlusBtnEl?.setAttribute("aria-expanded", "false");
+    composerMenuEl?.setAttribute("aria-hidden", "true");
+  }
+
+  function toggleComposerMenu() {
+    const nextOpen = !inputBoxEl?.classList.contains("tools-open");
+    inputBoxEl?.classList.toggle("tools-open", nextOpen);
+    composerPlusBtnEl?.setAttribute("aria-expanded", nextOpen ? "true" : "false");
+    composerMenuEl?.setAttribute("aria-hidden", nextOpen ? "false" : "true");
+  }
+
+  function composerChipHtml(kind, label, removable = false) {
+    const remove = removable
+      ? `<button type="button" data-composer-remove="${escapeHtml(kind)}" aria-label="移除${escapeHtml(label)}">×</button>`
+      : "";
+    return `<span class="composer-chip" data-kind="${escapeHtml(kind)}">${escapeHtml(label)}${remove}</span>`;
+  }
+
+  function renderComposerSelections() {
+    if (!composerSelectedRowEl) return;
+    const chips = [];
+    if (webSearchEnabled) chips.push(composerChipHtml("web-search", "网络搜索", true));
+    if (deepEnabled) chips.push(composerChipHtml("deep", "Deep 对齐", true));
+    if (timeMode !== "none") chips.push(composerChipHtml("time", timeMode === "custom" ? "自定义时间" : "当前时间", false));
+    if (importedFiles.length > 0) chips.push(composerChipHtml("file", `${importedFiles.length} 个文件`, false));
+    composerSelectedRowEl.innerHTML = chips.join("");
+    composerSelectedRowEl.classList.toggle("empty", chips.length === 0);
+    webSearchBtnEl?.classList.toggle("on", webSearchEnabled);
+    webSearchBtnEl?.setAttribute("aria-pressed", webSearchEnabled ? "true" : "false");
+    requestAnimationFrame(updateComposerBottomSpace);
+  }
+
+  function setWebSearchEnabled(enabled, { silent = false } = {}) {
+    webSearchEnabled = !!enabled;
+    localStorage.setItem(WEB_SEARCH_ENABLED_KEY, webSearchEnabled ? "1" : "0");
+    renderComposerSelections();
+    if (!silent) addSystemNotice(webSearchEnabled ? "本轮允许 LLM 使用网络搜索" : "已关闭网络搜索", { persist: false });
+  }
+
+  function toggleWebSearchMode() {
+    setWebSearchEnabled(!webSearchEnabled);
+  }
+
   async function closeTimePanel() {
     if (!timeModePanelEl) return;
     await closeAnimatedPanel(timeModePanelEl, "time", "open", { timeout: 360 });
@@ -5699,6 +7435,7 @@
             : "已设置：发送消息附带当前时间";
       addSystemNotice(notice);
     }
+    renderComposerSelections();
   }
 
   async function ensureUserMetaLoaded() {
@@ -6121,19 +7858,28 @@
   }
 
   // --- Actions ---
-  async function sendMessage() {
+  async function sendMessage(options = {}) {
+    options = options || {};
     if (syncTerminalConfirmLockFromDom() > 0) {
-      showToast("存在待确认终端命令，请先在弹窗中允许/拒绝。", "warn");
+      showToast(pendingConfirmLockMessage(), "warn");
       inputEl?.focus();
       return;
     }
-    const text = inputEl.value.trim();
-    const hasFile = importedFiles.length > 0;
+    const hasMessageOverride = Object.prototype.hasOwnProperty.call(options, "messageOverride");
+    const text = hasMessageOverride ? String(options.messageOverride || "").trim() : inputEl.value.trim();
+    const overrideFileNames = Array.isArray(options.fileNamesOverride) ? options.fileNamesOverride : null;
+    const overrideFileContents = Array.isArray(options.fileContentsOverride) ? options.fileContentsOverride : null;
+    const hasFileOverride = !!overrideFileNames || !!overrideFileContents;
+    const hasFile = hasFileOverride ? ((overrideFileNames || []).length > 0) : importedFiles.length > 0;
     if (!text && !hasFile) return;
     let fullMessage = text;
-    const fileBackup = hasFile ? importedFiles.slice() : null;
-    const file_names = hasFile ? importedFiles.map(function(f) { return f.name; }) : [];
-    const file_contents = hasFile ? importedFiles.map(function(f) { return f.content; }) : [];
+    const fileBackup = hasFile && !hasFileOverride ? importedFiles.slice() : null;
+    const file_names = hasFileOverride
+      ? (overrideFileNames || []).map((x) => String(x || ""))
+      : (hasFile ? importedFiles.map(function(f) { return f.name; }) : []);
+    const file_contents = hasFileOverride
+      ? (overrideFileContents || []).map((x) => String(x || ""))
+      : (hasFile ? importedFiles.map(function(f) { return f.content; }) : []);
     const previousSid = String(getStoredSessionId() || "").trim();
     const sid = await ensureSessionForUserMessage();
     const createdForThisMessage = !previousSid || isDraftSessionId(previousSid);
@@ -6153,9 +7899,21 @@
       fileBackup.forEach(function(f) { addFileChipBubble(f.name); });
       importedFiles = [];
       removeFile();
+    } else if (hasFileOverride && !options.skipDeepEcho) {
+      file_names.forEach(function(name) { if (name) addFileChipBubble(name); });
     }
-    if (text) {
+    if (text && !options.skipDeepEcho) {
       addBubble(text, "user");
+    }
+    if (deepEnabled && !options.bypassDeep && !text.startsWith("/")) {
+      await startDeepAlignment({
+        sid,
+        message: fullMessage,
+        file_names,
+        file_contents,
+        createdForThisMessage,
+      });
+      return;
     }
     const echo = isEchoCmd(text);
     if (echo) { showTerm(); }
@@ -6183,9 +7941,13 @@
           message: fullMessage,
           session_id: sid,
         });
+        params.set("web_search_enabled", webSearchEnabled ? "1" : "0");
         if (file_names.length > 0) {
           file_names.forEach(function(n, i) { params.append("file_names", n); });
           file_contents.forEach(function(c, i) { params.append("file_contents", c); });
+        }
+        if (options.deepAlignmentContext) {
+          params.set("deep_alignment_context", String(options.deepAlignmentContext));
         }
         Object.entries(metaPayload).forEach(([k, v]) => params.set(k, String(v)));
         const url = `/chat/stream?${params.toString()}`;
@@ -6237,14 +7999,18 @@
           return Array.from(new Set(keys));
         }
 
-        function findToolBlockIndex(keys, name) {
+        function findToolBlockIndex(keys, name, hasStrongKey = false) {
           for (const key of keys) {
             if (toolCallBlockKeyIndex.has(key)) return toolCallBlockKeyIndex.get(key);
           }
+          if (hasStrongKey) return -1;
           const cleanName = normalizeToolCallKey(name);
           if (cleanName) {
-            const runningIdx = streamParts.findIndex((part) => part && part.type === "tool" && !part.done && part.name === cleanName);
-            if (runningIdx >= 0) return runningIdx;
+            const runningMatches = [];
+            streamParts.forEach((part, index) => {
+              if (part && part.type === "tool" && !part.done && part.name === cleanName) runningMatches.push(index);
+            });
+            if (runningMatches.length === 1) return runningMatches[0];
           }
           return -1;
         }
@@ -6262,7 +8028,8 @@
           const toolCallId = normalizeToolCallKey(payload.tool_call_id || payload.toolCallId || "");
           const progressText = normalizeToolCallKey(progress || payload.progress || "");
           const keys = toolKeysFromPayload(payload);
-          const idx = findToolBlockIndex(keys, name);
+          const hasStrongKey = !!(toolCallId || cid);
+          const idx = findToolBlockIndex(keys, name, hasStrongKey);
           const nextBlock = {
             type: "tool",
             name,
@@ -6499,6 +8266,7 @@
             // Inject tool details from donePayload into streamText (avoid duplicate)
             const toolTrace = Array.isArray(donePayload.tool_trace) ? donePayload.tool_trace : [];
             if (toolTrace.length > 0) {
+              showPlanPanelsFromTrace(toolTrace);
               toolTrace.forEach(function(step) {
                 if (!step || typeof step !== "object") return;
                 upsertToolBlock(step, true);
@@ -6573,6 +8341,8 @@
           session_id: sid,
           file_names: file_names,
           file_contents: file_contents,
+          deep_alignment_context: String(options.deepAlignmentContext || ""),
+          web_search_enabled: webSearchEnabled,
           ...metaPayload,
         }),
       });
@@ -6688,6 +8458,11 @@
   pendingConfirmDenyBtnEl?.addEventListener("click", () => {
     submitPendingConfirmation(false);
   });
+  planFloatHeadEl?.addEventListener("mousedown", startPlanFloatDrag);
+  document.addEventListener("mousemove", movePlanFloatDrag);
+  document.addEventListener("mouseup", stopPlanFloatDrag);
+  planFloatCollapseBtnEl?.addEventListener("click", togglePlanFloatCollapsed);
+  planFloatCloseBtnEl?.addEventListener("click", hidePlanFloat);
   recordsSearchInputEl?.addEventListener("keydown", (e) => {
     if (e.key === "Enter") {
       e.preventDefault();
@@ -6697,6 +8472,32 @@
   modelSwitchBtnEl?.addEventListener("click", (e) => {
     e.stopPropagation();
     toggleModelPanel();
+  });
+  deepBtnEl?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    toggleDeepMode();
+  });
+  composerPlusBtnEl?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    toggleComposerMenu();
+  });
+  webSearchBtnEl?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    toggleWebSearchMode();
+  });
+  composerSelectedRowEl?.addEventListener("click", (e) => {
+    const btn = e.target instanceof Element ? e.target.closest("[data-composer-remove]") : null;
+    if (!btn) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const kind = String(btn.getAttribute("data-composer-remove") || "");
+    if (kind === "web-search") setWebSearchEnabled(false);
+    if (kind === "deep") {
+      deepEnabled = false;
+      localStorage.setItem(DEEP_ENABLED_KEY, "0");
+      setDeepToggleUI();
+      addSystemNotice("Deep 对齐已关闭", { persist: false });
+    }
   });
   timeModeBtnEl?.addEventListener("click", (e) => {
     e.stopPropagation();
@@ -6742,6 +8543,11 @@
         closeTimePanel();
       }
     }
+    if (inputBoxEl && composerMenuEl && composerPlusBtnEl) {
+      if (!(composerMenuEl.contains(target) || composerPlusBtnEl.contains(target))) {
+        closeComposerMenu();
+      }
+    }
     if (modelPanelEl) {
       const mb = document.getElementById("modelSwitchBtn");
       if (mb && !(modelPanelEl.contains(target) || mb.contains(target))) {
@@ -6756,7 +8562,10 @@
       closeRecordsPanel();
     }
   });
-  window.addEventListener("resize", scheduleRecalcPinnedSpacerHeight);
+  window.addEventListener("resize", () => {
+    scheduleRecalcPinnedSpacerHeight();
+    updateComposerBottomSpace();
+  });
   termPanelEl.addEventListener("transitionend", (e) => {
     if (e.propertyName === "width") scheduleRecalcPinnedSpacerHeight();
   });
@@ -6801,8 +8610,12 @@
   const savedCustomTime = localStorage.getItem(TIME_CUSTOM_KEY);
   if (savedCustomTime) customTimeValue = savedCustomTime;
   setTimeMode(timeMode, { silent: true });
+  webSearchEnabled = localStorage.getItem(WEB_SEARCH_ENABLED_KEY) === "1";
   streamEnabled = localStorage.getItem(STREAM_ENABLED_KEY) === "1";
   setStreamToggleUI();
+  deepEnabled = localStorage.getItem(DEEP_ENABLED_KEY) === "1";
+  setDeepToggleUI();
+  renderComposerSelections();
   // 读取设置页配置
   try {
     const s = JSON.parse(localStorage.getItem("tinda_settings") || "{}");
@@ -6846,6 +8659,7 @@
       if (shouldReleaseInitialRender) await releaseInitialChatRender();
     }
   })();
+  updateComposerBottomSpace();
   closeTerm();
   refreshComposerDisabledState();
   inputEl.focus();

@@ -28,6 +28,7 @@ from TindaAgent.Process.AI.client import (
     request_tool_skip,
     strip_tool_protocol_artifacts,
 )
+from TindaAgent.Process.AI.context_compaction import compact_markdown_for_llm
 from TindaAgent.Process.AI.dispatcher import LlmDispatcher
 from TindaAgent.Process.Versioning import get_version_manager
 from TindaAgent.Process.Security import (
@@ -44,6 +45,7 @@ from TindaAgent.Process.Architecture.versioning import get_app_version
 from TindaAgent.Process.Architecture.migration import bootstrap_storage
 from TindaAgent.Process.Architecture.paths import (
     get_chat_records_root,
+    get_data_root,
     get_legacy_log_root,
     get_log_root,
     get_legacy_sessions_root,
@@ -53,6 +55,7 @@ from TindaAgent.Process.Architecture.paths import (
     get_users_file,
 )
 from TindaAgent.Process.Observability import audit_event
+from TindaAgent.Tool import tool as tool_registry
 from TindaAgent.Web.session_store import SessionStore, SessionStoreError, cleanup_legacy_chat_records
 from TindaAgent.Web.session_sqlite_index import SessionSQLiteIndex
 from TindaAgent.Web import session_adapter as sa
@@ -186,6 +189,7 @@ def _build_substeps_from_history(agent: Agent, tool_trace: list[dict] | None) ->
                 substeps.append({
                     "kind": "tool_marker",
                     "name": name,
+                    "mcp_alias": str(step.get("mcp_alias", "") or ""),
                     "ok": bool(ok),
                     "stdin": stdin[:500],
                     "stdout": stdout[:500],
@@ -195,6 +199,42 @@ def _build_substeps_from_history(agent: Agent, tool_trace: list[dict] | None) ->
                     "arguments": parsed_args if isinstance(parsed_args, dict) else {},
                     "result": tresult if isinstance(tresult, dict) else {},
                 })
+    return substeps
+
+
+def _build_substeps_from_agent_delta(
+    messages: list[dict] | None,
+    tool_trace: list[dict] | None,
+) -> list[dict]:
+    """Build display substeps from one LLM delta, preserving assistant/tool order."""
+    trace_by_key, ordered_trace = _tool_trace_lookup(tool_trace)
+    trace_idx = 0
+    substeps: list[dict] = []
+    if not isinstance(messages, list):
+        return substeps
+    for m in messages:
+        if not isinstance(m, dict) or m.get("role") != "assistant":
+            continue
+        rc = m.get("reasoning_content")
+        if rc and str(rc).strip():
+            substeps.append({"kind": "thinking", "content": str(rc).strip()})
+        text = m.get("content", "")
+        if isinstance(text, str) and text.strip():
+            clean_text = _sanitize_assistant_visible_text(text)
+            if clean_text.strip():
+                substeps.append({"kind": "text", "content": clean_text.strip()})
+        tool_calls = m.get("tool_calls")
+        if isinstance(tool_calls, list):
+            for tc in tool_calls:
+                if not isinstance(tc, dict):
+                    continue
+                model_id = str(tc.get("id", "") or "").strip()
+                trace_step = trace_by_key.get(model_id)
+                if trace_step is None and trace_idx < len(ordered_trace):
+                    trace_step = ordered_trace[trace_idx]
+                if trace_step is not None:
+                    trace_idx += 1
+                substeps.append(_build_tool_marker_substep_from_call(tc, trace_step=trace_step))
     return substeps
 
 
@@ -215,6 +255,7 @@ _version_mgr = get_version_manager()
 
 _MIGRATION = bootstrap_storage()
 _SESSIONS_ROOT = get_sessions_root()
+_DEEP_ALIGNMENT_ROOT = get_data_root() / "DeepAlignment"
 _store = SessionStore(_SESSIONS_ROOT, legacy_root_dir=get_legacy_sessions_root())
 _sqlite_index = SessionSQLiteIndex(get_system_root() / "session_index.sqlite3")
 _tool_runtime = ToolRuntimeManager()
@@ -249,6 +290,152 @@ if _normalized_sessions:
 _sessions: dict[str, Agent] = {}
 _session_last_access: dict[str, float] = {}
 _session_config: dict[str, dict] = {}
+_deep_alignment_state: dict[str, dict[str, Any]] = {}
+_DEEP_ALIGNMENT_SYSTEM_PROMPT = (
+    "You are in Deep Alignment mode. Do not execute the user's task yet. "
+    "Write a short user-facing alignment summary in Chinese. "
+    "Explain what you think the user wants, the key constraints, and what you will do after confirmation. "
+    "If required information is missing, use ask_user_question to ask one concise clarification question before writing the summary. "
+    "When using ask_user_question, ask exactly one user-facing question, include clear options only when they are truly mutually exclusive, and stop until the tool result returns. "
+    "Never invent, guess, or simulate the user's answer to ask_user_question. Treat the returned answer/choice as authoritative user input for the next alignment summary. "
+    "Deep Alignment is only for aligning the user's intent and constraints; it is not Plan mode and must not create an execution plan. "
+    "Deep Alignment exposes only ask_user_question as a pause/clarification tool, but after confirmation the main agent runtime has additional native tools. "
+    "If the user asks about tools, describe only that more tools may be available after confirmation; do not claim a tool is unavailable just because Deep Alignment cannot call it directly. "
+    "Do not reveal hidden reasoning or chain-of-thought. "
+    "Keep it simple, easy to understand, and professional. "
+    "Ask whether this understanding is correct."
+)
+
+
+def _safe_deep_alignment_sid(sid: str) -> str:
+    text = str(sid or "").strip()
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", text)[:120]
+
+
+def _deep_alignment_path(sid: str) -> Path:
+    safe = _safe_deep_alignment_sid(sid)
+    if not safe:
+        safe = "unknown"
+    return _DEEP_ALIGNMENT_ROOT / f"{safe}.json"
+
+
+def _normalize_deep_alignment_state(sid: str, state: Any) -> dict[str, Any] | None:
+    if not isinstance(state, dict):
+        return None
+    original_message = str(state.get("original_message", "") or "")
+    file_names = [str(x or "") for x in state.get("file_names", [])] if isinstance(state.get("file_names"), list) else []
+    file_contents = [str(x or "") for x in state.get("file_contents", [])] if isinstance(state.get("file_contents"), list) else []
+    rounds_raw = state.get("rounds") if isinstance(state.get("rounds"), list) else []
+    rounds: list[dict[str, Any]] = []
+    for row in rounds_raw:
+        if not isinstance(row, dict):
+            continue
+        rounds.append({
+            "revision": str(row.get("revision", "") or ""),
+            "alignment_text": str(row.get("alignment_text", "") or ""),
+            "ask_answer": str(row.get("ask_answer", "") or ""),
+            "ask_question": str(row.get("ask_question", "") or ""),
+            "created_at": str(row.get("created_at", "") or ""),
+            "updated_at": str(row.get("updated_at", "") or ""),
+        })
+    pending_deep_ask = state.get("pending_deep_ask") if isinstance(state.get("pending_deep_ask"), dict) else None
+    if pending_deep_ask is not None:
+        pending_deep_ask = {
+            "messages": pending_deep_ask.get("messages") if isinstance(pending_deep_ask.get("messages"), list) else [],
+            "tool_call": pending_deep_ask.get("tool_call") if isinstance(pending_deep_ask.get("tool_call"), dict) else {},
+            "call_id": str(pending_deep_ask.get("call_id", "") or ""),
+            "question": str(pending_deep_ask.get("question", "") or ""),
+            "created_at": str(pending_deep_ask.get("created_at", "") or ""),
+        }
+    if not original_message and not file_names and not rounds:
+        return None
+    active_index = int(state.get("active_index", len(rounds) - 1 if rounds else 0) or 0)
+    if rounds:
+        active_index = max(0, min(active_index, len(rounds) - 1))
+    else:
+        active_index = 0
+    return {
+        "version": 1,
+        "session_id": str(sid or "").strip(),
+        "active": bool(state.get("active", True)),
+        "state": str(state.get("state", "waiting_confirm") or "waiting_confirm"),
+        "original_message": original_message,
+        "file_names": file_names,
+        "file_contents": file_contents,
+        "rounds": rounds,
+        "active_index": active_index,
+        "pending_deep_ask": pending_deep_ask,
+        "updated_at": str(state.get("updated_at", "") or _now_iso()),
+    }
+
+
+def _load_deep_alignment_state(sid: str) -> dict[str, Any] | None:
+    key = str(sid or "").strip()
+    if not key:
+        return None
+    cached = _deep_alignment_state.get(key)
+    if isinstance(cached, dict):
+        return cached
+    path = _deep_alignment_path(key)
+    try:
+        if not path.exists():
+            return None
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as e:
+        logger.warning("load deep alignment failed session_id=%s err=%s", key, e)
+        return None
+    state = _normalize_deep_alignment_state(key, data)
+    if not state or not state.get("active", True):
+        try:
+            path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        return None
+    _deep_alignment_state[key] = state
+    return state
+
+
+def _save_deep_alignment_state(sid: str, state: dict[str, Any]) -> None:
+    key = str(sid or "").strip()
+    normalized = _normalize_deep_alignment_state(key, state)
+    if not key or not normalized:
+        return
+    _deep_alignment_state[key] = normalized
+    try:
+        _DEEP_ALIGNMENT_ROOT.mkdir(parents=True, exist_ok=True)
+        path = _deep_alignment_path(key)
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(normalized, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(path)
+    except Exception as e:
+        logger.warning("save deep alignment failed session_id=%s err=%s", key, e)
+
+
+def _delete_deep_alignment_state(sid: str) -> None:
+    key = str(sid or "").strip()
+    if not key:
+        return
+    _deep_alignment_state.pop(key, None)
+    try:
+        _deep_alignment_path(key).unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+def _delete_all_deep_alignment_state() -> int:
+    count = len(_deep_alignment_state)
+    _deep_alignment_state.clear()
+    try:
+        if _DEEP_ALIGNMENT_ROOT.exists():
+            for path in _DEEP_ALIGNMENT_ROOT.glob("*.json"):
+                try:
+                    path.unlink(missing_ok=True)
+                    count += 1
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    return count
 
 
 def _effective_context_token_limit(session_id: str) -> int:
@@ -790,11 +977,25 @@ class ChatRequest(BaseModel):
     session_id: str
     file_names: list[str] = Field(default_factory=list)
     file_contents: list[str] = Field(default_factory=list)
+    deep_alignment_context: str | None = None
+    web_search_enabled: bool = False
     meta_user_name: str | None = None
     meta_user_id: str | None = None
     meta_user_perm: str | None = None
     meta_time_iso: str | None = None
     meta_time_text: str | None = None
+
+
+class DeepAlignRequest(BaseModel):
+    session_id: str
+    message: str
+    file_names: list[str] = Field(default_factory=list)
+    file_contents: list[str] = Field(default_factory=list)
+    revision: str | None = None
+
+
+class DeepRevisionRequest(BaseModel):
+    revision: str
 
 
 class ModelSwitchRequest(BaseModel):
@@ -862,6 +1063,9 @@ class TerminalConfirmRequest(BaseModel):
     approval: bool
     call_id: str | None = None
     cmd: str | None = None
+    kind: str | None = None
+    answer: str | None = None
+    choice: str | None = None
 
 
 class UserProfileResponse(BaseModel):
@@ -1041,7 +1245,7 @@ def _summary_rows_for_compression(session_id: str, raw_rows: list[dict]) -> list
 
     rows: list[dict] = []
     if summary_text.strip():
-        rows.append({"role": "system", "content": f"[已有上下文摘要] {summary_text.strip()}"})
+        rows.append({"role": "system", "content": f"[Existing Context Summary] {summary_text.strip()}"})
     rows.extend(dict(x) for x in raw_rows)
     return rows
 
@@ -1591,8 +1795,14 @@ def _extract_pending_confirmation_items(tool_trace: list[dict] | None) -> list[d
         for cand in candidates:
             if cand.get("pending_confirmation") is not True:
                 continue
+            kind = str(cand.get("kind", "") or "").strip().lower()
+            question = str(cand.get("question", "") or "").strip()
             cmd = str(cand.get("cmd", "") or "").strip()
-            if not cmd:
+            if kind == "question" or question:
+                kind = "question"
+            if kind == "question" and not question:
+                continue
+            if kind != "question" and not cmd:
                 continue
             call_id = str(cand.get("call_id", "") or "").strip()
             if not call_id and isinstance(result, dict):
@@ -1602,22 +1812,34 @@ def _extract_pending_confirmation_items(tool_trace: list[dict] | None) -> list[d
             if not call_id:
                 call_id = str(step.get("tool_call_id", "") or "").strip()
             confirm_id = call_id or f"tcf_{uuid.uuid4().hex[:12]}"
-            key = (confirm_id, cmd)
+            key_text = question if kind == "question" else cmd
+            key = (confirm_id, key_text)
             if key in seen:
                 continue
             seen.add(key)
             note = str(cand.get("note", "") or "").strip()[:80]
-            items.append(
-                {
-                    "confirm_id": confirm_id,
-                    "call_id": call_id or confirm_id,
-                    "cmd": cmd,
-                    "note": note,
-                    "approval": None,
-                    "status": "pending",
-                    "created_at": _now_iso(),
-                }
-            )
+            item = {
+                "kind": kind or "terminal",
+                "confirm_id": confirm_id,
+                "call_id": call_id or confirm_id,
+                "cmd": cmd,
+                "note": note,
+                "approval": None,
+                "status": "pending",
+                "created_at": _now_iso(),
+            }
+            if kind == "question":
+                raw_options = cand.get("options", [])
+                options = raw_options if isinstance(raw_options, list) else []
+                item.update({
+                    "question": question,
+                    "options": [str(x or "").strip() for x in options if str(x or "").strip()][:8],
+                    "none_of_them_value": str(cand.get("none_of_them_value", "") or "__none_of_them__"),
+                    "none_of_them_label": str(cand.get("none_of_them_label", "") or "以上都不是，我自己补充"),
+                    "allow_custom_answer": bool(cand.get("allow_custom_answer", True)),
+                    "placeholder": str(cand.get("placeholder", "") or "补充你的答案或限制条件...")[:160],
+                })
+            items.append(item)
     return items
 
 
@@ -1629,26 +1851,45 @@ def _set_terminal_pending(session_id: str, items: list[dict] | None) -> None:
     for item in items or []:
         if not isinstance(item, dict):
             continue
+        kind = str(item.get("kind", "") or "").strip().lower()
+        question = str(item.get("question", "") or "").strip()
         cmd = str(item.get("cmd", "") or "").strip()
-        if not cmd:
+        if kind == "question" or question:
+            kind = "question"
+        else:
+            kind = "terminal"
+        if kind == "question" and not question:
+            continue
+        if kind != "question" and not cmd:
             continue
         call_id = str(item.get("call_id", "") or "").strip()
         confirm_id = str(item.get("confirm_id", "") or "").strip() or call_id or f"tcf_{uuid.uuid4().hex[:12]}"
         if not call_id:
             call_id = confirm_id
         note = str(item.get("note", "") or "").strip()[:80]
-        normalized.append(
-            {
-                "confirm_id": confirm_id,
-                "call_id": call_id,
-                "cmd": cmd,
-                "note": note,
-                "approval": None if item.get("approval") is None else bool(item.get("approval")),
-                "status": str(item.get("status", "pending") or "pending"),
-                "created_at": str(item.get("created_at", "") or _now_iso()),
-                "turn_id": str(item.get("turn_id", "") or "").strip(),
-            }
-        )
+        row = {
+            "flow": str(item.get("flow", "") or "").strip(),
+            "kind": kind,
+            "confirm_id": confirm_id,
+            "call_id": call_id,
+            "cmd": cmd,
+            "note": note,
+            "approval": None if item.get("approval") is None else bool(item.get("approval")),
+            "status": str(item.get("status", "pending") or "pending"),
+            "created_at": str(item.get("created_at", "") or _now_iso()),
+            "turn_id": str(item.get("turn_id", "") or "").strip(),
+        }
+        if kind == "question":
+            options = item.get("options") if isinstance(item.get("options"), list) else []
+            row.update({
+                "question": question,
+                "options": [str(x or "").strip() for x in options if str(x or "").strip()][:8],
+                "none_of_them_value": str(item.get("none_of_them_value", "") or "__none_of_them__"),
+                "none_of_them_label": str(item.get("none_of_them_label", "") or "以上都不是，我自己补充"),
+                "allow_custom_answer": bool(item.get("allow_custom_answer", True)),
+                "placeholder": str(item.get("placeholder", "") or "补充你的答案或限制条件...")[:160],
+            })
+        normalized.append(row)
     with _terminal_pending_lock:
         if normalized:
             _terminal_pending[sid] = normalized
@@ -1942,11 +2183,62 @@ def _evict_if_needed() -> None:
     _sessions.pop(oldest, None)
     _session_last_access.pop(oldest, None)
     _session_config.pop(oldest, None)
+    _delete_deep_alignment_state(oldest)
 
 
 def _is_tool_command_text(content: str) -> bool:
     raw = str(content or "").strip().lower()
     return raw.startswith("/tool") or raw.startswith("/tools") or raw.startswith("/help")
+
+
+def _is_plan_mode_message(content: str) -> bool:
+    raw = str(content or "").strip()
+    return bool(re.match(r"^/plan(?:\s|$)", raw, flags=re.IGNORECASE))
+
+
+def _strip_plan_mode_prefix(content: str) -> str:
+    raw = str(content or "").strip()
+    if not _is_plan_mode_message(raw):
+        return raw
+    stripped = re.sub(r"^/plan(?:\s+|$)", "", raw, count=1, flags=re.IGNORECASE).strip()
+    return stripped or "Create a plan for the current request."
+
+
+def _build_plan_mode_transient_context(original_message: str) -> str:
+    request = _strip_plan_mode_prefix(original_message)
+    return (
+        "[PLAN_MODE]\n"
+        "You are in Plan mode for this single user request. Do not execute the task yet. "
+        "Understand the user's request, key constraints, risks, and missing information. "
+        "If required information is missing, use the MCP-backed ask_user_question tool to ask one concise clarification question. "
+        "When using ask_user_question, ask exactly one blocking question, stop planning until the user answers, and treat the returned answer/choice as authoritative. "
+        "Never simulate the user's answer or continue with assumptions while ask_user_question is pending. "
+        "Otherwise, call the MCP-backed plan tool to record a concise execution plan. "
+        "The plan tool is also the API for plan state updates: set requires_completion_confirmation=true when user confirmation is needed before completion, and set completed=true/status=complete only when the plan is actually finished. "
+        "After recording the plan, explain it briefly in Chinese and wait for the user to confirm or ask to continue. "
+        "You can consider the full available tool list when designing the plan, but do not execute task tools while in Plan mode. "
+        "The only tools you should call in Plan mode are ask_user_question and plan. "
+        "Use native tool_calls/function calling only; TindaAgent maps those calls to MCP tools internally. Never simulate tool calls in text.\n"
+        "Planning request:\n"
+        f"{request[:2400]}\n"
+        "[/PLAN_MODE]"
+    )
+
+
+def _build_web_search_mode_transient_context(enabled: bool) -> str:
+    if enabled:
+        return (
+            "[WEB_SEARCH_MODE]\n"
+            "Web search is enabled for this user request. You may call the MCP-backed search_web tool only when current or external information is needed. "
+            "Do not search if the answer can be completed from the existing conversation or local context.\n"
+            "[/WEB_SEARCH_MODE]"
+        )
+    return (
+        "[WEB_SEARCH_MODE]\n"
+        "Web search is disabled for this user request. Do not call search_web. "
+        "If web access is necessary, ask the user to enable Web Search.\n"
+        "[/WEB_SEARCH_MODE]"
+    )
 
 
 def _is_tool_marker_text(content: str) -> bool:
@@ -2185,6 +2477,477 @@ def _get_agent(session_id: str, *, refresh_context: bool = True):
     return _sessions[sid]
 
 
+def _deep_public_payload(sid: str) -> dict[str, Any]:
+    state = _load_deep_alignment_state(str(sid or "").strip())
+    if not isinstance(state, dict):
+        return {"ok": True, "session_id": sid, "active": False, "state": "idle"}
+    rounds = state.get("rounds") if isinstance(state.get("rounds"), list) else []
+    active_index = int(state.get("active_index", len(rounds) - 1 if rounds else 0) or 0)
+    active_round = rounds[active_index] if 0 <= active_index < len(rounds) and isinstance(rounds[active_index], dict) else {}
+    pending = state.get("pending_deep_ask") if isinstance(state.get("pending_deep_ask"), dict) else None
+    pending_item = None
+    if pending and str(state.get("state", "")) == "waiting_question":
+        tool_call = pending.get("tool_call") if isinstance(pending.get("tool_call"), dict) else {}
+        call_id = str(pending.get("call_id", "") or tool_call.get("id", "") or "").strip()
+        args = _parse_deep_tool_args((tool_call.get("function") or {}).get("arguments", "{}") if isinstance(tool_call.get("function"), dict) else "{}")
+        pending_item = _deep_ask_pending_item(str(sid or ""), call_id or f"deep_ask_{uuid.uuid4().hex[:12]}", args)
+    return {
+        "ok": True,
+        "session_id": sid,
+        "active": bool(state.get("active", True)),
+        "state": str(state.get("state", "waiting_confirm")),
+        "original_message": str(state.get("original_message", "")),
+        "file_names": state.get("file_names") if isinstance(state.get("file_names"), list) else [],
+        "file_contents": state.get("file_contents") if isinstance(state.get("file_contents"), list) else [],
+        "rounds": rounds,
+        "active_index": active_index,
+        "alignment_text": str(active_round.get("alignment_text", "")),
+        "can_back": active_index > 0,
+        "pending_deep_ask": pending_item,
+        "updated_at": str(state.get("updated_at", "")),
+    }
+
+
+def _is_deep_alignment_pending_item(item: Any) -> bool:
+    if not isinstance(item, dict):
+        return False
+    return (
+        str(item.get("flow", "") or "").strip() == "deep_alignment"
+        and str(item.get("kind", "") or "").strip().lower() == "question"
+    )
+
+
+def _pending_item_key(item: dict[str, Any]) -> tuple[str, str, str]:
+    kind = str(item.get("kind", "") or "").strip().lower()
+    call_id = str(item.get("call_id", "") or item.get("confirm_id", "") or "").strip()
+    text = str(item.get("question", "") if kind == "question" else item.get("cmd", "")).strip()
+    return kind, call_id, text
+
+
+def _pending_item_ids(item: dict[str, Any]) -> set[str]:
+    ids: set[str] = set()
+    for key in ("call_id", "confirm_id"):
+        value = str(item.get(key, "") or "").strip()
+        if value:
+            ids.add(value)
+    return ids
+
+
+def _deep_alignment_pending_item_from_state(sid: str) -> dict[str, Any] | None:
+    payload = _deep_public_payload(str(sid or "").strip())
+    ask = payload.get("pending_deep_ask") if isinstance(payload, dict) else None
+    if _is_deep_alignment_pending_item(ask):
+        return dict(ask)
+    return None
+
+
+def _merge_deep_alignment_pending(sid: str, pending: list[dict] | None) -> list[dict]:
+    rows = [dict(row) for row in (pending or []) if isinstance(row, dict)]
+    deep_item = _deep_alignment_pending_item_from_state(sid)
+    if deep_item is None:
+        return [row for row in rows if not _is_deep_alignment_pending_item(row)]
+
+    deep_key = _pending_item_key(deep_item)
+    rows = [
+        row for row in rows
+        if not _is_deep_alignment_pending_item(row) or _pending_item_key(row) == deep_key
+    ]
+    if not any(_pending_item_key(row) == deep_key for row in rows):
+        rows.append(deep_item)
+    return rows
+
+
+def _extract_llm_message_text(resp: Any) -> str:
+    try:
+        choices = getattr(resp, "choices", None)
+        if choices:
+            msg = getattr(choices[0], "message", None)
+            text = getattr(msg, "content", "")
+            if text:
+                return str(text).strip()
+    except Exception:
+        pass
+    return ""
+
+
+def _extract_llm_message(resp: Any) -> Any:
+    try:
+        choices = getattr(resp, "choices", None)
+        if choices:
+            return getattr(choices[0], "message", None)
+    except Exception:
+        pass
+    return None
+
+
+def _deep_ask_tool_schema() -> list[dict[str, Any]]:
+    for row in tool_registry.build_mcp_tool_schemas(int(perm.PUBLIC_READ)):
+        fn = row.get("function") if isinstance(row, dict) else None
+        name = str(fn.get("name", "")) if isinstance(fn, dict) else ""
+        if isinstance(fn, dict) and (name == "ask_user_question" or name.endswith("__ask_user_question")):
+            return [row]
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": "ask_user_question",
+                "description": (
+                    "Ask the user one concise clarification question before Deep Alignment continues. "
+                    "HARD RULES: ask exactly one blocking question, stop until the tool result returns, "
+                    "never simulate the user's answer, and treat the returned answer/choice as authoritative. "
+                    "Parameters: question required, options optional, allow_custom_answer, placeholder."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "question": {
+                            "type": "string",
+                            "description": "Required. One concise user-facing clarification question. Ask only one thing.",
+                        },
+                        "options": {
+                            "type": "string",
+                            "description": "Optional mutually exclusive choices separated by newline, semicolon, or pipe.",
+                        },
+                        "allow_custom_answer": {
+                            "type": "string",
+                            "description": "Optional string boolean. Keep true unless the user must choose only from the provided options.",
+                        },
+                        "placeholder": {
+                            "type": "string",
+                            "description": "Optional short hint for the custom answer input.",
+                        },
+                    },
+                    "required": ["question"],
+                },
+            },
+        }
+    ]
+
+
+def _parse_deep_tool_args(raw: Any) -> dict[str, Any]:
+    if isinstance(raw, dict):
+        return raw
+    try:
+        data = json.loads(str(raw or "{}"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _split_deep_ask_options(raw_options: Any) -> list[str]:
+    if isinstance(raw_options, list):
+        values = raw_options
+    else:
+        values = re.split(r"[\n|；;]+", str(raw_options or ""))
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        item = str(value or "").strip()
+        if not item or item == "__none_of_them__":
+            continue
+        if len(item) > 120:
+            item = item[:120]
+        key = item.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(item)
+        if len(out) >= 8:
+            break
+    if out:
+        out.append("__none_of_them__")
+    return out
+
+
+def _deep_ask_pending_item(sid: str, call_id: str, args: dict[str, Any]) -> dict[str, Any] | None:
+    question = str(args.get("question", "") or "").strip()
+    if not question:
+        return None
+    return {
+        "flow": "deep_alignment",
+        "kind": "question",
+        "confirm_id": call_id,
+        "call_id": call_id,
+        "cmd": "",
+        "question": question[:1000],
+        "options": _split_deep_ask_options(args.get("options", "")),
+        "none_of_them_value": "__none_of_them__",
+        "none_of_them_label": "以上都不是，我自己补充",
+        "allow_custom_answer": str(args.get("allow_custom_answer", "true") or "true").strip().lower() not in {"0", "false", "no", "off"},
+        "placeholder": str(args.get("placeholder", "") or "补充你的答案或限制条件...")[:160],
+        "approval": None,
+        "status": "pending",
+        "created_at": _now_iso(),
+        "turn_id": f"deep_{_safe_deep_alignment_sid(sid)}",
+    }
+
+
+def _deep_tool_call_to_dict(call: Any, fallback_id: str) -> dict[str, Any]:
+    if isinstance(call, dict):
+        fn = call.get("function") if isinstance(call.get("function"), dict) else {}
+        return {
+            "id": str(call.get("id", "") or fallback_id),
+            "type": str(call.get("type", "") or "function"),
+            "function": {
+                "name": str(fn.get("name", "") or ""),
+                "arguments": fn.get("arguments", "{}") if isinstance(fn, dict) else "{}",
+            },
+        }
+    fn_obj = getattr(call, "function", None)
+    return {
+        "id": str(getattr(call, "id", None) or fallback_id),
+        "type": str(getattr(call, "type", None) or "function"),
+        "function": {
+            "name": str(getattr(fn_obj, "name", "") or ""),
+            "arguments": getattr(fn_obj, "arguments", None) or "{}",
+        },
+    }
+
+
+def _extract_deep_ask_call(resp: Any) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    msg = _extract_llm_message(resp)
+    calls = getattr(msg, "tool_calls", None) or []
+    for idx, call in enumerate(calls):
+        row = _deep_tool_call_to_dict(call, f"deep_ask_{uuid.uuid4().hex[:12]}_{idx}")
+        fn = row.get("function") if isinstance(row.get("function"), dict) else {}
+        if str(fn.get("name", "")) != "ask_user_question":
+            continue
+        args = _parse_deep_tool_args(fn.get("arguments", "{}"))
+        if str(args.get("question", "") or "").strip():
+            return row, args
+    return None
+
+
+def _deep_file_context(file_names: list[str] | None) -> str:
+    names = [str(x or "").strip() for x in (file_names or []) if str(x or "").strip()]
+    if not names:
+        return ""
+    return "Attached file names: " + ", ".join(names[:12])
+
+
+def _deep_session_context(sid: str, *, limit: int = 10, max_chars: int = 6000) -> str:
+    session_id = str(sid or "").strip()
+    if not session_id:
+        return "(none)"
+    try:
+        rows = _store.get_context_messages(session_id)
+        agent_rows, _stats = _store_to_agent_messages(rows)
+    except Exception as e:
+        logger.warning("deep alignment context load failed session_id=%s err=%s", session_id, e)
+        return "(unavailable)"
+    context_rows: list[str] = []
+    for row in (agent_rows or [])[-max(1, int(limit)):]:
+        if not isinstance(row, dict):
+            continue
+        role = str(row.get("role", "") or "").strip()
+        if role not in {"user", "assistant", "tool"}:
+            continue
+        content = compact_markdown_for_llm(str(row.get("content", "") or ""), limit=900).strip()
+        if not content:
+            continue
+        if role == "tool":
+            name = str(row.get("name", "") or row.get("tool_call_id", "") or "tool").strip()
+            label = f"tool:{name}"
+        else:
+            label = role
+        context_rows.append(f"{label}: {content}")
+    context = "\n\n".join(context_rows).strip()
+    if not context:
+        return "(none)"
+    if len(context) > max_chars:
+        context = context[-max_chars:]
+        context = f"[truncated older context]\n{context}"
+    return context
+
+
+def _deep_runtime_tool_summary(user_perm: int = 0, *, max_tools: int = 48) -> str:
+    try:
+        schemas = tool_registry.build_mcp_tool_schemas(int(user_perm or 0))
+    except Exception:
+        schemas = []
+    rows: list[str] = []
+    for schema in schemas:
+        if not isinstance(schema, dict):
+            continue
+        fn = schema.get("function") if isinstance(schema.get("function"), dict) else {}
+        name = str(fn.get("name", "") or "").strip()
+        if not name:
+            continue
+        desc = str(fn.get("description", "") or "").strip().replace("\n", " ")
+        if len(desc) > 160:
+            desc = desc[:157] + "..."
+        rows.append(f"- {name}: {desc}" if desc else f"- {name}")
+        if len(rows) >= max(1, int(max_tools or 1)):
+            break
+    if not rows:
+        return "- (No main-runtime tools are currently visible for this user.)"
+    return "\n".join(rows)
+
+
+def _build_deep_alignment_messages(
+    message: str,
+    rounds: list[dict[str, Any]],
+    file_names: list[str] | None = None,
+    session_id: str = "",
+    user_perm: int = 0,
+) -> list[dict[str, str]]:
+    history_lines: list[str] = []
+    for idx, row in enumerate(rounds[-5:], start=max(1, len(rounds) - 4)):
+        if not isinstance(row, dict):
+            continue
+        revision = str(row.get("revision", "") or "").strip()
+        alignment = str(row.get("alignment_text", "") or "").strip()
+        ask_answer = str(row.get("ask_answer", "") or "").strip()
+        if revision:
+            history_lines.append(f"Revision {idx}: {revision}")
+        if ask_answer:
+            history_lines.append(f"User clarification {idx}: {ask_answer}")
+        if alignment:
+            history_lines.append(f"Previous alignment {idx}: {alignment[:600]}")
+    user_content = (
+        f"Main runtime tool availability:\n"
+        f"- Deep Alignment can only ask clarification questions before confirmation.\n"
+        f"- After confirmation, the main agent runtime may use its normal tool set according to the user's permissions and the active mode.\n"
+        f"- Do not claim that a specific main-runtime tool is unavailable solely because it is not exposed during Deep Alignment.\n\n"
+        f"Main runtime tools visible after confirmation:\n"
+        f"{_deep_runtime_tool_summary(user_perm)}\n\n"
+        f"Current session context already available to the assistant:\n"
+        f"{_deep_session_context(session_id)}\n\n"
+        f"Original user request:\n{str(message or '').strip()}\n\n"
+        f"{_deep_file_context(file_names)}\n\n"
+        f"Previous alignment/revision context:\n"
+        f"{chr(10).join(history_lines) if history_lines else '(none)'}"
+    ).strip()
+    return [
+        {"role": "system", "content": _DEEP_ALIGNMENT_SYSTEM_PROMPT},
+        {"role": "user", "content": user_content},
+    ]
+
+
+def _generate_deep_alignment_result(
+    message: str,
+    rounds: list[dict[str, Any]],
+    file_names: list[str] | None = None,
+    session_id: str = "",
+    user_perm: int = 0,
+) -> dict[str, Any]:
+    messages = _build_deep_alignment_messages(message, rounds, file_names, session_id, user_perm=user_perm)
+    payload = {
+        "messages": messages,
+        "tools": _deep_ask_tool_schema(),
+        "tool_choice": "auto",
+        "temperature": 0.2,
+    }
+    resp = _llm.create_completion(payload, provider=_llm.current_provider, purpose="deep_alignment", stream=False)
+    ask_call = _extract_deep_ask_call(resp)
+    if ask_call is not None:
+        call, args = ask_call
+        call_id = str(call.get("id", "") or f"deep_ask_{uuid.uuid4().hex[:12]}")
+        assistant_msg = {
+            "role": "assistant",
+            "content": "",
+            "reasoning_content": str(getattr(_extract_llm_message(resp), "reasoning_content", "") or ""),
+            "tool_calls": [call],
+        }
+        pending = _deep_ask_pending_item(session_id, call_id, args)
+        if pending is not None:
+            return {
+                "state": "waiting_question",
+                "alignment_text": "",
+                "pending": pending,
+                "pending_deep_ask": {
+                    "messages": messages + [assistant_msg],
+                    "tool_call": call,
+                    "call_id": call_id,
+                    "question": str(args.get("question", "") or ""),
+                    "created_at": _now_iso(),
+                },
+            }
+    text = _extract_llm_message_text(resp)
+    if not text:
+        text = "我理解你希望我先确认需求重点，再继续执行。请确认这个理解是否一致。"
+    return {"state": "waiting_confirm", "alignment_text": text[:2400].strip()}
+
+
+def _generate_deep_alignment_text(
+    message: str,
+    rounds: list[dict[str, Any]],
+    file_names: list[str] | None = None,
+    session_id: str = "",
+    user_perm: int = 0,
+) -> str:
+    return str(
+        _generate_deep_alignment_result(
+            message,
+            rounds,
+            file_names=file_names,
+            session_id=session_id,
+            user_perm=user_perm,
+        ).get("alignment_text", "")
+    ).strip()
+
+
+def _resume_deep_alignment_after_question(
+    state: dict[str, Any],
+    answer: str,
+    choice: str = "",
+) -> dict[str, Any]:
+    pending = state.get("pending_deep_ask") if isinstance(state.get("pending_deep_ask"), dict) else {}
+    messages = pending.get("messages") if isinstance(pending.get("messages"), list) else []
+    call_id = str(pending.get("call_id", "") or "").strip()
+    if not messages or not call_id:
+        raise ValueError("no pending deep question")
+    answer_text = str(answer or choice or "(User did not provide an answer.)").strip()
+    tool_result = {
+        "ok": True,
+        "pending_confirmation": False,
+        "kind": "question_answer",
+        "question": str(pending.get("question", "") or ""),
+        "choice": str(choice or ""),
+        "answer": answer_text,
+        "message": "The user answered the Deep Alignment clarification question. Continue writing the alignment summary.",
+    }
+    payload = {
+        "messages": messages + [
+            {
+                "role": "tool",
+                "tool_call_id": call_id,
+                "content": json.dumps(tool_result, ensure_ascii=False),
+            }
+        ],
+        "tools": _deep_ask_tool_schema(),
+        "tool_choice": "none",
+        "temperature": 0.2,
+    }
+    resp = _llm.create_completion(payload, provider=_llm.current_provider, purpose="deep_alignment", stream=False)
+    text = _extract_llm_message_text(resp)
+    if not text:
+        text = "我已经收到你的补充，并会按这个理解继续执行。请确认这个理解是否一致。"
+    return {
+        "alignment_text": text[:2400].strip(),
+        "answer": answer_text,
+        "question": str(pending.get("question", "") or ""),
+    }
+
+
+def _build_deep_alignment_transient_context(alignment_text: str | None) -> str:
+    text = str(alignment_text or "").strip()
+    if not text:
+        return ""
+    return (
+        "[DEEP_ALIGNMENT_CONFIRMED]\n"
+        "The user has already confirmed the following alignment summary. "
+        "The alignment/confirmation phase is complete; execute the current user request now. "
+        "Use the summary only as constraints for this single request, not as a separate task. "
+        "Do not ask the user to confirm the same summary again. "
+        "If the request requires local files, shell commands, web search, memory, or other tool-backed work, "
+        "use native tool_calls/function calling normally. Never simulate tool calls in text.\n"
+        "Confirmed summary:\n"
+        f"{text[:2400]}\n"
+        "[/DEEP_ALIGNMENT_CONFIRMED]"
+    )
+
+
 def _stringify_trace_value(value) -> str:
     if value is None:
         return ""
@@ -2324,6 +3087,7 @@ def _save_chat_messages(
             substeps.append({
                 "kind": "tool_marker",
                 "name": name,
+                "mcp_alias": str(step.get("mcp_alias", "") or ""),
                 "ok": bool(ok),
                 "stdin": stdin[:500],
                 "stdout": stdout[:500],
@@ -2381,6 +3145,7 @@ def _append_assistant_continuation_messages(
             substeps.append({
                 "kind": "tool_marker",
                 "name": name, "ok": bool(ok),
+                "mcp_alias": str(step.get("mcp_alias", "") or ""),
                 "stdin": stdin[:500], "stdout": stdout[:500],
                 "id": cid.lstrip("tc_"),
                 "arguments": args if isinstance(args, dict) else {},
@@ -2414,6 +3179,7 @@ def _tool_trace_to_substeps(tool_trace: list[dict] | None) -> list[dict]:
         substeps.append({
             "kind": "tool_marker",
             "name": name,
+            "mcp_alias": str(step.get("mcp_alias", "") or ""),
             "ok": bool(ok),
             "stdin": stdin[:500],
             "stdout": stdout[:500],
@@ -2426,6 +3192,65 @@ def _tool_trace_to_substeps(tool_trace: list[dict] | None) -> list[dict]:
     return substeps
 
 
+def _tool_trace_lookup(tool_trace: list[dict] | None) -> tuple[dict[str, dict], list[dict]]:
+    by_key: dict[str, dict] = {}
+    ordered: list[dict] = []
+    if not isinstance(tool_trace, list):
+        return by_key, ordered
+    for step in tool_trace:
+        if not isinstance(step, dict):
+            continue
+        ordered.append(step)
+        for key in (step.get("call_id"), step.get("tool_call_id"), step.get("id")):
+            clean = str(key or "").strip()
+            if clean:
+                by_key[clean] = step
+                if clean.startswith("tc_"):
+                    by_key[clean.lstrip("tc_")] = step
+    return by_key, ordered
+
+
+def _build_tool_marker_substep_from_call(
+    tc: dict,
+    *,
+    trace_step: dict | None = None,
+) -> dict:
+    fn = tc.get("function", {}) if isinstance(tc, dict) else {}
+    if not isinstance(fn, dict):
+        fn = {}
+    name = str(fn.get("name", "unknown") or "unknown")
+    display_name = name
+    model_id = str(tc.get("id", "") or "").strip() if isinstance(tc, dict) else ""
+    raw_args = fn.get("arguments", "{}")
+    try:
+        parsed_args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+    except Exception:
+        parsed_args = {}
+    if not isinstance(parsed_args, dict):
+        parsed_args = {}
+    tinfo = trace_step if isinstance(trace_step, dict) else {}
+    if isinstance(tinfo, dict):
+        display_name = str(tinfo.get("agent_tool", "") or name)
+    call_id = str(tinfo.get("call_id", "") or model_id).strip()
+    result = tinfo.get("result", {}) if isinstance(tinfo, dict) else {}
+    ok = _tool_result_ok(result)
+    stdout = _tool_result_output(result)
+    stdin = str(parsed_args.get("cmd") or parsed_args.get("text") or parsed_args.get("key") or "")
+    return {
+        "kind": "tool_marker",
+        "name": display_name,
+        "mcp_alias": name,
+        "ok": bool(ok),
+        "stdin": stdin[:500],
+        "stdout": stdout[:500],
+        "id": call_id.lstrip("tc_"),
+        "tool_call_id": str(tinfo.get("tool_call_id", "") or model_id).strip(),
+        "status": "done" if trace_step else "running",
+        "arguments": parsed_args,
+        "result": result if isinstance(result, dict) else {},
+    }
+
+
 def _tool_call_start_to_substeps(calls: list[dict] | None) -> list[dict]:
     substeps: list[dict] = []
     if not isinstance(calls, list):
@@ -2434,6 +3259,7 @@ def _tool_call_start_to_substeps(calls: list[dict] | None) -> list[dict]:
         if not isinstance(call, dict):
             continue
         name = str(call.get("agent_tool", "unknown") or "unknown")
+        alias = str(call.get("mcp_alias", "") or name)
         model_id = str(call.get("tool_call_id", "") or "").strip()
         marker_id = str(call.get("call_id", "") or call.get("id", "") or model_id).strip()
         args = call.get("arguments", {}) or {}
@@ -2441,6 +3267,7 @@ def _tool_call_start_to_substeps(calls: list[dict] | None) -> list[dict]:
         substeps.append({
             "kind": "tool_marker",
             "name": name,
+            "mcp_alias": alias,
             "ok": False,
             "stdin": stdin[:500],
             "stdout": "工具调用已开始，等待执行结果...",
@@ -2516,15 +3343,15 @@ def _generate_title_from_first_round(session_id: str) -> None:
 
     def run() -> None:
         prompt = (
-            "请根据以下对话生成一个不超过 15 字的简洁标题，"
-            "直接返回标题文本，不要加引号或说明。\n\n"
-            f"用户：{user_msg}\n"
-            f"助手：{assistant_msg}"
+            "Generate a concise Chinese title of no more than 15 Chinese characters for the following conversation. "
+            "Return only the title text, without quotes or explanation.\n\n"
+            f"User: {user_msg}\n"
+            f"Assistant: {assistant_msg}"
         )
         try:
             title = _get_aux_client("title_model", "TINDA_TITLE_MODEL", "deepseek-v4-flash").chat(
                 [
-                    {"role": "system", "content": "你是对话标题生成助手。"},
+                    {"role": "system", "content": "You are a concise conversation title generator."},
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0.3,
@@ -2560,16 +3387,15 @@ def _compress_messages_with_llm(rows: list[dict]) -> str:
         parts.append(f"{role}: {content}")
     dialog = "\n".join(parts)
     prompt = (
-        "你是对话摘要助手。请将以下多轮对话压缩为一段简洁摘要。"
-        "要求：保留关键信息（用户需求、重要决策、结论）；"
-        "保留技术细节（代码、配置、专有名词）；"
-        "使用第三人称陈述；压缩为原内容的 20% 到 30% 长度。"
-        "直接输出摘要内容，不要添加前缀或说明。\n\n"
-        f"对话内容：\n{dialog}"
+        "Compress the following multi-turn conversation into one concise Chinese summary. "
+        "Keep key facts, user requirements, important decisions, conclusions, and technical details such as code, configuration, and proper nouns. "
+        "Use third-person narration. Target 20% to 30% of the original length. "
+        "Return only the summary content, without prefixes or explanations.\n\n"
+        f"Conversation:\n{dialog}"
     )
     text = _get_aux_client("compress_model", "TINDA_COMPRESS_MODEL", "deepseek-v4-flash").chat(
         [
-            {"role": "system", "content": "你是严谨的对话摘要助手。"},
+            {"role": "system", "content": "You are a precise conversation summarization assistant."},
             {"role": "user", "content": prompt},
         ],
         temperature=0.3,
@@ -3586,6 +4412,149 @@ async def get_session_config(session_id: str):
     return JSONResponse({"ok": True, "session_id": sid, "config": cfg})
 
 
+@app.get("/sessions/{session_id}/deep")
+async def get_deep_alignment(session_id: str):
+    sid, _meta = _require_session_access(session_id, create=False)
+    return JSONResponse(_deep_public_payload(sid))
+
+
+@app.post("/sessions/{session_id}/deep/align")
+async def start_deep_alignment(session_id: str, req: DeepAlignRequest):
+    current = _require_login()
+    if not _has_llm_perm(current):
+        return JSONResponse({"ok": False, "error": "权限不足：当前账户不可调用 LLM 对话"}, status_code=403)
+    sid, _meta = _require_session_access(session_id, user=current)
+    req_sid = str(req.session_id or "").strip()
+    if req_sid and req_sid != sid:
+        return JSONResponse({"ok": False, "error": "session_id mismatch"}, status_code=400)
+    message = str(req.message or "").strip()
+    if not message and not req.file_names:
+        return JSONResponse({"ok": False, "error": "message required"}, status_code=400)
+
+    prev = _load_deep_alignment_state(sid)
+    prev_rounds = prev.get("rounds") if isinstance(prev, dict) and isinstance(prev.get("rounds"), list) else []
+    revision = str(req.revision or "").strip()
+    rounds = list(prev_rounds) if revision and isinstance(prev, dict) and str(prev.get("original_message", "")) == message else []
+    if revision:
+        rounds.append({"revision": revision, "created_at": _now_iso()})
+    profile = _get_web_profile(current)
+    alignment_result = _generate_deep_alignment_result(
+        message,
+        rounds,
+        req.file_names,
+        session_id=sid,
+        user_perm=int(profile.perm),
+    )
+    pending_item = alignment_result.get("pending") if isinstance(alignment_result.get("pending"), dict) else None
+    if pending_item is not None:
+        next_state = {
+            "active": True,
+            "state": "waiting_question",
+            "original_message": message,
+            "file_names": [str(x or "") for x in (req.file_names or [])],
+            "file_contents": [str(x or "") for x in (req.file_contents or [])],
+            "rounds": rounds,
+            "active_index": max(0, len(rounds) - 1 if rounds else 0),
+            "pending_deep_ask": alignment_result.get("pending_deep_ask") if isinstance(alignment_result.get("pending_deep_ask"), dict) else {},
+            "updated_at": _now_iso(),
+        }
+        _save_deep_alignment_state(sid, next_state)
+        _set_terminal_pending(sid, [pending_item])
+        _audit_web(
+            "SYSTEM_EXECUTE",
+            "start_deep_alignment",
+            f"deep_alignment_question session_id={sid}",
+            {"session_id": sid, "rounds": len(rounds), "has_revision": bool(revision)},
+        )
+        return JSONResponse({**_deep_public_payload(sid), "pending_confirmation": True, "pending_confirm_count": 1, "pending": [pending_item]})
+
+    alignment_text = str(alignment_result.get("alignment_text", "") or "")
+    if rounds and "alignment_text" not in rounds[-1]:
+        rounds[-1]["alignment_text"] = alignment_text
+        rounds[-1]["updated_at"] = _now_iso()
+    else:
+        rounds.append({
+            "revision": "",
+            "alignment_text": alignment_text,
+            "created_at": _now_iso(),
+            "updated_at": _now_iso(),
+        })
+    next_state = {
+        "active": True,
+        "state": "waiting_confirm",
+        "original_message": message,
+        "file_names": [str(x or "") for x in (req.file_names or [])],
+        "file_contents": [str(x or "") for x in (req.file_contents or [])],
+        "rounds": rounds,
+        "active_index": max(0, len(rounds) - 1),
+        "pending_deep_ask": None,
+        "updated_at": _now_iso(),
+    }
+    _save_deep_alignment_state(sid, next_state)
+    _clear_terminal_pending(sid)
+    _audit_web(
+        "SYSTEM_EXECUTE",
+        "start_deep_alignment",
+        f"deep_alignment_updated session_id={sid}",
+        {"session_id": sid, "rounds": len(rounds), "has_revision": bool(revision)},
+    )
+    return JSONResponse(_deep_public_payload(sid))
+
+
+@app.post("/sessions/{session_id}/deep/revise")
+async def revise_deep_alignment(session_id: str, req: DeepRevisionRequest):
+    sid, _meta = _require_session_access(session_id, create=False)
+    state = _load_deep_alignment_state(sid)
+    if not isinstance(state, dict):
+        return JSONResponse({"ok": False, "error": "no active deep alignment"}, status_code=404)
+    align_req = DeepAlignRequest(
+        session_id=sid,
+        message=str(state.get("original_message", "")),
+        file_names=state.get("file_names") if isinstance(state.get("file_names"), list) else [],
+        file_contents=state.get("file_contents") if isinstance(state.get("file_contents"), list) else [],
+        revision=str(req.revision or ""),
+    )
+    return await start_deep_alignment(sid, align_req)
+
+
+@app.post("/sessions/{session_id}/deep/back")
+async def back_deep_alignment(session_id: str):
+    sid, _meta = _require_session_access(session_id, create=False)
+    state = _load_deep_alignment_state(sid)
+    if not isinstance(state, dict):
+        return JSONResponse({"ok": False, "error": "no active deep alignment"}, status_code=404)
+    rounds = state.get("rounds") if isinstance(state.get("rounds"), list) else []
+    active_index = int(state.get("active_index", len(rounds) - 1 if rounds else 0) or 0)
+    if active_index <= 0:
+        return JSONResponse(_deep_public_payload(sid))
+    state["active_index"] = active_index - 1
+    state["state"] = "waiting_confirm"
+    state["updated_at"] = _now_iso()
+    _save_deep_alignment_state(sid, state)
+    return JSONResponse(_deep_public_payload(sid))
+
+
+@app.post("/sessions/{session_id}/deep/confirm")
+async def confirm_deep_alignment(session_id: str):
+    sid, _meta = _require_session_access(session_id, create=False)
+    state = _load_deep_alignment_state(sid)
+    if not isinstance(state, dict):
+        return JSONResponse({"ok": False, "error": "no active deep alignment"}, status_code=404)
+    state["state"] = "confirmed"
+    state["active"] = False
+    state["updated_at"] = _now_iso()
+    payload = _deep_public_payload(sid)
+    _delete_deep_alignment_state(sid)
+    return JSONResponse({**payload, "state": "confirmed", "active": False})
+
+
+@app.post("/sessions/{session_id}/deep/cancel")
+async def cancel_deep_alignment(session_id: str):
+    sid, _meta = _require_session_access(session_id, create=False)
+    _delete_deep_alignment_state(sid)
+    return JSONResponse({"ok": True, "session_id": sid, "active": False, "state": "idle"})
+
+
 @app.get("/sessions/{session_id}/context-usage")
 async def get_session_context_usage(session_id: str):
     try:
@@ -3656,6 +4625,7 @@ async def delete_session(session_id: str):
     _sessions.pop(sid, None)
     _session_last_access.pop(sid, None)
     _session_config.pop(sid, None)
+    _delete_deep_alignment_state(sid)
     _clear_terminal_pending(sid)
     _invalidate_session_index(sid)
     if not ok:
@@ -3683,11 +4653,13 @@ async def delete_all_sessions():
             _sessions.pop(sid, None)
             _session_last_access.pop(sid, None)
             _session_config.pop(sid, None)
+            _delete_deep_alignment_state(sid)
             _clear_terminal_pending(sid)
             _invalidate_session_index(sid)
             deleted += 1
         except Exception:
             pass
+    _delete_all_deep_alignment_state()
     return JSONResponse({"ok": True, "deleted": deleted})
 
 
@@ -3836,7 +4808,8 @@ async def chat(req: ChatRequest):
     if not message and not has_file:
         return JSONResponse({"reply": "", "tool_trace": [], "tool_steps": 0, "turn_id": turn_id})
 
-    if message.startswith("/"):
+    plan_mode = _is_plan_mode_message(message)
+    if message.startswith("/") and not plan_mode:
         profile = _get_web_profile()
         try:
             job = _tool_runtime.submit_command(sid, message, profile.perm)
@@ -3878,7 +4851,7 @@ async def chat(req: ChatRequest):
             }
         )
 
-    raw_text = message
+    raw_text = _strip_plan_mode_prefix(message) if plan_mode else message
     if req.file_names:
         for fn, fc in zip(req.file_names, req.file_contents):
             raw_text = f"[文件: {fn}]\n```\n{fc or ''}\n```\n" + raw_text
@@ -3891,7 +4864,15 @@ async def chat(req: ChatRequest):
         meta_time_text=req.meta_time_text,
     )
 
-    result = agent.chat_with_meta(llm_message)
+    transient_contexts = []
+    if plan_mode:
+        transient_contexts.append(_build_plan_mode_transient_context(message))
+    transient_contexts.append(_build_web_search_mode_transient_context(bool(req.web_search_enabled)))
+    deep_context = _build_deep_alignment_transient_context(req.deep_alignment_context)
+    if deep_context:
+        transient_contexts.append(deep_context)
+    transient_system_context = "\n\n".join(transient_contexts)
+    result = agent.chat_with_meta(llm_message, transient_system_context=transient_system_context)
     tool_trace_raw = result.get("tool_trace", [])
     tool_trace = _sanitize_tool_trace_for_user(tool_trace_raw)
     tool_steps = int(result.get("tool_steps", 0))
@@ -3987,6 +4968,8 @@ async def chat_stream(
     session_id: str,
     file_names: list[str] = Query(default_factory=list),
     file_contents: list[str] = Query(default_factory=list),
+    deep_alignment_context: str | None = None,
+    web_search_enabled: bool = False,
     meta_user_name: str | None = None,
     meta_user_id: str | None = None,
     meta_user_perm: str | None = None,
@@ -4042,7 +5025,8 @@ async def chat_stream(
     agent = _get_agent(sid)
 
     text = str(message or "").strip()
-    if text.startswith("/"):
+    plan_mode = _is_plan_mode_message(text)
+    if text.startswith("/") and not plan_mode:
         profile = _get_web_profile()
         try:
             job = _tool_runtime.submit_command(sid, text, profile.perm)
@@ -4098,7 +5082,7 @@ async def chat_stream(
         ]
         return HTMLResponse("".join(chunks), media_type="text/event-stream")
 
-    raw_text = str(message or "").strip()
+    raw_text = _strip_plan_mode_prefix(text) if plan_mode else text
     if file_names:
         for fn, fc in zip(file_names, file_contents):
             raw_text = f"[文件: {fn}]\n```\n{fc or ''}\n```\n" + raw_text
@@ -4110,6 +5094,14 @@ async def chat_stream(
         meta_time_iso=meta_time_iso,
         meta_time_text=meta_time_text,
     )
+    transient_contexts = []
+    if plan_mode:
+        transient_contexts.append(_build_plan_mode_transient_context(text))
+    transient_contexts.append(_build_web_search_mode_transient_context(bool(web_search_enabled)))
+    deep_context = _build_deep_alignment_transient_context(deep_alignment_context)
+    if deep_context:
+        transient_contexts.append(deep_context)
+    transient_system_context = "\n\n".join(transient_contexts)
 
     def event_iter():
         final_reply = ""
@@ -4141,7 +5133,7 @@ async def chat_stream(
 
         try:
             ensure_stream_draft()
-            for event in agent.stream_chat_events(llm_message):
+            for event in agent.stream_chat_events(llm_message, transient_system_context=transient_system_context):
                 et = event.get("type", "")
                 if et == "delta":
                     final_reply += str(event.get("content", ""))
@@ -4310,11 +5302,16 @@ async def chat_stream(
 @app.get("/terminal/pending")
 async def terminal_pending(session_id: str = Query(default="")):
     sid, _meta = _require_session_access(session_id, create=False)
-    pending = _get_terminal_pending(sid)
+    pending = _merge_deep_alignment_pending(sid, _get_terminal_pending(sid))
     agent = _sessions.get(sid)
     if pending and (agent is None or not bool(getattr(agent, "has_pending_confirmation", lambda: False)())):
-        _clear_terminal_pending(sid)
-        pending = []
+        deep_pending = [row for row in pending if _is_deep_alignment_pending_item(row)]
+        if deep_pending:
+            _set_terminal_pending(sid, deep_pending)
+            pending = deep_pending
+        else:
+            _clear_terminal_pending(sid)
+            pending = []
     return JSONResponse(
         {
             "ok": True,
@@ -4332,7 +5329,9 @@ async def terminal_confirm(req: TerminalConfirmRequest):
         return JSONResponse({"ok": False, "error": "session_id required"}, status_code=400)
     sid, _meta = _require_session_access(sid)
 
-    pending = _get_terminal_pending(sid)
+    pending = _merge_deep_alignment_pending(sid, _get_terminal_pending(sid))
+    if pending:
+        _set_terminal_pending(sid, pending)
     if not pending:
         return JSONResponse(
             {
@@ -4348,11 +5347,18 @@ async def terminal_confirm(req: TerminalConfirmRequest):
     target_index = 0
     requested_call_id = str(req.call_id or "").strip()
     requested_cmd = str(req.cmd or "").strip()
+    requested_kind = str(req.kind or "").strip().lower()
     if requested_call_id:
-        idx = next((i for i, row in enumerate(pending) if str(row.get("call_id", "")).strip() == requested_call_id), -1)
+        idx = next((i for i, row in enumerate(pending) if requested_call_id in _pending_item_ids(row)), -1)
         if idx < 0:
             return JSONResponse(
-                {"ok": False, "error": f"call_id not pending: {requested_call_id}"},
+                {
+                    "ok": False,
+                    "error": f"call_id not pending: {requested_call_id}",
+                    "error_code": "call_id_not_pending",
+                    "pending_confirm_count": len(pending),
+                    "pending": pending,
+                },
                 status_code=400,
             )
         target_index = idx
@@ -4362,8 +5368,73 @@ async def terminal_confirm(req: TerminalConfirmRequest):
             target_index = idx
 
     target = pending[target_index]
+    target_kind = str(target.get("kind", "") or requested_kind or "").strip().lower()
     approval = bool(req.approval)
     action = "allow" if approval else "deny"
+    answer_text = str(req.answer or "").strip()
+    choice_text = str(req.choice or "").strip()
+
+    if target_kind == "question" and str(target.get("flow", "") or "").strip() == "deep_alignment":
+        state = _load_deep_alignment_state(sid)
+        if not isinstance(state, dict):
+            _clear_terminal_pending(sid)
+            return JSONResponse({"ok": False, "error": "no active deep alignment"}, status_code=404)
+        if not approval:
+            _delete_deep_alignment_state(sid)
+            remaining = [row for idx, row in enumerate(pending) if idx != target_index]
+            _set_terminal_pending(sid, remaining)
+            return JSONResponse({
+                "ok": True,
+                "flow": "deep_alignment",
+                "state": "cancelled",
+                "active": False,
+                "session_id": sid,
+                "reply": "",
+                "tool_trace": [],
+                "tool_steps": 0,
+                "pending_confirmation": len(remaining) > 0,
+                "pending_confirm_count": len(remaining),
+                "pending": remaining,
+            })
+        try:
+            resumed = _resume_deep_alignment_after_question(state, answer_text, choice_text)
+        except Exception as e:
+            return JSONResponse({"ok": False, "error": str(e), "flow": "deep_alignment"}, status_code=400)
+        rounds = state.get("rounds") if isinstance(state.get("rounds"), list) else []
+        rounds = list(rounds)
+        if rounds and "alignment_text" not in rounds[-1]:
+            rounds[-1]["alignment_text"] = str(resumed.get("alignment_text", ""))
+            rounds[-1]["ask_answer"] = str(resumed.get("answer", ""))
+            rounds[-1]["ask_question"] = str(resumed.get("question", ""))
+            rounds[-1]["updated_at"] = _now_iso()
+        else:
+            rounds.append({
+                "revision": "",
+                "alignment_text": str(resumed.get("alignment_text", "")),
+                "ask_answer": str(resumed.get("answer", "")),
+                "ask_question": str(resumed.get("question", "")),
+                "created_at": _now_iso(),
+                "updated_at": _now_iso(),
+            })
+        state["rounds"] = rounds
+        state["active_index"] = max(0, len(rounds) - 1)
+        state["state"] = "waiting_confirm"
+        state["pending_deep_ask"] = None
+        state["updated_at"] = _now_iso()
+        _save_deep_alignment_state(sid, state)
+        remaining = [row for idx, row in enumerate(pending) if idx != target_index]
+        _set_terminal_pending(sid, remaining)
+        payload = _deep_public_payload(sid)
+        return JSONResponse({
+            **payload,
+            "flow": "deep_alignment",
+            "reply": "",
+            "tool_trace": [],
+            "tool_steps": 0,
+            "pending_confirmation": len(remaining) > 0,
+            "pending_confirm_count": len(remaining),
+            "pending": remaining,
+        })
 
     agent = _get_agent(sid, refresh_context=False)
     fresh = not bool(getattr(agent, "has_pending_confirmation", lambda: False)())
@@ -4373,7 +5444,39 @@ async def terminal_confirm(req: TerminalConfirmRequest):
         from TindaAgent.Tool.tool import run_terminal
         import json as _json
         cmd = str(target.get("cmd", "")).strip()
-        exec_result = run_terminal(cmd=cmd, _caller_perm=int(getattr(agent, "perm", 0)), _approval=approval)
+        if target_kind == "question":
+            if approval:
+                exec_result = {
+                    "ok": True,
+                    "pending_confirmation": False,
+                    "kind": "question_answer",
+                    "approval": True,
+                    "action": "allow",
+                    "confirm_id": str(target.get("confirm_id", "") or target.get("call_id", "")),
+                    "question": str(target.get("question", "") or ""),
+                    "choice": choice_text,
+                    "answer": answer_text or choice_text or "(User did not provide an answer.)",
+                    "message": "The user answered the clarification question. Continue the task using this answer.",
+                }
+            else:
+                exec_result = {
+                    "ok": False,
+                    "pending_confirmation": False,
+                    "kind": "question_answer",
+                    "approval": False,
+                    "action": "deny",
+                    "error_code": "user_cancelled",
+                    "confirm_id": str(target.get("confirm_id", "") or target.get("call_id", "")),
+                    "question": str(target.get("question", "") or ""),
+                    "answer": "(User cancelled the clarification question.)",
+                    "message": "The user cancelled the clarification question. Proceed with reasonable assumptions if possible.",
+                }
+            tool_name = "ask_user_question"
+            tool_args = {"question": str(target.get("question", "") or "")}
+        else:
+            exec_result = run_terminal(cmd=cmd, _caller_perm=int(getattr(agent, "perm", 0)), _approval=approval)
+            tool_name = "run_terminal"
+            tool_args = {"cmd": cmd}
         rows = _store.get_context_messages(sid)
         agent_rows, _ = _store_to_agent_messages(rows)
         agent.replace_conversation(agent_rows)
@@ -4381,8 +5484,8 @@ async def terminal_confirm(req: TerminalConfirmRequest):
         agent.history.append({"role": "assistant", "content": None,
                               "reasoning_content": "",
                               "tool_calls": [{"id": call_id, "type": "function",
-                                              "function": {"name": "run_terminal",
-                                                           "arguments": _json.dumps({"cmd": cmd}, ensure_ascii=False)}}]})
+                                              "function": {"name": tool_name,
+                                                           "arguments": _json.dumps(tool_args, ensure_ascii=False)}}]})
         agent.history.append({"role": "tool", "tool_call_id": call_id,
                               "content": _json.dumps(exec_result, ensure_ascii=False)})
         _write_context_log(
@@ -4393,11 +5496,17 @@ async def terminal_confirm(req: TerminalConfirmRequest):
         )
         request_messages = agent._messages_for_llm_request(agent.history)
         result = agent._ensure_client().chat_with_tools(request_messages, user_perm=agent.perm, temperature=None)
+        recovered_delta = result.get("history_delta", [])
+        if isinstance(recovered_delta, list) and recovered_delta:
+            agent.history.extend([m.copy() if isinstance(m, dict) else m for m in recovered_delta])
     else:
         decision = {
             "approval": approval,
             "action": action,
             "confirm_id": str(target.get("confirm_id", "") or target.get("call_id", "")),
+            "kind": target_kind,
+            "answer": answer_text,
+            "choice": choice_text,
         }
         held = getattr(agent, "_held_messages", None) or []
         _write_context_log(
@@ -4435,61 +5544,11 @@ async def terminal_confirm(req: TerminalConfirmRequest):
 
     confirm_turn_id = str(target.get("turn_id", "") or "").strip() or f"turn_{uuid.uuid4().hex[:12]}"
 
-    # Build new substeps only from messages added after the held history
-    held_len = len(getattr(agent, "_held_messages", []) or [])
-    # _held_messages includes system + user + assistant + tool from before pending
-    # After resume, agent.history = held_msgs + [system_instruction] + [assistant_response] + [tool_results...]
-    new_msgs = agent.history[held_len:]
-    new_substeps: list[dict] = []
-    for m in new_msgs:
-        if not isinstance(m, dict):
-            continue
-        if m.get("role") != "assistant":
-            continue
-        rc = m.get("reasoning_content")
-        if rc and str(rc).strip():
-            new_substeps.append({"kind": "thinking", "content": str(rc).strip()})
-        text = m.get("content", "")
-        if isinstance(text, str) and text.strip():
-            clean_text = _sanitize_assistant_visible_text(text)
-            if clean_text.strip():
-                new_substeps.append({"kind": "text", "content": clean_text.strip()})
-        tool_calls = m.get("tool_calls")
-        if isinstance(tool_calls, list):
-            for tc in tool_calls:
-                if not isinstance(tc, dict):
-                    continue
-                fn = tc.get("function", {}) if isinstance(tc, dict) else {}
-                name = str(fn.get("name", "unknown")) if isinstance(fn, dict) else "unknown"
-                cid = str(tc.get("id", "") or "").strip()
-                raw_args = fn.get("arguments", "{}") if isinstance(fn, dict) else "{}"
-                try:
-                    parsed_args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
-                except Exception:
-                    parsed_args = {}
-                new_substeps.append({
-                    "kind": "tool_marker",
-                    "name": name, "ok": True,
-                    "stdin": "", "stdout": "",
-                    "id": cid.lstrip("tc_"),
-                    "arguments": parsed_args if isinstance(parsed_args, dict) else {},
-                    "result": {},
-                })
-    # Also inject tool results from tool_trace for new tool calls
-    for step in tool_trace or []:
-        if not isinstance(step, dict):
-            continue
-        cid = str(step.get("call_id", "") or "").strip()
-        result = step.get("result", {}) if isinstance(step, dict) else {}
-        ok = _tool_result_ok(result)
-        stdout = _tool_result_output(result)
-        # Find matching tool_marker and update with real data
-        for s in new_substeps:
-            if s.get("kind") == "tool_marker" and s.get("id") == cid.lstrip("tc_"):
-                s["ok"] = ok
-                s["stdout"] = stdout[:500]
-                s["result"] = result if isinstance(result, dict) else {}
-                break
+    history_delta = result.get("history_delta", [])
+    new_substeps = _build_substeps_from_agent_delta(
+        history_delta if isinstance(history_delta, list) else [],
+        tool_trace,
+    )
     if new_substeps:
         _store.append_to_last_assistant(sid, new_substeps)
     _audit_web("PUBLIC_WRITE", "_append_assistant_continuation_messages",
@@ -4509,10 +5568,14 @@ async def terminal_confirm(req: TerminalConfirmRequest):
         if not isinstance(row, dict):
             continue
         call_id = str(row.get("call_id", "") or "").strip()
+        kind = str(row.get("kind", "") or "").strip().lower()
         cmd = str(row.get("cmd", "") or "").strip()
-        if not cmd:
+        question = str(row.get("question", "") or "").strip()
+        if kind == "question" and not question:
             continue
-        key = (call_id, cmd)
+        if kind != "question" and not cmd:
+            continue
+        key = (call_id, question if kind == "question" else cmd)
         if key in seen_next:
             continue
         seen_next.add(key)
@@ -4561,6 +5624,7 @@ async def reset_chat(req: ResetRequest):
     _sessions.pop(sid, None)
     _session_last_access.pop(sid, None)
     _session_config.pop(sid, None)
+    _delete_deep_alignment_state(sid)
     _clear_terminal_pending(sid)
     _invalidate_session_index(sid)
     return JSONResponse({"ok": True, **result})

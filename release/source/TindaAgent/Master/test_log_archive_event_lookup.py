@@ -178,6 +178,50 @@ class LogArchiveEventLookupTests(unittest.TestCase):
         self.assertEqual(calls[0].get("tool_choice"), "auto")
         self.assertEqual(calls[1].get("tool_choice"), "auto")
         self.assertEqual(calls[2].get("tool_choice"), "none")
+
+    def test_llm_tool_limit_internal_prompt_not_returned_as_reply(self) -> None:
+        client = ai_client.LLMClient(api_key="sk-test", request_params={
+            "tool_choice": "auto",
+            "max_tool_steps": 1,
+        })
+        calls: list[dict] = []
+
+        def tool_call_response(call_id: str) -> SimpleNamespace:
+            fn = SimpleNamespace(name="echo", arguments=json.dumps({"text": "hi"}, ensure_ascii=False))
+            message = SimpleNamespace(content="", reasoning_content="", tool_calls=[
+                SimpleNamespace(id=call_id, type="function", function=fn)
+            ])
+            return SimpleNamespace(choices=[SimpleNamespace(message=message)], usage=None)
+
+        def final_response(text: str) -> SimpleNamespace:
+            message = SimpleNamespace(content=text, reasoning_content="", tool_calls=[])
+            return SimpleNamespace(choices=[SimpleNamespace(message=message)], usage=None)
+
+        def fake_create(**payload):
+            calls.append(payload)
+            if len(calls) == 1:
+                return tool_call_response("call_first")
+            if len(calls) == 2:
+                return tool_call_response("call_over_limit")
+            return final_response("Maximum tool call iterations reached. Summarize the results and provide a final answer.")
+
+        client._client = SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=fake_create))
+        )
+
+        with patch.object(tool, "run_agent_tool", return_value=json.dumps({"ok": True, "output": "hi"}, ensure_ascii=False)):
+            result = client.chat_with_tools(
+                [{"role": "user", "content": "use tool"}],
+                user_perm=511,
+                max_tool_steps=1,
+            )
+
+        reply = str(result.get("reply", ""))
+        self.assertIn("工具调用已达到上限", reply)
+        self.assertNotIn("Maximum tool call iterations reached", reply)
+        self.assertEqual(calls[2].get("tool_choice"), "none")
+        system_rows = [m for m in calls[2].get("messages", []) if str(m.get("role", "")) == "system"]
+        self.assertTrue(any("Do not call any more tools" in str(m.get("content", "")) for m in system_rows))
         self.assertTrue(any(str(m.get("role", "")) == "system" and "maximum tool-call iterations" in str(m.get("content", "")) for m in calls[2].get("messages", [])))
 
     def test_run_terminal_redacts_secret_output(self) -> None:
@@ -187,6 +231,816 @@ class LogArchiveEventLookupTests(unittest.TestCase):
         text = str(out.get("output", ""))
         self.assertIn("***REDACTED***", text)
         self.assertNotIn("sk-abcdefghijklmnopqrstuvwxyz123456", text)
+
+    def test_edit_file_exact_replacement_requires_unique_old_text(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="tinda_edit_tool_") as tmp:
+            path = Path(tmp) / "sample.txt"
+            path.write_text("alpha\nbeta\n", encoding="utf-8")
+            read_result = tool.read_file(str(path))
+            self.assertTrue(bool(read_result.get("ok")))
+
+            dry = tool.edit_file(
+                str(path),
+                old_text="beta",
+                new_text="gamma",
+                expected_sha256=str(read_result.get("sha256", "")),
+                dry_run="true",
+            )
+            self.assertTrue(bool(dry.get("ok")))
+            self.assertIn("-beta", str(dry.get("diff", "")))
+            self.assertEqual(path.read_text(encoding="utf-8"), "alpha\nbeta\n")
+
+            written = tool.edit_file(
+                str(path),
+                old_text="beta",
+                new_text="gamma",
+                expected_sha256=str(read_result.get("sha256", "")),
+            )
+            self.assertTrue(bool(written.get("ok")))
+            self.assertEqual(path.read_text(encoding="utf-8"), "alpha\ngamma\n")
+
+    def test_search_files_finds_names_and_content(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="tinda_search_tool_") as tmp:
+            root = Path(tmp)
+            (root / "alpha.py").write_text("print('needle')\n", encoding="utf-8")
+            (root / "nested").mkdir()
+            (root / "nested" / "beta.txt").write_text("hello\nneedle here\n", encoding="utf-8")
+
+            by_name = tool.search_files(root=str(root), query="alpha", glob="*.py")
+            by_content = tool.search_files(root=str(root), content="needle here", glob="*.txt")
+
+        self.assertTrue(bool(by_name.get("ok")))
+        self.assertEqual(str((by_name.get("results") or [])[0].get("relative_path", "")), "alpha.py")
+        self.assertTrue(bool(by_content.get("ok")))
+        row = (by_content.get("results") or [])[0]
+        self.assertEqual(str(row.get("relative_path", "")), "nested/beta.txt")
+        self.assertEqual(int(row.get("line", 0)), 2)
+        self.assertIn("needle here", str(row.get("snippet", "")))
+
+    def test_search_web_uses_tavily_when_key_present(self) -> None:
+        from TindaAgent.Tool import web_search as web_search_mod
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return json.dumps(
+                    {
+                        "query": "python pathlib",
+                        "answer": "Pathlib is Python's object-oriented path API.",
+                        "results": [
+                            {
+                                "title": "pathlib docs",
+                                "url": "https://docs.python.org/3/library/pathlib.html",
+                                "content": "Object-oriented filesystem paths.",
+                                "score": 0.98,
+                            }
+                        ],
+                        "response_time": 0.12,
+                        "request_id": "req_test",
+                    },
+                    ensure_ascii=False,
+                ).encode("utf-8")
+
+        requests = []
+
+        def fake_urlopen(req, timeout=0):
+            requests.append((req, timeout))
+            return FakeResponse()
+
+        with patch.dict(os.environ, {"TAVILY_API_KEY": "tvly-test", "TAVILY_BASE_URL": "https://api.tavily.com"}):
+            with patch.object(web_search_mod.request, "urlopen", fake_urlopen):
+                result = tool.search_web("python pathlib", source="auto", max_results="2", include_answer="true")
+
+        self.assertTrue(bool(result.get("ok")))
+        self.assertEqual(result.get("source"), "tavily")
+        self.assertIn("Pathlib", str(result.get("answer", "")))
+        self.assertEqual(str((result.get("results") or [])[0].get("url", "")), "https://docs.python.org/3/library/pathlib.html")
+        self.assertEqual(len(requests), 1)
+        payload = json.loads(requests[0][0].data.decode("utf-8"))
+        self.assertEqual(payload.get("max_results"), 2)
+        self.assertEqual(payload.get("search_depth"), "basic")
+        self.assertEqual(requests[0][0].get_header("Authorization"), "Bearer tvly-test")
+
+    def test_search_web_builtin_parses_duckduckgo_html_without_key(self) -> None:
+        from TindaAgent.Tool import web_search as web_search_mod
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return b"""
+                <html><body>
+                  <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fdocs">Example Docs</a>
+                  <a class="result__snippet">Example documentation snippet.</a>
+                </body></html>
+                """
+
+        with patch.dict(os.environ, {"TAVILY_API_KEY": ""}):
+            with patch.object(web_search_mod.request, "urlopen", lambda req, timeout=0: FakeResponse()):
+                result = tool.search_web("example docs", source="builtin", max_results="1")
+
+        self.assertTrue(bool(result.get("ok")))
+        self.assertEqual(result.get("source"), "builtin:duckduckgo")
+        row = (result.get("results") or [])[0]
+        self.assertEqual(str(row.get("title", "")), "Example Docs")
+        self.assertEqual(str(row.get("url", "")), "https://example.com/docs")
+        self.assertIn("snippet", str(row.get("content", "")))
+
+    def test_search_web_auto_falls_back_to_builtin_index(self) -> None:
+        from TindaAgent.Tool import web_search as web_search_mod
+
+        with patch.dict(os.environ, {"TAVILY_API_KEY": ""}):
+            with patch.object(web_search_mod, "_duckduckgo_search", return_value={"ok": False, "source": "builtin:duckduckgo", "error": "offline"}):
+                result = tool.search_web("react docs", source="auto", max_results="3")
+
+        self.assertTrue(bool(result.get("ok")))
+        self.assertEqual(result.get("source"), "builtin:index")
+        self.assertEqual(len(result.get("results") or []), 3)
+        self.assertIn("offline", str(result.get("fallback_reason", "")))
+        self.assertTrue(any(str(row.get("id", "")) == "react_docs" for row in result.get("index_table", [])))
+
+    def test_search_web_is_registered_with_tool_read_permission(self) -> None:
+        info = tool.find_tool("search_web")
+        self.assertIsNotNone(info)
+        self.assertEqual(int((info or {}).get("perm", 0)), 9)
+        schemas = tool.build_agent_tool_schemas(511)
+        names = [str(row.get("function", {}).get("name", "")) for row in schemas]
+        self.assertIn("search_web", names)
+
+    def test_ask_user_question_tool_returns_pending_question(self) -> None:
+        info = tool.find_tool("ask_user_question")
+        self.assertIsNotNone(info)
+        self.assertIn("HARD RULES", str((info or {}).get("des", "")))
+        self.assertIn("simulate the user's answer", str((info or {}).get("des", "")))
+        result = tool.ask_user_question(
+            question="请选择修复范围",
+            options="只修BUG|顺带优化UI|全部",
+            allow_custom_answer="true",
+            call_id="ask_unit",
+        )
+        self.assertTrue(bool(result.get("ok")))
+        self.assertTrue(bool(result.get("pending_confirmation")))
+        self.assertEqual(result.get("kind"), "question")
+        self.assertEqual(result.get("confirm_id"), "ask_unit")
+        self.assertEqual(result.get("options"), ["只修BUG", "顺带优化UI", "全部", "__none_of_them__"])
+        self.assertEqual(result.get("none_of_them_label"), "以上都不是，我自己补充")
+
+        abc_result = tool.ask_user_question(
+            question="请选择学习方案",
+            options=(
+                "（这是一个选项）A. 在第三版（轻量慢节奏版）基础上继续调整（比如再降低起点、再放慢节奏、再拆分知识点)\n"
+                "B. 第三版方向不对，换一个完全不同的学习方案（不限于高数，或换一种学习方式）\n"
+                "C. 第三版大体可以，但某部分需要大改（请您补充具体哪部分）"
+            ),
+        )
+        self.assertEqual((abc_result.get("options") or [])[0], "A. 在第三版（轻量慢节奏版）基础上继续调整（比如再降低起点、再放慢节奏、再拆分知识点)")
+        self.assertEqual((abc_result.get("options") or [])[1], "B. 第三版方向不对，换一个完全不同的学习方案（不限于高数，或换一种学习方式）")
+        self.assertEqual((abc_result.get("options") or [])[2], "C. 第三版大体可以，但某部分需要大改（请您补充具体哪部分）")
+
+        schemas = tool.build_agent_tool_schemas(511)
+        ask_schema = next(row for row in schemas if str(row.get("function", {}).get("name", "")) == "ask_user_question")
+        fn = ask_schema.get("function", {})
+        params = fn.get("parameters", {})
+        props = params.get("properties", {})
+        self.assertIn("HARD RULES", str(fn.get("description", "")))
+        self.assertEqual(params.get("required"), ["question"])
+        self.assertIn("Ask only one thing", str(props.get("question", {}).get("description", "")))
+        self.assertIn("mutually exclusive", str(props.get("options", {}).get("description", "")).lower())
+        self.assertIn("one clean choice per separator", str(props.get("options", {}).get("description", "")))
+
+    def test_plan_tool_is_registered_and_visible_to_llm(self) -> None:
+        info = tool.find_tool("plan")
+        self.assertIsNotNone(info)
+        self.assertEqual(int((info or {}).get("perm", 0)), 1)
+
+        result = tool.plan(
+            goal="修复 Deep 上下文顺序",
+            steps="检查请求体; 调整注入顺序; 补测试",
+            status="planned",
+            notes="只制定计划，不执行修改",
+            requires_completion_confirmation="true",
+            completion_note="完成后请用户确认",
+        )
+        self.assertTrue(bool(result.get("ok")))
+        self.assertEqual(result.get("kind"), "plan")
+        self.assertEqual(len(result.get("steps") or []), 3)
+        self.assertEqual(result.get("status"), "awaiting_completion_confirmation")
+        self.assertTrue(bool(result.get("requires_completion_confirmation")))
+        self.assertFalse(bool(result.get("completed")))
+        self.assertEqual(result.get("completion_note"), "完成后请用户确认")
+
+        done = tool.plan(goal="修复 Deep 上下文顺序", completed="true", completion_note="已完成")
+        self.assertEqual(done.get("status"), "complete")
+        self.assertTrue(bool(done.get("completed")))
+        self.assertFalse(bool(done.get("requires_completion_confirmation")))
+
+        schemas = tool.build_agent_tool_schemas(511)
+        names = [str(row.get("function", {}).get("name", "")) for row in schemas]
+        self.assertIn("plan", names)
+        plan_schema = next(row for row in schemas if str(row.get("function", {}).get("name", "")) == "plan")
+        props = plan_schema.get("function", {}).get("parameters", {}).get("properties", {})
+        self.assertIn("completed", props)
+        self.assertIn("requires_completion_confirmation", props)
+        self.assertIn("completion_note", props)
+
+    def test_plan_mode_helpers_strip_prefix_and_build_english_context(self) -> None:
+        self.assertTrue(server._is_plan_mode_message("/plan 修复登录问题"))
+        self.assertTrue(server._is_plan_mode_message("/PLAN"))
+        self.assertFalse(server._is_plan_mode_message("/planner"))
+        self.assertEqual(server._strip_plan_mode_prefix("/plan 修复登录问题"), "修复登录问题")
+
+        context = server._build_plan_mode_transient_context("/plan 修复登录问题")
+        self.assertIn("[PLAN_MODE]", context)
+        self.assertIn("Do not execute", context)
+        self.assertIn("ask_user_question", context)
+        self.assertIn("MCP-backed plan tool", context)
+        self.assertIn("full available tool list", context)
+        self.assertIn("only tools you should call in Plan mode", context)
+        self.assertIn("修复登录问题", context)
+        self.assertNotIn("请", context)
+
+    def test_plan_mode_blocks_execution_tools_without_hiding_tool_schemas(self) -> None:
+        client = ai_client.LLMClient(api_key="sk-test")
+        calls: list[dict] = []
+
+        def fake_create(**payload):
+            calls.append(payload)
+            if len(calls) == 1:
+                fn = SimpleNamespace(
+                    name="run_terminal",
+                    arguments=json.dumps({"cmd": "echo should-not-run"}, ensure_ascii=False),
+                )
+                message = SimpleNamespace(content="", reasoning_content="", tool_calls=[
+                    SimpleNamespace(id="call_exec", type="function", function=fn)
+                ])
+                return SimpleNamespace(choices=[SimpleNamespace(message=message)], usage=None)
+            message = SimpleNamespace(content="我会先制定计划，等待确认后再执行。", reasoning_content="", tool_calls=[])
+            return SimpleNamespace(choices=[SimpleNamespace(message=message)], usage=None)
+
+        client._client = SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=fake_create))
+        )
+
+        messages = [
+            {"role": "system", "content": "[PLAN_MODE]\nPlan only.\n[/PLAN_MODE]"},
+            {"role": "user", "content": "修复问题"},
+        ]
+        with patch.object(tool, "run_agent_tool") as run_tool_mock:
+            result = client.chat_with_tools(messages, user_perm=511, max_tool_steps=3)
+
+        run_tool_mock.assert_not_called()
+        self.assertEqual(str(result.get("reply", "")), "我会先制定计划，等待确认后再执行。")
+        trace = result.get("tool_trace") or []
+        self.assertEqual(len(trace), 1)
+        self.assertEqual(str(trace[0].get("agent_tool", "")), "run_terminal")
+        self.assertEqual(str((trace[0].get("result") or {}).get("error_code", "")), "plan_mode_execution_blocked")
+        first_tool_names = [str(row.get("function", {}).get("name", "")) for row in calls[0].get("tools", [])]
+        self.assertIn("run_terminal", first_tool_names)
+        second_tool_rows = [m for m in calls[1].get("messages", []) if str(m.get("role", "")) == "tool"]
+        self.assertTrue(any("plan_mode_execution_blocked" in str(m.get("content", "")) for m in second_tool_rows))
+
+    def test_web_search_disabled_blocks_execution_without_hiding_schema(self) -> None:
+        client = ai_client.LLMClient(api_key="sk-test")
+        calls: list[dict] = []
+
+        def fake_create(**payload):
+            calls.append(payload)
+            if len(calls) == 1:
+                fn = SimpleNamespace(
+                    name="search_web",
+                    arguments=json.dumps({"query": "latest python release"}, ensure_ascii=False),
+                )
+                message = SimpleNamespace(content="", reasoning_content="", tool_calls=[
+                    SimpleNamespace(id="call_search", type="function", function=fn)
+                ])
+                return SimpleNamespace(choices=[SimpleNamespace(message=message)], usage=None)
+            message = SimpleNamespace(content="需要开启网络搜索后才能查询实时信息。", reasoning_content="", tool_calls=[])
+            return SimpleNamespace(choices=[SimpleNamespace(message=message)], usage=None)
+
+        client._client = SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=fake_create))
+        )
+        messages = [
+            {"role": "system", "content": "[WEB_SEARCH_MODE]\nWeb search is disabled for this user request.\n[/WEB_SEARCH_MODE]"},
+            {"role": "user", "content": "查一下最新 Python 版本"},
+        ]
+        with patch.object(tool, "run_agent_tool") as run_tool_mock:
+            result = client.chat_with_tools(messages, user_perm=511, max_tool_steps=3)
+
+        run_tool_mock.assert_not_called()
+        self.assertEqual(str(result.get("reply", "")), "需要开启网络搜索后才能查询实时信息。")
+        trace = result.get("tool_trace") or []
+        self.assertEqual(len(trace), 1)
+        self.assertEqual(str((trace[0].get("result") or {}).get("error_code", "")), "web_search_disabled")
+        first_tool_names = [str(row.get("function", {}).get("name", "")) for row in calls[0].get("tools", [])]
+        self.assertIn("search_web", first_tool_names)
+
+    def test_web_search_enabled_allows_execution_with_same_schema(self) -> None:
+        client = ai_client.LLMClient(api_key="sk-test")
+        calls: list[dict] = []
+
+        def fake_create(**payload):
+            calls.append(payload)
+            if len(calls) == 1:
+                fn = SimpleNamespace(
+                    name="search_web",
+                    arguments=json.dumps({"query": "python docs"}, ensure_ascii=False),
+                )
+                message = SimpleNamespace(content="", reasoning_content="", tool_calls=[
+                    SimpleNamespace(id="call_search", type="function", function=fn)
+                ])
+                return SimpleNamespace(choices=[SimpleNamespace(message=message)], usage=None)
+            message = SimpleNamespace(content="已查询。", reasoning_content="", tool_calls=[])
+            return SimpleNamespace(choices=[SimpleNamespace(message=message)], usage=None)
+
+        client._client = SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=fake_create))
+        )
+        messages = [
+            {"role": "system", "content": "[WEB_SEARCH_MODE]\nWeb search is enabled for this user request.\n[/WEB_SEARCH_MODE]"},
+            {"role": "user", "content": "查一下 python docs"},
+        ]
+        fake_result = json.dumps({"ok": True, "source": "builtin:index", "results": []}, ensure_ascii=False)
+        with patch.object(tool, "run_agent_tool", return_value=fake_result) as run_tool_mock:
+            result = client.chat_with_tools(messages, user_perm=511, max_tool_steps=3)
+
+        run_tool_mock.assert_called_once()
+        self.assertEqual(str(result.get("reply", "")), "已查询。")
+        first_tool_names = [str(row.get("function", {}).get("name", "")) for row in calls[0].get("tools", [])]
+        self.assertIn("search_web", first_tool_names)
+
+    def test_extract_pending_confirmation_items_supports_user_question(self) -> None:
+        trace = [{
+            "agent_tool": "ask_user_question",
+            "call_id": "ask_call",
+            "tool_call_id": "call_model",
+            "result": {
+                "ok": True,
+                "pending_confirmation": True,
+                "kind": "question",
+                "confirm_id": "ask_call",
+                "question": "要不要顺带改动画？",
+                "options": ["要", "不要", "__none_of_them__"],
+                "none_of_them_label": "以上都不是，我自己补充",
+                "allow_custom_answer": True,
+            },
+        }]
+        rows = server._extract_pending_confirmation_items(trace)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].get("kind"), "question")
+        self.assertEqual(rows[0].get("question"), "要不要顺带改动画？")
+        self.assertEqual(rows[0].get("options"), ["要", "不要", "__none_of_them__"])
+        self.assertEqual(rows[0].get("none_of_them_label"), "以上都不是，我自己补充")
+
+    def test_agent_resume_with_user_question_answer_replaces_tool_result(self) -> None:
+        class FakeClient:
+            def chat_with_tools(self, messages, **kwargs):
+                tool_rows = [m for m in messages if str(m.get("role")) == "tool"]
+                self.tool_payload = json.loads(str(tool_rows[-1].get("content", "{}")))
+                return {
+                    "reply": "继续执行",
+                    "history_delta": [{"role": "assistant", "content": "继续执行"}],
+                    "tool_trace": [],
+                    "tool_steps": 0,
+                }
+
+        fake_client = FakeClient()
+        agent = server.Agent("ask-user-test", user_perm=511, client=fake_client, model_name="deepseek-v4-flash")
+        pending = {
+            "ok": True,
+            "pending_confirmation": True,
+            "kind": "question",
+            "confirm_id": "ask_call",
+            "question": "修复范围？",
+        }
+        agent.history.extend([
+            {"role": "user", "content": "帮我修"},
+            {"role": "assistant", "content": "", "tool_calls": [{
+                "id": "call_ask",
+                "type": "function",
+                "function": {"name": "ask_user_question", "arguments": json.dumps({"question": "修复范围？"}, ensure_ascii=False)},
+            }]},
+            {"role": "tool", "tool_call_id": "call_ask", "content": json.dumps({"result": pending}, ensure_ascii=False)},
+        ])
+        agent._held_messages = [m.copy() for m in agent.history]
+        agent._held_perm = 511
+        result = agent.resume_with_confirmations([{
+            "confirm_id": "ask_call",
+            "kind": "question",
+            "action": "allow",
+            "choice": "只修BUG",
+            "answer": "只修BUG，别改UI",
+        }])
+        self.assertEqual(result.get("reply"), "继续执行")
+        self.assertEqual(fake_client.tool_payload.get("kind"), "question_answer")
+        self.assertTrue(bool(fake_client.tool_payload.get("approval")))
+        self.assertEqual(fake_client.tool_payload.get("action"), "allow")
+        self.assertEqual(fake_client.tool_payload.get("answer"), "只修BUG，别改UI")
+
+    def test_agent_resume_with_user_question_cancel_passes_denial(self) -> None:
+        class FakeClient:
+            def chat_with_tools(self, messages, **kwargs):
+                tool_rows = [m for m in messages if str(m.get("role")) == "tool"]
+                self.tool_payload = json.loads(str(tool_rows[-1].get("content", "{}")))
+                system_rows = [m for m in messages if str(m.get("role")) == "system"]
+                self.system_tail = str(system_rows[-1].get("content", "")) if system_rows else ""
+                return {
+                    "reply": "已按合理假设继续",
+                    "history_delta": [{"role": "assistant", "content": "已按合理假设继续"}],
+                    "tool_trace": [],
+                    "tool_steps": 0,
+                }
+
+        fake_client = FakeClient()
+        agent = server.Agent("ask-user-cancel-test", user_perm=511, client=fake_client, model_name="deepseek-v4-flash")
+        pending = {
+            "ok": True,
+            "pending_confirmation": True,
+            "kind": "question",
+            "confirm_id": "ask_cancel",
+            "question": "修复范围？",
+        }
+        agent.history.extend([
+            {"role": "user", "content": "帮我修"},
+            {"role": "assistant", "content": "", "tool_calls": [{
+                "id": "call_ask_cancel",
+                "type": "function",
+                "function": {"name": "ask_user_question", "arguments": json.dumps({"question": "修复范围？"}, ensure_ascii=False)},
+            }]},
+            {"role": "tool", "tool_call_id": "call_ask_cancel", "content": json.dumps({"result": pending}, ensure_ascii=False)},
+        ])
+        agent._held_messages = [m.copy() for m in agent.history]
+        agent._held_perm = 511
+        result = agent.resume_with_confirmations([{
+            "confirm_id": "ask_cancel",
+            "kind": "question",
+            "approval": False,
+        }])
+        self.assertEqual(result.get("reply"), "已按合理假设继续")
+        self.assertEqual(fake_client.tool_payload.get("kind"), "question_answer")
+        self.assertFalse(bool(fake_client.tool_payload.get("approval")))
+        self.assertEqual(fake_client.tool_payload.get("action"), "deny")
+        self.assertEqual(fake_client.tool_payload.get("error_code"), "user_cancelled")
+        self.assertIn("cancelled the clarification question", fake_client.system_tail)
+        self.assertNotIn("terminal command above has been executed", fake_client.system_tail)
+
+    def test_deep_alignment_prompt_is_english_and_non_executing(self) -> None:
+        prompt = str(server._DEEP_ALIGNMENT_SYSTEM_PROMPT)
+        self.assertIn("Deep Alignment mode", prompt)
+        self.assertIn("Do not execute", prompt)
+        self.assertIn("not Plan mode", prompt)
+        self.assertIn("after confirmation the main agent runtime has additional native tools", prompt)
+        self.assertIn("Do not reveal hidden reasoning", prompt)
+        self.assertIn("Chinese", prompt)
+        self.assertNotIn("请", prompt)
+
+    def test_deep_alignment_messages_disclose_post_confirmation_tools_without_plan_bias(self) -> None:
+        with patch.object(server, "_deep_session_context", return_value="(none)"):
+            messages = server._build_deep_alignment_messages(
+                "你plan工具能干吗",
+                [],
+                session_id="s_deep_plan_tool",
+                user_perm=511,
+            )
+
+        user_text = str(messages[1].get("content", ""))
+        self.assertIn("Main runtime tool availability", user_text)
+        self.assertIn("After confirmation, the main agent runtime may use its normal tool set", user_text)
+        self.assertIn("Do not claim that a specific main-runtime tool is unavailable", user_text)
+        self.assertIn("Main runtime tools visible after confirmation", user_text)
+        self.assertIn("- plan:", user_text)
+        self.assertNotIn("plan: available", user_text)
+        self.assertIn("你plan工具能干吗", user_text)
+
+    def test_deep_alignment_messages_hide_tools_without_permission(self) -> None:
+        with patch.object(server, "_deep_session_context", return_value="(none)"):
+            messages = server._build_deep_alignment_messages(
+                "有什么工具",
+                [],
+                session_id="s_deep_low_perm",
+                user_perm=0,
+            )
+
+        user_text = str(messages[1].get("content", ""))
+        self.assertIn("No main-runtime tools are currently visible", user_text)
+        self.assertNotIn("- plan:", user_text)
+
+    def test_deep_public_payload_exposes_active_round(self) -> None:
+        sid = "s_deep_payload"
+        server._deep_alignment_state[sid] = {
+            "active": True,
+            "state": "waiting_confirm",
+            "original_message": "帮我修复",
+            "file_names": ["a.py"],
+            "file_contents": ["print(1)"],
+            "rounds": [
+                {"revision": "", "alignment_text": "第一版"},
+                {"revision": "不是这个", "alignment_text": "第二版"},
+            ],
+            "active_index": 1,
+            "updated_at": "2026-05-21T00:00:00+08:00",
+        }
+        try:
+            payload = server._deep_public_payload(sid)
+        finally:
+            server._deep_alignment_state.pop(sid, None)
+
+        self.assertTrue(bool(payload.get("active")))
+        self.assertEqual(payload.get("state"), "waiting_confirm")
+        self.assertEqual(payload.get("alignment_text"), "第二版")
+        self.assertTrue(bool(payload.get("can_back")))
+        self.assertEqual(payload.get("file_names"), ["a.py"])
+        self.assertEqual(payload.get("file_contents"), ["print(1)"])
+
+    def test_deep_public_payload_exposes_pending_ask_for_card_ui(self) -> None:
+        sid = "s_deep_pending_ask_payload"
+        server._deep_alignment_state[sid] = {
+            "active": True,
+            "state": "waiting_question",
+            "original_message": "写个脚本",
+            "file_names": [],
+            "file_contents": [],
+            "rounds": [],
+            "active_index": 0,
+            "pending_deep_ask": {
+                "call_id": "deep_ask_card",
+                "tool_call": {
+                    "id": "deep_ask_card",
+                    "type": "function",
+                    "function": {
+                        "name": "ask_user_question",
+                        "arguments": json.dumps({
+                            "question": "你希望脚本做什么用途？",
+                            "options": "文件整理|日志分析",
+                        }, ensure_ascii=False),
+                    },
+                },
+            },
+            "updated_at": "2026-05-22T00:00:00+08:00",
+        }
+        try:
+            payload = server._deep_public_payload(sid)
+        finally:
+            server._deep_alignment_state.pop(sid, None)
+
+        ask = payload.get("pending_deep_ask")
+        self.assertIsInstance(ask, dict)
+        self.assertEqual(ask.get("flow"), "deep_alignment")
+        self.assertEqual(ask.get("kind"), "question")
+        self.assertEqual(ask.get("call_id"), "deep_ask_card")
+        self.assertEqual(ask.get("question"), "你希望脚本做什么用途？")
+        self.assertEqual(ask.get("options"), ["文件整理", "日志分析", "__none_of_them__"])
+
+    def test_deep_alignment_context_is_transient_for_agent_history(self) -> None:
+        class FakeClient:
+            def __init__(self) -> None:
+                self.request_messages: list[dict] = []
+
+            def chat_with_tools(self, messages, **kwargs):
+                self.request_messages = [dict(m) for m in messages]
+                return {
+                    "reply": "ok",
+                    "history_delta": [{"role": "assistant", "content": "ok"}],
+                    "tool_trace": [],
+                    "tool_steps": 0,
+                }
+
+        fake_client = FakeClient()
+        agent = server.Agent("deep-transient-test", user_perm=511, client=fake_client, model_name="deepseek-v4-flash")
+        context = server._build_deep_alignment_transient_context("用户确认：只改前端，不动后端。")
+        result = agent.chat_with_meta("执行原始请求", transient_system_context=context)
+
+        self.assertEqual(result.get("reply"), "ok")
+        request_rows = fake_client.request_messages
+        self.assertTrue(any(str(m.get("role")) == "system" and "[DEEP_ALIGNMENT_CONFIRMED]" in str(m.get("content", "")) for m in request_rows))
+        injected = "\n".join(str(m.get("content", "")) for m in request_rows if str(m.get("role")) == "system")
+        self.assertIn("execute the current user request now", injected)
+        self.assertIn("use native tool_calls/function calling normally", injected)
+        persisted_rows = agent.get_conversation_messages()
+        self.assertFalse(any("[DEEP_ALIGNMENT_CONFIRMED]" in str(m.get("content", "")) for m in persisted_rows))
+        self.assertTrue(any(str(m.get("role")) == "user" and str(m.get("content")) == "执行原始请求" for m in persisted_rows))
+
+    def test_deep_alignment_generation_includes_session_context(self) -> None:
+        captured: dict[str, Any] = {}
+
+        class FakeStore:
+            def get_context_messages(self, _sid: str) -> list[dict]:
+                return [
+                    {"role": "user", "content": "前文需求：给设置页新增入场动画"},
+                    {"role": "assistant", "content": "我会只改设置页动画，不改布局。"},
+                ]
+
+        def fake_store_to_agent_messages(rows):
+            return rows, {"included": len(rows), "skipped": 0}
+
+        def fake_create_completion(payload, **kwargs):
+            captured["payload"] = payload
+
+            class Msg:
+                content = "我理解你说“好了”是确认继续设置页动画方案。"
+
+            class Choice:
+                message = Msg()
+
+            class Resp:
+                choices = [Choice()]
+
+            return Resp()
+
+        with patch.object(server, "_store", FakeStore()), \
+             patch.object(server, "_store_to_agent_messages", side_effect=fake_store_to_agent_messages), \
+             patch.object(server._llm, "create_completion", side_effect=fake_create_completion):
+            text = server._generate_deep_alignment_text("好了", [], session_id="s_deep_context")
+
+        self.assertIn("确认继续", text)
+        messages = captured["payload"]["messages"]
+        user_content = str(messages[1].get("content", ""))
+        self.assertIn("Current session context", user_content)
+        self.assertIn("前文需求：给设置页新增入场动画", user_content)
+        self.assertIn("Original user request:\n好了", user_content)
+
+    def test_deep_alignment_can_request_user_question(self) -> None:
+        captured: dict[str, Any] = {}
+
+        class ToolFunction:
+            name = "ask_user_question"
+            arguments = json.dumps({
+                "question": "你希望脚本做什么用途？",
+                "options": "文件整理|日志分析",
+                "allow_custom_answer": "true",
+            }, ensure_ascii=False)
+
+        class ToolCall:
+            id = "deep_ask_unit"
+            type = "function"
+            function = ToolFunction()
+
+        class Msg:
+            content = ""
+            tool_calls = [ToolCall()]
+
+        class Choice:
+            message = Msg()
+
+        class Resp:
+            choices = [Choice()]
+
+        def fake_create_completion(payload, **kwargs):
+            captured["payload"] = payload
+            return Resp()
+
+        with patch.object(server._llm, "create_completion", side_effect=fake_create_completion):
+            result = server._generate_deep_alignment_result("写个脚本", [], session_id="s_deep_ask")
+
+        self.assertEqual(result.get("state"), "waiting_question")
+        self.assertEqual(captured["payload"].get("tool_choice"), "auto")
+        self.assertEqual(len(captured["payload"].get("tools") or []), 1)
+        pending = result.get("pending")
+        self.assertIsInstance(pending, dict)
+        self.assertEqual(pending.get("flow"), "deep_alignment")
+        self.assertEqual(pending.get("kind"), "question")
+        self.assertEqual(pending.get("question"), "你希望脚本做什么用途？")
+        self.assertEqual(pending.get("options"), ["文件整理", "日志分析", "__none_of_them__"])
+
+    def test_deep_alignment_resume_after_question_answer(self) -> None:
+        captured: dict[str, Any] = {}
+        state = {
+            "pending_deep_ask": {
+                "call_id": "deep_ask_unit",
+                "question": "你希望脚本做什么用途？",
+                "messages": [
+                    {"role": "system", "content": "Deep Alignment"},
+                    {"role": "user", "content": "Original user request:\n写个脚本"},
+                    {"role": "assistant", "content": "", "tool_calls": [{
+                        "id": "deep_ask_unit",
+                        "type": "function",
+                        "function": {"name": "ask_user_question", "arguments": "{}"},
+                    }]},
+                ],
+            }
+        }
+
+        def fake_create_completion(payload, **kwargs):
+            captured["payload"] = payload
+
+            class Msg:
+                content = "我理解你希望写一个日志分析脚本。请确认是否一致。"
+                tool_calls = []
+
+            class Choice:
+                message = Msg()
+
+            class Resp:
+                choices = [Choice()]
+
+            return Resp()
+
+        with patch.object(server._llm, "create_completion", side_effect=fake_create_completion):
+            result = server._resume_deep_alignment_after_question(state, "日志分析", "日志分析")
+
+        self.assertIn("日志分析脚本", result.get("alignment_text", ""))
+        self.assertEqual(captured["payload"].get("tool_choice"), "none")
+        messages = captured["payload"].get("messages") or []
+        self.assertEqual(messages[-1].get("role"), "tool")
+        self.assertEqual(messages[-1].get("tool_call_id"), "deep_ask_unit")
+        self.assertIn("日志分析", str(messages[-1].get("content", "")))
+
+    def test_deep_alignment_state_persists_and_deletes_json_file(self) -> None:
+        sid = "s_deep_persist"
+        with tempfile.TemporaryDirectory(prefix="tinda_deep_state_") as tmp:
+            old_root = server._DEEP_ALIGNMENT_ROOT
+            server._DEEP_ALIGNMENT_ROOT = Path(tmp)
+            try:
+                state = {
+                    "active": True,
+                    "state": "waiting_confirm",
+                    "original_message": "帮我确认需求",
+                    "file_names": ["demo.txt"],
+                    "file_contents": ["hello"],
+                    "rounds": [{"revision": "", "alignment_text": "第一版"}],
+                    "active_index": 0,
+                    "updated_at": "2026-05-22T00:00:00+08:00",
+                }
+                server._save_deep_alignment_state(sid, state)
+                path = server._deep_alignment_path(sid)
+                self.assertTrue(path.exists())
+
+                server._deep_alignment_state.pop(sid, None)
+                loaded = server._load_deep_alignment_state(sid)
+                self.assertIsNotNone(loaded)
+                self.assertEqual((loaded or {}).get("original_message"), "帮我确认需求")
+                self.assertEqual((loaded or {}).get("file_contents"), ["hello"])
+
+                server._delete_deep_alignment_state(sid)
+                self.assertFalse(path.exists())
+            finally:
+                server._deep_alignment_state.pop(sid, None)
+                server._DEEP_ALIGNMENT_ROOT = old_root
+
+    def test_skill_list_and_read_uses_runtime_skill_root(self) -> None:
+        from TindaAgent.Tool import skills as skill_mod
+
+        with tempfile.TemporaryDirectory(prefix="tinda_skill_root_") as tmp:
+            root = Path(tmp)
+            skill_dir = root / "demo"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text("# Demo\n\nDescription: demo skill\n\nUse it.", encoding="utf-8")
+
+            with patch.object(skill_mod, "_skill_roots", return_value=[root]):
+                listed = tool.skill_list()
+                loaded = tool.skill_read("demo")
+
+        self.assertTrue(bool(listed.get("ok")))
+        self.assertEqual(str((listed.get("skills") or [])[0].get("name", "")), "demo")
+        self.assertTrue(bool(loaded.get("ok")))
+        self.assertIn("Use it.", str(loaded.get("content", "")))
+
+    def test_mcp_client_lists_and_calls_stdio_tool(self) -> None:
+        from TindaAgent.Tool import mcp_client
+
+        with tempfile.TemporaryDirectory(prefix="tinda_mcp_") as tmp:
+            root = Path(tmp)
+            server_py = root / "server.py"
+            server_py.write_text(
+                """
+import json
+import sys
+
+for line in sys.stdin:
+    req = json.loads(line)
+    method = req.get("method")
+    if method == "notifications/initialized":
+        continue
+    if method == "initialize":
+        result = {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}, "serverInfo": {"name": "fake"}}
+    elif method == "tools/list":
+        result = {"tools": [{"name": "echo", "description": "echo", "inputSchema": {"type": "object"}}]}
+    elif method == "tools/call":
+        result = {"content": [{"type": "text", "text": req.get("params", {}).get("arguments", {}).get("text", "")}]}
+    else:
+        result = {}
+    print(json.dumps({"jsonrpc": "2.0", "id": req.get("id"), "result": result}, ensure_ascii=False), flush=True)
+""".strip(),
+                encoding="utf-8",
+            )
+            cfg = {"version": 1, "servers": {"fake": {"command": "python3", "args": [str(server_py)], "env": {}}}}
+            with patch.object(mcp_client, "load_mcp_config", return_value=cfg):
+                listed = tool.mcp_list_tools("fake")
+                called = tool.mcp_call_tool("fake", "echo", json.dumps({"text": "hello"}, ensure_ascii=False))
+
+        self.assertTrue(bool(listed.get("ok")))
+        self.assertEqual(str((listed.get("tools") or [])[0].get("name", "")), "echo")
+        self.assertTrue(bool(called.get("ok")))
+        self.assertIn("hello", json.dumps(called.get("result", {}), ensure_ascii=False))
 
     def test_ai_client_format_llm_error_api_connection(self) -> None:
         # DELETED v1.8.2: ai_client._format_llm_error 已被 _extract_api_error() 替代
@@ -339,7 +1193,7 @@ class LogArchiveEventLookupTests(unittest.TestCase):
                 [{"role": "user", "content": "new request", "id": "u1", "seq": 2}],
             )
 
-        self.assertEqual(rows[0], {"role": "system", "content": "[已有上下文摘要] old summary"})
+        self.assertEqual(rows[0], {"role": "system", "content": "[Existing Context Summary] old summary"})
         self.assertEqual(rows[1]["content"], "new request")
 
     def test_require_session_access_rejects_other_owner(self) -> None:
@@ -439,6 +1293,297 @@ class LogArchiveEventLookupTests(unittest.TestCase):
         )
 
         self.assertEqual([r.get("content") for r in rows], ["first", "second", "third"])
+
+    def test_store_dict_to_agent_messages_compacts_markdown_for_llm_only(self) -> None:
+        from TindaAgent.Web import session_adapter as sa
+
+        rich_markdown = (
+            "# Title\n\n"
+            "> --正在压缩上下文--\n\n"
+            "| A | B |\n| --- | --- |\n| **hello** | [site](https://example.com) |\n\n"
+            "```python\nprint('x')\n```\n"
+        )
+        store_dict = {
+            "1": {"role": "user", "id": "u1", "content": {"1": {"text": "请继续"}}},
+            "2": {"role": "assistant", "id": "a1", "content": {"1": {"text": rich_markdown}}},
+        }
+
+        rows, _stats = sa.store_dict_to_agent_messages(store_dict)
+        frontend = sa.store_dict_to_frontend(store_dict)
+
+        self.assertIn("**hello**", str(frontend[1].get("content", "")))
+        self.assertIn("```python", str(frontend[1].get("content", "")))
+        self.assertNotIn("**hello**", str(rows[1].get("content", "")))
+        self.assertNotIn("```python", str(rows[1].get("content", "")))
+        self.assertIn("[code:python]", str(rows[1].get("content", "")))
+        self.assertLess(
+            len(str(rows[1].get("content", ""))),
+            len(rich_markdown),
+        )
+
+    def test_tool_marker_context_deduplicates_stdout_output_for_llm(self) -> None:
+        from TindaAgent.Web import session_adapter as sa
+
+        rows, _stats = sa.store_dict_to_agent_messages(
+            {
+                "1": {"role": "user", "id": "u1", "content": {"1": {"text": "run"}}},
+                "2": {
+                    "role": "assistant",
+                    "id": "a1",
+                    "content": {
+                        "1": {"tool_marker": {
+                            "name": "echo",
+                            "id": "call_1",
+                            "arguments": {"text": "hello"},
+                            "result": {
+                                "ok": True,
+                                "cmd": "echo keep_snake_case",
+                                "stdout": "same output",
+                                "output": "same output",
+                                "success": True,
+                            },
+                        }},
+                    },
+                },
+            }
+        )
+
+        tool_rows = [r for r in rows if str(r.get("role", "")) == "tool"]
+        self.assertEqual(len(tool_rows), 1)
+        payload = json.loads(str(tool_rows[0].get("content", "{}")))
+        self.assertEqual(str(payload.get("cmd", "")), "echo keep_snake_case")
+        self.assertEqual(str(payload.get("stdout", "")), "same output")
+        self.assertNotIn("output", payload)
+        self.assertNotIn("success", payload)
+
+    def test_tool_marker_context_replays_full_reasoning_on_tool_call_message(self) -> None:
+        from TindaAgent.Web import session_adapter as sa
+
+        reasoning = "**must stay raw**\n```txt\nfull reasoning\n```"
+        rows, _stats = sa.store_dict_to_agent_messages(
+            {
+                "1": {"role": "user", "id": "u1", "content": {"1": {"text": "run"}}},
+                "2": {
+                    "role": "assistant",
+                    "id": "a1",
+                    "content": {
+                        "1": {"thinking": reasoning},
+                        "2": {"tool_marker": {
+                            "name": "echo",
+                            "id": "call_reasoning",
+                            "arguments": {"text": "hello"},
+                            "result": {"ok": True, "stdout": "hello"},
+                        }},
+                    },
+                },
+            }
+        )
+
+        assistant_rows = [r for r in rows if str(r.get("role", "")) == "assistant"]
+        self.assertEqual(len(assistant_rows), 1)
+        self.assertTrue(bool(assistant_rows[0].get("tool_calls")))
+        self.assertEqual(str(assistant_rows[0].get("reasoning_content", "")), reasoning)
+        self.assertEqual(str(assistant_rows[0]["tool_calls"][0].get("id", "")), "call_reasoning")
+
+    def test_consecutive_tool_markers_share_one_assistant_tool_calls_message(self) -> None:
+        from TindaAgent.Web import session_adapter as sa
+
+        rows, _stats = sa.store_dict_to_agent_messages(
+            {
+                "1": {"role": "user", "id": "u1", "content": {"1": {"text": "run"}}},
+                "2": {
+                    "role": "assistant",
+                    "id": "a1",
+                    "content": {
+                        "1": {"thinking": "reasoning for both tools"},
+                        "2": {"tool_marker": {
+                            "name": "echo",
+                            "id": "call_a",
+                            "arguments": {"text": "a"},
+                            "result": {"ok": True, "stdout": "a"},
+                        }},
+                        "3": {"tool_marker": {
+                            "name": "echo",
+                            "id": "call_b",
+                            "arguments": {"text": "b"},
+                            "result": {"ok": True, "stdout": "b"},
+                        }},
+                    },
+                },
+            }
+        )
+
+        self.assertEqual([str(r.get("role", "")) for r in rows], ["user", "assistant", "tool", "tool"])
+        self.assertEqual(len(rows[1].get("tool_calls") or []), 2)
+        self.assertEqual(str(rows[1].get("reasoning_content", "")), "reasoning for both tools")
+        self.assertEqual([str(r.get("tool_call_id", "")) for r in rows[2:]], ["call_a", "call_b"])
+
+    def test_compact_message_keeps_reasoning_content_exact(self) -> None:
+        from TindaAgent.Process.AI.context_compaction import compact_message_for_llm
+
+        reasoning = "**raw reasoning**\n```txt\nkeep me\n```"
+        row = compact_message_for_llm({
+            "role": "assistant",
+            "content": "**visible**",
+            "reasoning_content": reasoning,
+        })
+
+        self.assertEqual(str(row.get("reasoning_content", "")), reasoning)
+        self.assertNotIn("**visible**", str(row.get("content", "")))
+
+    def test_tool_limit_prompt_is_request_only_not_bubble_text(self) -> None:
+        text = ai_client._build_tool_limit_system_message([
+            {"agent_tool": "echo", "result": {"ok": True, "stdout": "hi"}}
+        ])["content"]
+        fallback = ai_client._finalize_tool_limit_reply(
+            "Maximum tool call iterations reached. Summarize the results and provide a final answer.",
+            [{"agent_tool": "echo", "result": {"ok": True, "stdout": "hi"}}],
+        )
+
+        self.assertIn("Do not call any more tools", text)
+        self.assertIn("Executed tool results available to summarize", text)
+        self.assertIn("工具调用已达到上限", fallback)
+        self.assertNotIn("Maximum tool call iterations reached", fallback)
+        self.assertNotIn("Summarize the results", fallback)
+
+    def test_agent_request_compacts_history_without_mutating_storage_history(self) -> None:
+        from TindaAgent.Process.AI.agent import Agent
+
+        agent = Agent("compact-test", user_perm=511, client=object(), model_name="deepseek-v4-flash")
+        agent.history.append({"role": "assistant", "content": "**bold**\n```txt\nraw\n```"})
+        request_rows = agent._messages_for_llm_request(agent.history)
+
+        self.assertIn("**bold**", str(agent.history[-1].get("content", "")))
+        self.assertNotIn("**bold**", str(request_rows[-1].get("content", "")))
+        self.assertIn("[code:txt]", str(request_rows[-1].get("content", "")))
+
+    def test_deepseek_reasoner_request_strips_historical_reasoning_content(self) -> None:
+        payload = ai_client.prepare_llm_request_payload(
+            {
+                "model": "deepseek-reasoner",
+                "messages": [
+                    {"role": "user", "content": "u"},
+                    {"role": "assistant", "content": "a", "reasoning_content": "hidden"},
+                    {
+                        "role": "assistant",
+                        "content": "",
+                        "reasoning_content": "tool thought",
+                        "tool_calls": [
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {"name": "echo", "arguments": "{}"},
+                            }
+                        ],
+                    },
+                ],
+                "extra_body": {"thinking": {"type": "enabled"}},
+            },
+            base_url="https://api.deepseek.com",
+            provider="deepseek",
+        )
+
+        self.assertFalse(any("reasoning_content" in msg for msg in payload["messages"]))
+
+    def test_deepseek_v4_request_keeps_reasoning_only_for_tool_call_assistant(self) -> None:
+        payload = ai_client.prepare_llm_request_payload(
+            {
+                "model": "deepseek-v4-flash",
+                "messages": [
+                    {"role": "assistant", "content": "plain", "reasoning_content": "drop"},
+                    {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {"name": "echo", "arguments": "{}"},
+                            }
+                        ],
+                    },
+                    {"role": "tool", "tool_call_id": "call_1", "content": "{}"},
+                ],
+                "extra_body": {"thinking": {"type": "enabled"}},
+            },
+            base_url="https://api.deepseek.com",
+            provider="deepseek",
+        )
+
+        self.assertNotIn("reasoning_content", payload["messages"][0])
+        self.assertEqual(payload["messages"][1].get("reasoning_content"), "")
+        self.assertNotIn("reasoning_content", payload["messages"][2])
+
+    def test_deepseek_v4_thinking_disabled_strips_reasoning_content(self) -> None:
+        payload = ai_client.prepare_llm_request_payload(
+            {
+                "model": "deepseek-v4-flash",
+                "messages": [
+                    {
+                        "role": "assistant",
+                        "content": "",
+                        "reasoning_content": "drop",
+                        "tool_calls": [
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {"name": "echo", "arguments": "{}"},
+                            }
+                        ],
+                    },
+                ],
+            },
+            base_url="https://api.deepseek.com",
+            provider="deepseek",
+        )
+
+        self.assertNotIn("reasoning_content", payload["messages"][0])
+
+    def test_llm_client_payload_logged_and_sent_after_reasoning_sanitization(self) -> None:
+        client = ai_client.LLMClient(api_key="sk-test", model="deepseek-reasoner")
+        calls: list[dict] = []
+
+        def fake_create(**payload):
+            calls.append(payload)
+            message = SimpleNamespace(content="ok", reasoning_content="", tool_calls=[])
+            return SimpleNamespace(choices=[SimpleNamespace(message=message)], usage=None)
+
+        client._client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=fake_create)))
+        result = client.chat_with_tools(
+            [
+                {"role": "user", "content": "hello"},
+                {"role": "assistant", "content": "old", "reasoning_content": "must not send"},
+            ],
+            user_perm=511,
+            max_tool_steps=1,
+        )
+
+        self.assertEqual(str(result.get("reply", "")), "ok")
+        self.assertEqual(len(calls), 1)
+        self.assertFalse(any("reasoning_content" in msg for msg in calls[0]["messages"]))
+
+    def test_deep_alignment_pending_ask_preserves_reasoning_for_deepseek_thinking(self) -> None:
+        fn = SimpleNamespace(
+            name="ask_user_question",
+            arguments=json.dumps({"question": "需要补充什么？"}, ensure_ascii=False),
+        )
+        call = SimpleNamespace(id="call_deep_ask", type="function", function=fn)
+        message = SimpleNamespace(content="", reasoning_content="tool reasoning", tool_calls=[call])
+        resp = SimpleNamespace(choices=[SimpleNamespace(message=message)], usage=None)
+
+        with patch.object(server, "_deep_session_context", return_value="(none)"), \
+             patch.object(server._llm, "create_completion", return_value=resp):
+            result = server._generate_deep_alignment_result(
+                "原始请求",
+                [],
+                session_id="s_deep_reasoning",
+            )
+
+        pending = result.get("pending_deep_ask") if isinstance(result, dict) else {}
+        messages = pending.get("messages") if isinstance(pending, dict) else []
+        self.assertEqual(str(result.get("state", "")), "waiting_question")
+        self.assertEqual(str(messages[-1].get("reasoning_content", "")), "tool reasoning")
+        self.assertEqual(str(messages[-1].get("tool_calls", [{}])[0].get("id", "")), "call_deep_ask")
 
     def test_store_dict_to_frontend_returns_unified_event_metadata(self) -> None:
         from TindaAgent.Web import session_adapter as sa
@@ -932,6 +2077,163 @@ class LogArchiveEventLookupTests(unittest.TestCase):
         self.assertEqual(str(payload.get("error_code", "")), "no_pending_confirmation")
         self.assertEqual(int(payload.get("pending_confirm_count", -1)), 0)
 
+    def test_terminal_pending_keeps_deep_alignment_question_without_agent(self) -> None:
+        sid = "s_deep_pending_without_agent"
+        state = {
+            "active": True,
+            "state": "waiting_question",
+            "original_message": "制定一个计划",
+            "file_names": [],
+            "file_contents": [],
+            "rounds": [],
+            "active_index": 0,
+            "pending_deep_ask": {
+                "call_id": "call_deep_keep",
+                "tool_call": {
+                    "id": "call_deep_keep",
+                    "type": "function",
+                    "function": {
+                        "name": "ask_user_question",
+                        "arguments": json.dumps({"question": "计划类型是什么？"}, ensure_ascii=False),
+                    },
+                },
+            },
+        }
+
+        class _FakeStore:
+            def ensure_session(self, _sid: str) -> None:
+                return None
+
+            def get_session(self, _sid: str) -> dict:
+                return {"id": _sid, "owner_uid": ""}
+
+        with patch.object(server, "_store", _FakeStore()), \
+             patch.object(server, "_terminal_pending", {}), \
+             patch.dict(server._deep_alignment_state, {sid: state}, clear=False), \
+             patch.dict(server._sessions, {}, clear=True), \
+             patch.object(server, "_require_login", return_value=object()):
+            resp = asyncio.run(server.terminal_pending(session_id=sid))
+
+        payload = json.loads(resp.body.decode("utf-8"))
+        self.assertTrue(bool(payload.get("ok")))
+        self.assertEqual(int(payload.get("pending_confirm_count", 0)), 1)
+        pending = payload.get("pending") or []
+        self.assertEqual(pending[0].get("flow"), "deep_alignment")
+        self.assertEqual(pending[0].get("call_id"), "call_deep_keep")
+
+    def test_terminal_confirm_recovers_deep_alignment_question_from_state(self) -> None:
+        sid = "s_deep_confirm_recover"
+        state = {
+            "active": True,
+            "state": "waiting_question",
+            "original_message": "制定一个计划",
+            "file_names": [],
+            "file_contents": [],
+            "rounds": [],
+            "active_index": 0,
+            "pending_deep_ask": {
+                "call_id": "call_deep_confirm",
+                "question": "计划类型是什么？",
+                "messages": [
+                    {"role": "system", "content": "Deep Alignment"},
+                    {"role": "user", "content": "Original user request:\n制定一个计划"},
+                    {"role": "assistant", "content": "", "tool_calls": [{
+                        "id": "call_deep_confirm",
+                        "type": "function",
+                        "function": {"name": "ask_user_question", "arguments": "{}"},
+                    }]},
+                ],
+                "tool_call": {
+                    "id": "call_deep_confirm",
+                    "type": "function",
+                    "function": {
+                        "name": "ask_user_question",
+                        "arguments": json.dumps({"question": "计划类型是什么？"}, ensure_ascii=False),
+                    },
+                },
+            },
+        }
+        req = server.TerminalConfirmRequest(
+            session_id=sid,
+            approval=True,
+            kind="question",
+            call_id="call_deep_confirm",
+            answer="项目开发计划",
+        )
+
+        with patch.object(server, "_require_session_access", return_value=(sid, {})), \
+             patch.object(server, "_terminal_pending", {}), \
+             patch.dict(server._deep_alignment_state, {sid: state}, clear=False), \
+             patch.object(server, "_resume_deep_alignment_after_question", return_value={
+                 "alignment_text": "我理解你需要制定一个项目开发计划。请确认是否一致。",
+                 "answer": "项目开发计划",
+                 "question": "计划类型是什么？",
+             }):
+            resp = asyncio.run(server.terminal_confirm(req))
+
+        payload = json.loads(resp.body.decode("utf-8"))
+        self.assertEqual(int(resp.status_code), 200)
+        self.assertTrue(bool(payload.get("ok")))
+        self.assertEqual(payload.get("flow"), "deep_alignment")
+        self.assertEqual(payload.get("state"), "waiting_confirm")
+        self.assertIn("项目开发计划", str(payload.get("alignment_text", "")))
+        self.assertFalse(bool(payload.get("pending_confirmation")))
+
+    def test_terminal_confirm_question_preserves_user_denial(self) -> None:
+        sid = "s_question_denial"
+        pending = [{
+            "kind": "question",
+            "confirm_id": "ask_denied",
+            "call_id": "ask_denied",
+            "question": "是否允许继续？",
+            "status": "pending",
+        }]
+
+        class _FakeAgent:
+            perm = 511
+            history: list[dict] = []
+            _held_messages: list[dict] | None = [{"role": "user", "content": "帮我做"}]
+
+            def has_pending_confirmation(self) -> bool:
+                return True
+
+            def resume_with_confirmations(self, decisions: list[dict]) -> dict:
+                self.decisions = decisions
+                self._held_messages = None
+                self.history = []
+                return {
+                    "reply": "已取消澄清",
+                    "tool_trace": [],
+                    "tool_steps": 0,
+                    "pending_confirmation": False,
+                }
+
+        fake_agent = _FakeAgent()
+        req = server.TerminalConfirmRequest(
+            session_id=sid,
+            approval=False,
+            kind="question",
+            call_id="ask_denied",
+        )
+
+        with patch.object(server, "_require_session_access", return_value=(sid, {})), \
+             patch.object(server, "_get_terminal_pending", return_value=pending), \
+             patch.object(server, "_set_terminal_pending"), \
+             patch.object(server, "_get_agent", return_value=fake_agent), \
+             patch.object(server, "_write_context_log"), \
+             patch.object(server, "_maybe_auto_compress_after_llm", return_value={"compressed": False}), \
+             patch.object(server, "_generate_title_from_first_round", return_value=None):
+            resp = asyncio.run(server.terminal_confirm(req))
+
+        payload = json.loads(resp.body.decode("utf-8"))
+        self.assertEqual(int(resp.status_code), 200)
+        self.assertTrue(bool(payload.get("ok")))
+        self.assertFalse(bool(payload.get("approval")))
+        self.assertEqual(payload.get("action"), "deny")
+        self.assertEqual(fake_agent.decisions[0].get("kind"), "question")
+        self.assertFalse(bool(fake_agent.decisions[0].get("approval")))
+        self.assertEqual(fake_agent.decisions[0].get("action"), "deny")
+
     def test_terminal_confirm_returns_json_on_resume_failure(self) -> None:
         # DELETED v1.8.2: terminal_confirm 无 try/except 包装,ValueError 会直接冒泡为 FastAPI 500
         # 测试期望的 error_code "terminal_confirm_failed" 是过度防御性设计,从未实现
@@ -1016,6 +2318,57 @@ class LogArchiveEventLookupTests(unittest.TestCase):
         self.assertEqual(int(payload.get("pending_confirm_count", -1)), 2)
         get_agent_mock.assert_not_called()
 
+    def test_chat_plan_mode_routes_to_llm_not_slash_command(self) -> None:
+        sid = "s_plan_mode_chat"
+
+        class _FakeStore:
+            def __init__(self) -> None:
+                self.items: list[dict] = []
+
+            def append_messages(self, _sid: str, items: list[dict]) -> None:
+                self.items.extend(items)
+
+        class _FakeAgent:
+            def __init__(self) -> None:
+                self.user_message = ""
+                self.transient_context = ""
+
+            def chat_with_meta(self, user_message: str, transient_system_context: str | None = None):
+                self.user_message = user_message
+                self.transient_context = str(transient_system_context or "")
+                return {
+                    "reply": "计划如下",
+                    "tool_trace": [],
+                    "tool_steps": 0,
+                    "pending_confirmation": False,
+                }
+
+        fake_store = _FakeStore()
+        fake_agent = _FakeAgent()
+        req = server.ChatRequest(message="/plan 修复登录问题", session_id=sid)
+        with patch.object(server, "_require_login", return_value=object()), \
+             patch.object(server, "_has_llm_perm", return_value=True), \
+             patch.object(server, "_require_session_access", return_value=(sid, {})), \
+             patch.object(server, "_pending_confirm_count", return_value=0), \
+             patch.object(server, "_get_agent", return_value=fake_agent), \
+             patch.object(server, "_tool_runtime") as runtime_mock, \
+             patch.object(server, "_store", fake_store), \
+             patch.object(server, "_invalidate_session_index"), \
+             patch.object(server, "_maybe_auto_compress_after_llm", return_value={"compressed": False}), \
+             patch.object(server, "_generate_title_from_first_round", return_value=None):
+            resp = asyncio.run(server.chat(req))
+
+        payload = json.loads(resp.body.decode("utf-8"))
+        self.assertEqual(int(resp.status_code), 200)
+        self.assertEqual(str(payload.get("reply", "")), "计划如下")
+        runtime_mock.submit_command.assert_not_called()
+        self.assertIn("修复登录问题", fake_agent.user_message)
+        self.assertNotIn("/plan", fake_agent.user_message)
+        self.assertIn("[PLAN_MODE]", fake_agent.transient_context)
+        self.assertIn("Do not execute", fake_agent.transient_context)
+        stored_text = json.dumps(fake_store.items, ensure_ascii=False)
+        self.assertIn("/plan 修复登录问题", stored_text)
+
     def test_get_agent_preserve_pending_skips_reload_on_context_sig_change(self) -> None:
         # DELETED v1.8.2: server._agent_context_sig 与 _build_agent_context_sig 已被重构移除
         # 当前 _get_agent 通过 has_pending_confirmation 直接保留待确认 agent，无需 sig 比对
@@ -1088,12 +2441,12 @@ class LogArchiveEventLookupTests(unittest.TestCase):
         started = threading.Event()
         release = threading.Event()
 
-        def fake_run_agent_tool(name, user_perm, args, call_id=""):
+        def fake_run_mcp_agent_tool(name, user_perm, args, call_id=""):
             started.set()
             release.wait(timeout=2.0)
             return json.dumps({"ok": True, "output": "late result"}, ensure_ascii=False)
 
-        with patch.object(tool, "run_agent_tool", side_effect=fake_run_agent_tool), \
+        with patch.object(tool, "run_mcp_agent_tool", side_effect=fake_run_mcp_agent_tool), \
              patch.object(tool, "skip_running_tool", return_value=True):
             iterator = client._run_tools_iter(
                 tool_calls,
@@ -1144,6 +2497,77 @@ class LogArchiveEventLookupTests(unittest.TestCase):
         # term-confirm 旧组件已彻底移除
         self.assertNotIn("renderTermConfirmInTerminal(", content)
         self.assertNotIn("term-confirm", content)
+
+    def test_agent_resume_returns_history_delta_for_confirm_rendering(self) -> None:
+        class _FakeClient:
+            def chat_with_tools(self, messages: list[dict], user_perm: int, temperature: float = 0.7) -> dict:
+                return {
+                    "reply": "done",
+                    "history_delta": [
+                        {"role": "assistant", "content": "done"},
+                    ],
+                    "tool_steps": 0,
+                    "tool_trace": [],
+                }
+
+        agent = server.Agent("test", user_perm=511, client=_FakeClient(), model_name="deepseek-v4-flash")
+        agent._held_perm = 511
+        pending_payload = {
+            "ok": True,
+            "tool_name": "ask_user_question",
+            "result": {
+                "pending_confirmation": True,
+                "kind": "question",
+                "confirm_id": "ask_1",
+                "question": "继续吗？",
+            },
+        }
+        agent._held_messages = [
+            {"role": "assistant", "content": "", "tool_calls": [{
+                "id": "call_ask_1",
+                "type": "function",
+                "function": {"name": "ask_user_question", "arguments": json.dumps({"question": "继续吗？"})},
+            }]},
+            {"role": "tool", "tool_call_id": "call_ask_1", "content": json.dumps(pending_payload, ensure_ascii=False)},
+        ]
+
+        out = agent.resume_with_confirmations([{"approval": True, "confirm_id": "ask_1", "answer": "继续"}])
+        self.assertEqual(str(out.get("reply", "")), "done")
+        self.assertEqual(out.get("history_delta"), [{"role": "assistant", "content": "done"}])
+
+    def test_server_delta_tool_marker_matches_trace_by_model_call_id(self) -> None:
+        history_delta = [
+            {
+                "role": "assistant",
+                "reasoning_content": "think",
+                "content": "before",
+                "tool_calls": [{
+                    "id": "call_model_1",
+                    "type": "function",
+                    "function": {
+                        "name": "run_terminal",
+                        "arguments": json.dumps({"cmd": "echo hi"}, ensure_ascii=False),
+                    },
+                }],
+            },
+            {"role": "assistant", "content": "after"},
+        ]
+        trace = [{
+            "agent_tool": "run_terminal",
+            "call_id": "tc_0000000123",
+            "tool_call_id": "call_model_1",
+            "arguments": {"cmd": "echo hi"},
+            "result": {"ok": True, "stdout": "hi\n"},
+        }]
+
+        substeps = server._build_substeps_from_agent_delta(history_delta, trace)
+        markers = [s for s in substeps if s.get("kind") == "tool_marker"]
+        self.assertEqual(len(markers), 1)
+        self.assertEqual(markers[0].get("id"), "0000000123")
+        self.assertEqual(markers[0].get("tool_call_id"), "call_model_1")
+        self.assertEqual(markers[0].get("stdout"), "hi\n")
+        self.assertEqual(markers[0].get("status"), "done")
+        self.assertEqual([s.get("kind") for s in substeps], ["thinking", "text", "tool_marker", "text"])
 
     def test_server_tool_marker_block_contains_call_ids(self) -> None:
         # DELETED v1.8.2: server._build_tool_marker_block 已被重构移除

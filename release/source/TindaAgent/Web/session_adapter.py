@@ -16,6 +16,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from TindaAgent.Process.AI.context_compaction import (
+    compact_markdown_for_llm,
+    compact_terminal_context_for_llm,
+    compact_tool_result_for_llm,
+)
 from TindaAgent.Process.AI.tokenizer import estimate_request_messages_tokens
 from TindaAgent.Process.Observability.audit import get_audit_engine
 from TindaAgent.Tool import tool as tool_registry
@@ -515,7 +520,7 @@ def _terminal_entries_to_context_entries(entries: list[dict[str, Any]], *, start
                 "type": "terminal_context",
                 "display_target": "context",
                 "context_policy": "include",
-                "content": {"text": f"[Terminal Context]\n{text}"},
+                "content": {"text": f"[Terminal Context]\n{compact_terminal_context_for_llm(text)}"},
             },
         ))
         batch = []
@@ -613,10 +618,7 @@ def _entry_to_llm_rows(entry: dict) -> list[dict]:
         def _tool_result_content(tm: dict, stdout: str, stdin: str) -> str:
             result_payload = tm.get("result")
             if result_payload not in (None, "", {}, []):
-                try:
-                    return json.dumps(result_payload, ensure_ascii=False)
-                except TypeError:
-                    return str(result_payload)
+                return compact_tool_result_for_llm(result_payload, tool_name=str(tm.get("name", tm.get("tool_name", ""))))
             payload: dict[str, Any] = {
                 "ok": bool(tm.get("ok", False)),
                 "tool_name": str(tm.get("name", tm.get("tool_name", "unknown"))),
@@ -625,7 +627,7 @@ def _entry_to_llm_rows(entry: dict) -> list[dict]:
                 payload["stdin"] = stdin.strip()
             if stdout.strip():
                 payload["stdout"] = stdout.strip()
-            return json.dumps(payload, ensure_ascii=False)
+            return compact_tool_result_for_llm(payload, tool_name=str(tm.get("name", tm.get("tool_name", ""))))
 
         for k in sorted((int(k2) for k2 in content if k2.isdigit()), key=int):
             v = content[str(k)]
@@ -637,14 +639,14 @@ def _entry_to_llm_rows(entry: dict) -> list[dict]:
                     continue
                 cid = str(tm.get("id", tm.get("call_id", "")) or "").strip()
                 name = str(tm.get("name", tm.get("tool_name", "unknown")))
-                if tool_registry.find_tool(name) is None:
+                mcp_alias = str(tm.get("mcp_alias", "") or tm.get("alias", "") or "").strip()
+                replay_name = mcp_alias or name
+                if tool_registry.find_tool(name) is None and tool_registry.find_any_mcp_tool_alias(replay_name) is None:
                     clean_text = str(tm.get("stdout", "") or "").strip()
                     pending_text.append(f"[工具记录已忽略: 未注册工具 {name}]" + (f"\n{clean_text}" if clean_text else ""))
                     continue
                 stdout = str(tm.get("stdout", ""))
                 stdin = str(tm.get("stdin", ""))
-                # Flush pending text + calls before tool messages
-                _flush_asst()
                 arguments = tm.get("arguments")
                 if isinstance(arguments, str):
                     arguments_text = arguments if arguments.strip() else "{}"
@@ -660,25 +662,32 @@ def _entry_to_llm_rows(entry: dict) -> list[dict]:
                 pending_calls.append({
                     "id": cid or f"call_{k}",
                     "type": "function",
-                    "function": {"name": name, "arguments": arguments_text},
+                    "function": {"name": replay_name, "arguments": arguments_text},
                 })
                 pending_tool_rows.append({
                     "role": "tool",
                     "tool_call_id": cid or f"call_{k}",
                     "content": _tool_result_content(tm, stdout, stdin),
                 })
-                _flush_asst()
             elif "thinking" in v:
+                if pending_calls:
+                    _flush_asst()
+                # DeepSeek thinking+tool_calls requires exact reasoning_content
+                # replay for tool-call turns; keep storage text unchanged here.
                 pending_reasoning.append(str(v["thinking"]))
             elif "text" in v:
-                pending_text.append(str(v["text"]))
+                if pending_calls:
+                    _flush_asst()
+                pending_text.append(compact_markdown_for_llm(str(v["text"])))
             elif "system" in v:
+                if pending_calls:
+                    _flush_asst()
                 payload = v.get("system")
                 if not isinstance(payload, dict):
                     payload = {"text": str(payload or "")}
                 policy = str(payload.get("context_policy", "exclude") or "exclude").strip().lower()
                 if policy in {"include", "summary"}:
-                    text = str(payload.get("text", "") or "").strip()
+                    text = compact_markdown_for_llm(str(payload.get("text", "") or "")).strip()
                     if text:
                         prefix = "[Context Summary]" if policy == "summary" else "[System Event]"
                         pending_text.append(f"{prefix} {text}")
@@ -701,7 +710,7 @@ def _entry_to_llm_rows(entry: dict) -> list[dict]:
         if not include_system:
             return []
         prefix = "[Context Summary]" if event_type == "summary" or context_policy == "summary" or bool(entry.get("is_summary", False)) else "[System Context]"
-        return [{"role": "assistant", "content": f"{prefix} {text}"}]
+        return [{"role": "assistant", "content": f"{prefix} {compact_markdown_for_llm(text)}"}]
 
     return []
 
