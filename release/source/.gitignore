@@ -6,6 +6,7 @@ __pycache__/
 venv/
 .vscode/
 .idea/
+REASONIX.md
 
 # Version management artifacts
 ~/.tinda/
