@@ -3,9 +3,9 @@ import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import crypto from "node:crypto";
-import { config as dotenvConfig } from "dotenv";
 import { Agent, LlmClient, latestLlmRequest, type ChatMessage } from "../ai/agent.js";
 import { auditEvent } from "../core/audit.js";
+import { loadRuntimeEnv } from "../core/env.js";
 import { appVersion, ensureRuntimeDirs, legacyLogRoot, logRoot, projectRoot, webRoot } from "../core/paths.js";
 import { nowIso, safeId, textOf } from "../core/json.js";
 import {
@@ -43,7 +43,7 @@ import {
 } from "./settings.js";
 import { ToolRuntimeManager } from "../tools/toolRuntime.js";
 
-dotenvConfig({ path: path.join(projectRoot(), ".env"), quiet: true });
+loadRuntimeEnv();
 ensureRuntimeDirs();
 
 declare global {
@@ -240,14 +240,15 @@ function buildRuntimeVersionState() {
 
 function modelProvidersPayload() {
   const payload = llm.modelPayload();
+  const label = llm.provider === "deepseek" ? "DeepSeek" : "OpenAI-compatible";
   return {
     ok: true,
-    current_provider: "deepseek",
+    current_provider: llm.provider,
     providers: [
       {
-        key: "deepseek",
-        label: "DeepSeek",
-        name: "DeepSeek",
+        key: llm.provider,
+        label,
+        name: label,
         adapter: "openai_compatible",
         base_url: llm.baseURL,
         current_model: llm.model,
@@ -531,13 +532,13 @@ app.get("/system/version/compat", (req, res) => {
 
 app.get("/model", (req, res) => {
   requireLogin(req);
-  res.json({ ...llm.modelPayload(), current_provider: "deepseek", providers: modelProvidersPayload().providers });
+  res.json({ ...llm.modelPayload(), current_provider: llm.provider, providers: modelProvidersPayload().providers });
 });
 app.post("/model", (req, res) => {
   requireAdmin(req);
   try {
     llm.switchModel(req.body?.model);
-    res.json({ ...llm.modelPayload(), ok: true, current_provider: "deepseek", providers: modelProvidersPayload().providers });
+    res.json({ ...llm.modelPayload(), ok: true, current_provider: llm.provider, providers: modelProvidersPayload().providers });
   } catch (error: any) {
     jsonError(res, 400, String(error?.message || error));
   }

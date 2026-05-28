@@ -1,12 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import OpenAI from "openai";
-import { config as dotenvConfig } from "dotenv";
 import { logRoot, projectRoot } from "../core/paths.js";
 import { nowIso, writeJson } from "../core/json.js";
+import { llmEnvConfig, loadRuntimeEnv, maskSecret, type LlmEnvConfig } from "../core/env.js";
 import { listToolSchemas, runAgentTool, toolTraceStep } from "../tools/toolRegistry.js";
 
-dotenvConfig({ path: path.join(projectRoot(), ".env"), quiet: true });
+loadRuntimeEnv();
 
 export interface ChatMessage {
   role: "system" | "user" | "assistant" | "tool";
@@ -44,14 +44,37 @@ export class LlmClient {
   client: OpenAI;
   model: string;
   baseURL: string;
+  provider: LlmEnvConfig["provider"];
+  apiKeySource: LlmEnvConfig["apiKeySource"];
+  baseURLSource: string;
+  apiKeyConfigured: boolean;
 
   constructor() {
-    this.baseURL = process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com";
-    this.model = process.env.DEEPSEEK_MODEL || "deepseek-v4-flash";
+    const cfg = llmEnvConfig();
+    this.provider = cfg.provider;
+    this.baseURL = cfg.baseURL;
+    this.baseURLSource = cfg.baseURLSource;
+    this.model = cfg.model;
+    this.apiKeySource = cfg.apiKeySource;
+    this.apiKeyConfigured = !!cfg.apiKey;
     this.client = new OpenAI({
-      apiKey: process.env.DEEPSEEK_API_KEY || process.env.OPENAI_API_KEY || "missing",
+      apiKey: cfg.apiKey || "missing",
       baseURL: this.baseURL
     });
+  }
+
+  private llmError(error: any): Error {
+    if (!this.apiKeyConfigured) {
+      return new Error("LLM API key is not configured. Set DEEPSEEK_API_KEY or OPENAI_API_KEY in TindaAgent/.env, .env, or the process environment.");
+    }
+    const raw = String(error?.message || error || "unknown LLM error");
+    const rejected = Number(error?.status || error?.code) === 401 || /authentication|api key|unauthorized|invalid/i.test(raw);
+    if (rejected) {
+      return new Error(
+        `LLM API key from ${this.apiKeySource} was rejected by ${this.baseURL}. Check that ${this.apiKeySource} matches ${this.baseURLSource} (${this.baseURL}). Provider said: ${raw}`
+      );
+    }
+    return error instanceof Error ? error : new Error(raw);
   }
 
   private logRequest(payload: unknown): void {
@@ -78,7 +101,12 @@ export class LlmClient {
         tools: tools.length ? tools : undefined
       };
       this.logRequest(payload);
-      const resp: any = await this.client.chat.completions.create(payload);
+      let resp: any;
+      try {
+        resp = await this.client.chat.completions.create(payload);
+      } catch (error: any) {
+        throw this.llmError(error);
+      }
       const msg = resp.choices?.[0]?.message || {};
       const assistant: ChatMessage = {
         role: "assistant",
@@ -150,15 +178,20 @@ export class LlmClient {
     ];
     return {
       ok: true,
-      provider: "deepseek",
+      provider: this.provider,
       current_model: this.model,
       model: this.model,
+      base_url: this.baseURL,
+      api_key_source: this.apiKeySource,
+      api_key_configured: this.apiKeyConfigured,
+      provider_kind: this.provider,
       models,
       providers: {
-        deepseek: {
-          key: "deepseek",
-          label: "DeepSeek",
+        [this.provider]: {
+          key: this.provider,
+          label: this.provider === "deepseek" ? "DeepSeek" : "OpenAI-compatible",
           current_model: this.model,
+          base_url: this.baseURL,
           models
         }
       }
@@ -172,13 +205,14 @@ export class LlmClient {
   }
 
   async fetchBalance() {
-    const key = process.env.DEEPSEEK_API_KEY || "";
+    const cfg = llmEnvConfig();
+    const key = cfg.apiKeySource === "DEEPSEEK_API_KEY" ? cfg.apiKey : "";
     if (!key) return { ok: false, error: "DEEPSEEK_API_KEY not configured" };
     try {
-      const root = (process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com").replace(/\/+$/, "");
+      const root = cfg.baseURL.replace(/\/+$/, "");
       const res = await fetch(`${root}/user/balance`, { headers: { Authorization: `Bearer ${key}` } });
       const data = await res.json().catch(() => ({}));
-      return { ok: res.ok, status: res.status, ...data };
+      return { ok: res.ok, status: res.status, api_key: maskSecret(key), ...data };
     } catch (error: any) {
       return { ok: false, error: String(error?.message || error) };
     }
