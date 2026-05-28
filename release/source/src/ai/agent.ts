@@ -24,6 +24,15 @@ export interface ChatResult {
   history_delta: ChatMessage[];
 }
 
+interface StreamToolCall {
+  id: string;
+  type: string;
+  function: {
+    name: string;
+    arguments: string;
+  };
+}
+
 function systemPrompt(modelName = ""): string {
   void modelName;
   return [
@@ -87,6 +96,31 @@ export class LlmClient {
     }
   }
 
+  private parseToolArguments(raw: string): Record<string, any> {
+    try {
+      return JSON.parse(String(raw || "{}"));
+    } catch {
+      return {};
+    }
+  }
+
+  private mergeToolCallDelta(calls: StreamToolCall[], incoming: any): void {
+    const index = Number.isFinite(Number(incoming?.index)) ? Number(incoming.index) : calls.length;
+    const existing =
+      calls[index] ||
+      {
+        id: "",
+        type: "function",
+        function: { name: "", arguments: "" }
+      };
+    const fn = incoming?.function || {};
+    if (incoming?.id) existing.id = String(incoming.id);
+    if (incoming?.type) existing.type = String(incoming.type);
+    if (fn.name) existing.function.name += String(fn.name);
+    if (fn.arguments) existing.function.arguments += String(fn.arguments);
+    calls[index] = existing;
+  }
+
   async chatWithTools(messages: ChatMessage[], userPerm: number, sessionId = "", temperature?: number | null): Promise<ChatResult> {
     const history = messages.map((m) => ({ ...m }));
     const trace: any[] = [];
@@ -128,12 +162,7 @@ export class LlmClient {
       for (const call of assistant.tool_calls) {
         const fn = call?.function || {};
         const name = String(fn.name || "");
-        let args: Record<string, any> = {};
-        try {
-          args = JSON.parse(String(fn.arguments || "{}"));
-        } catch {
-          args = {};
-        }
+        const args = this.parseToolArguments(String(fn.arguments || "{}"));
         const callId = `tc_${Math.random().toString(16).slice(2, 10)}`;
         const result = await runAgentTool(name, args, userPerm, sessionId, callId);
         const raw = JSON.stringify(result);
@@ -157,14 +186,99 @@ export class LlmClient {
     sessionId = "",
     temperature?: number | null
   ): AsyncGenerator<Record<string, any>, ChatResult, unknown> {
-    const result = await this.chatWithTools(messages, userPerm, sessionId, temperature);
-    const text = result.reply || "";
-    if (result.reasoning_content) yield { type: "reasoning_delta", content: result.reasoning_content };
-    if (result.tool_trace.length) yield { type: "tool_step", trace: result.tool_trace };
-    const chunkSize = 24;
-    for (let i = 0; i < text.length; i += chunkSize) {
-      yield { type: "delta", content: text.slice(i, i + chunkSize) };
+    const history = messages.map((m) => ({ ...m }));
+    const trace: any[] = [];
+    const delta: ChatMessage[] = [];
+    const tools = listToolSchemas(userPerm);
+    const maxSteps = 20;
+    for (let step = 0; step < maxSteps; step += 1) {
+      const payload: any = {
+        model: this.model,
+        messages: history,
+        temperature: temperature ?? undefined,
+        tools: tools.length ? tools : undefined,
+        stream: true
+      };
+      this.logRequest(payload);
+      let stream: AsyncIterable<any>;
+      try {
+        stream = (await this.client.chat.completions.create(payload)) as unknown as AsyncIterable<any>;
+      } catch (error: any) {
+        throw this.llmError(error);
+      }
+
+      let content = "";
+      let reasoning = "";
+      const toolCalls: StreamToolCall[] = [];
+      for await (const chunk of stream) {
+        const choice = chunk?.choices?.[0] || {};
+        const item = choice.delta || {};
+        const reasoningDelta = String(item.reasoning_content || item.reasoning || "");
+        const contentDelta = String(item.content || "");
+        if (reasoningDelta) {
+          reasoning += reasoningDelta;
+          yield { type: "reasoning_delta", content: reasoningDelta };
+        }
+        if (contentDelta) {
+          content += contentDelta;
+          yield { type: "delta", content: contentDelta };
+        }
+        if (Array.isArray(item.tool_calls)) {
+          for (const call of item.tool_calls) this.mergeToolCallDelta(toolCalls, call);
+        }
+      }
+
+      const assistant: ChatMessage = {
+        role: "assistant",
+        content,
+        reasoning_content: reasoning
+      };
+      const completeToolCalls = toolCalls.filter((call) => call.function.name || call.id);
+      if (completeToolCalls.length) assistant.tool_calls = completeToolCalls;
+      history.push(assistant);
+      delta.push(assistant);
+
+      if (!completeToolCalls.length) {
+        const result: ChatResult = {
+          reply: content,
+          reasoning_content: reasoning,
+          tool_trace: trace,
+          tool_steps: trace.length,
+          history_delta: delta
+        };
+        yield { type: "done", ...result };
+        return result;
+      }
+
+      yield {
+        type: "tool_call_start",
+        calls: completeToolCalls.map((call) => ({
+          tool_call_id: call.id,
+          name: call.function.name,
+          arguments: this.parseToolArguments(call.function.arguments)
+        }))
+      };
+
+      for (const call of completeToolCalls) {
+        const fn = call.function || { name: "", arguments: "{}" };
+        const args = this.parseToolArguments(fn.arguments);
+        const callId = `tc_${Math.random().toString(16).slice(2, 10)}`;
+        const result = await runAgentTool(String(fn.name || ""), args, userPerm, sessionId, callId);
+        const raw = JSON.stringify(result);
+        const toolMessage: ChatMessage = { role: "tool", tool_call_id: String(call.id || callId), content: raw };
+        history.push(toolMessage);
+        delta.push(toolMessage);
+        const stepTrace = toolTraceStep(String(fn.name || ""), callId, args, result, String(call.id || ""));
+        trace.push(stepTrace);
+        yield { type: "tool_step", trace: [stepTrace] };
+      }
     }
+    const result: ChatResult = {
+      reply: "工具调用轮次过多，已停止继续执行。",
+      tool_trace: trace,
+      tool_steps: trace.length,
+      history_delta: delta
+    };
     yield { type: "done", ...result };
     return result;
   }
