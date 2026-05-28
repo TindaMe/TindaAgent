@@ -173,6 +173,14 @@ function sse(name: string, data: any): string {
   return `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`;
 }
 
+function sendSseError(res: Response, error: unknown): void {
+  const message = String((error as any)?.message || error || "internal error");
+  if (res.writableEnded) return;
+  res.write(sse("error", { message }));
+  res.write(sse("done", { reply: "", tool_trace: [], tool_steps: 0, error: message }));
+  res.end();
+}
+
 function normalizeTurnId(value: unknown): string {
   return String(value || "").trim().replace(/[^A-Za-z0-9_.:-]/g, "_").slice(0, 80);
 }
@@ -659,6 +667,7 @@ app.post("/chat", async (req, res, next) => {
 });
 
 app.get("/chat/stream", async (req, res, next) => {
+  let streamStarted = false;
   try {
     const user = requireLogin(req);
     if (!hasPerm(user.perm, PUBLIC_EXECUTE)) {
@@ -673,6 +682,7 @@ app.get("/chat/stream", async (req, res, next) => {
       "Cache-Control": "no-cache, no-transform",
       Connection: "keep-alive"
     });
+    streamStarted = true;
     if (message.startsWith("/") && !/^\/plan(?:\s|$)/i.test(message)) {
       const job = toolRuntime.submitCommand(sid, message, user.perm);
       store.appendMessages(sid, [
@@ -703,6 +713,10 @@ app.get("/chat/stream", async (req, res, next) => {
     store.replaceAssistantByTurn(sid, turnId, substeps);
     res.end();
   } catch (error) {
+    if (streamStarted || res.headersSent) {
+      sendSseError(res, error);
+      return;
+    }
     next(error);
   }
 });
@@ -818,6 +832,11 @@ app.get("/logs/by-id", (req, res) => {
 });
 
 app.use((error: any, _req: Request, res: Response, _next: NextFunction) => {
+  if (res.headersSent) {
+    console.error("[server] request failed after response started:", error);
+    if (!res.writableEnded) res.end();
+    return;
+  }
   const status = Number(error?.status || 500);
   res.status(status).json({ ok: false, detail: String(error?.message || error), error: String(error?.message || error) });
 });
