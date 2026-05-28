@@ -765,11 +765,28 @@
     </div>
 
     <div class="card">
+      <h2>网络搜索</h2>
+      <p class="sub">配置 Tavily Search API，用于 search_web 工具。未配置时将自动使用 DuckDuckGo + 内置索引兜底</p>
+      <div class="input-row">
+        <label for="settingTavilyKey">API Key</label>
+        <input type="password" id="settingTavilyKey" placeholder="tvly-..." style="width:280px;">
+      </div>
+      <div class="input-row">
+        <label for="settingTavilyUrl">API 地址</label>
+        <input type="text" id="settingTavilyUrl" placeholder="https://api.tavily.com" style="width:280px;">
+      </div>
+      <div class="hint" style="font-size:11px;color:var(--text-dim);">
+        留空使用默认地址；密钥本地存储不对外发送。
+        <a href="https://app.tavily.com/home" target="_blank" style="color:var(--accent);">获取 Tavily API Key</a>
+      </div>
+    </div>
+
+    <div class="card">
       <h2>关于</h2>
       <p class="sub">TindaAgent 版本信息</p>
       <div class="version-row">
         <span>版本</span>
-        <span class="ver" id="versionLabel">v1.10.1</span>
+        <span class="ver" id="versionLabel">v1.11.0</span>
       </div>
     </div>
   </div>
@@ -1154,12 +1171,50 @@
     [termWhitelistEl, termBlacklistEl].forEach(el => el?.addEventListener("change", saveTerminalSettings));
     bypassTermEl?.addEventListener("change", saveTerminalSettings);
 
+    // Tavily settings
+    const tavilyKeyEl = document.getElementById("settingTavilyKey");
+    const tavilyUrlEl = document.getElementById("settingTavilyUrl");
+    (async () => {
+      try {
+        const res = await apiFetch("/tavily/settings");
+        const data = await res.json();
+        if (tavilyKeyEl && data?.masked_key) {
+          tavilyKeyEl.placeholder = data.masked_key;
+        }
+        if (tavilyUrlEl && data?.base_url && data.base_url !== "https://api.tavily.com") {
+          tavilyUrlEl.value = data.base_url;
+        }
+      } catch {}
+    })();
+    let _tavilySaveTimer = 0;
+    function saveTavilySettings() {
+      clearTimeout(_tavilySaveTimer);
+      _tavilySaveTimer = setTimeout(() => {
+        const key = tavilyKeyEl?.value || "";
+        const url = tavilyUrlEl?.value || "";
+        apiFetch("/tavily/settings", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ api_key: key, base_url: url }),
+        }).then(r => r.json()).then(d => {
+          if (d?.has_key) {
+            showToast("Tavily 密钥已保存 ✓");
+            if (tavilyKeyEl) { tavilyKeyEl.value = ""; tavilyKeyEl.placeholder = d.masked_key || ""; }
+          } else if (key) {
+            showToast("保存失败");
+          }
+        }).catch(() => {});
+      }, 600);
+    }
+    tavilyKeyEl?.addEventListener("input", saveTavilySettings);
+    tavilyUrlEl?.addEventListener("input", saveTavilySettings);
+
     // Version
     (async () => {
       try {
         const res = await apiFetch("/system/version");
         const data = await res.json();
-        const v = data?.effective_version || data?.version || "v1.10.1";
+        const v = data?.effective_version || data?.version || "v1.11.0";
         document.getElementById("versionLabel").textContent = v.startsWith("v") ? v : "v" + v;
       } catch {}
     })();

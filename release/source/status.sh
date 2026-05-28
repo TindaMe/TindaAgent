@@ -182,7 +182,7 @@ is_agent_pid() {
   fi
   local cmd
   cmd="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)"
-  [[ "$cmd" == *"run_web.py"* || "$cmd" == *"uvicorn"* || "$cmd" == *"TindaAgent.Web.server"* || "$cmd" == *"Web.server"* ]]
+  [[ "$cmd" == *"dist/web/server.js"* || "$cmd" == *"src/web/server.ts"* ]]
 }
 
 collect_listening_ports() {
@@ -210,7 +210,7 @@ collect_listening_ports() {
       cmd="$(awk '{print $1}' <<<"$line")"
       pid="$(awk '{print $2}' <<<"$line")"
       addr="$(awk '{print $9}' <<<"$line")"
-      if [[ ! "$cmd" =~ ^(python|python3|uvicorn) ]]; then
+      if [[ ! "$cmd" =~ ^node ]]; then
         continue
       fi
       if [[ ! "$addr" =~ :([0-9]+)$ ]]; then

@@ -1,60 +1,65 @@
 # TindaAgent
 
-AI agent assistant with CLI and Web interfaces, built on DeepSeek models with tool-calling, session management, and long-term memory.
+AI agent assistant with CLI and Web interfaces, built on DeepSeek/OpenAI-compatible models with tool-calling, session management, and long-term memory.
+
+The active runtime is TypeScript + JavaScript + HTML + CSS. The Python stack has been removed from the repository.
 
 ## Quick Start
 
 ```bash
+# Install Node dependencies
+npm install
+npm run build
+
 # CLI
-pip install -e .
-tinda
+npm run tinda
 
 # Web server
-python run_web.py
+npm start
 # → http://localhost:8000
 ```
 
 ## Features
 
-- **Dual interface** — CLI (`tinda`) with prompt_toolkit and Web UI (FastAPI) with streaming SSE
-- **Tool system** — Shell execution, memory, time, summarization, keyword extraction; decorator-based registration with permission gating
+- **Dual interface** — CLI (`tinda`) with Node readline and Web UI (Express) with streaming SSE
+- **Tool system** — Shell execution, memory, time, summarization, keyword extraction; registry-based registration with permission gating
 - **Web search tool** — `search_web` uses Tavily when configured, then falls back to built-in DuckDuckGo search and a curated common-site index
 - **Session management** — Per-session JSON storage, context compression via LLM summarization, Markdown/text export
 - **Local user auth** — JSON-backed local accounts with token-based request isolation and permission bits
-- **Context token accounting** — Counts only content that is actually sent to the LLM request context, with DeepSeek tokenizer support
+- **Context accounting** — Estimates content that is actually sent to the LLM request context
 - **Model data panel** — Built-in `/model-data` page for DeepSeek balance, latest real SDK request body, messages, tools, thinking payload, and token-oriented summary fields
 - **Web UX** — Pink themed Web UI with smooth entry/exit motion for home, chat, logs, user management, and session panels
 - **Motion polish** — Layered glass-card animation system: HOME cards, changelog Markdown, runtime charts, chat header, input bar, overlays, terminal panel, admin/log/settings panels, and page exits use staggered direction-aware transitions
-- **Version management** — GitHub Releases integration, Ed25519 signature verification, multi-version install and switch
+- **Version reporting** — Runtime version is sourced from `package.json` and surfaced through `/system/version`
 - **Audit logging** — Structured event log (`total.jsonl`) with lookup by ID
 
 ## Tech Stack
 
 | Layer | Technology |
 |-------|-----------|
-| Language | Python 3.9+ |
-| Web framework | FastAPI + Uvicorn |
-| LLM client | OpenAI SDK (DeepSeek-compatible) |
-| CLI | prompt_toolkit |
+| Language | TypeScript + JavaScript |
+| Web framework | Express |
+| LLM client | OpenAI JS SDK (DeepSeek-compatible) |
+| CLI | Node readline |
 | Frontend | Vanilla HTML/CSS/JS, pink theme |
 | Data | JSON file storage |
-| Validation | Pydantic |
+| Validation | TypeScript runtime checks |
 
 ## Directory Structure
 
 ```
 TindaAgent/
-    CLI/            CLI interface (prompt_toolkit)
-    Web/            FastAPI server, session store, adapter, HTML pages
-    Process/AI/     Agent, LLM client, tokenizer
-    Process/Architecture/  Paths, permissions, versioning
-    Process/Observability/  Audit logging
-    Process/Security/       Terminal policy
-    Process/Versioning/     Version management
-    Tool/           Tool registry and implementations
-    User/           User data and session management
-    Permission/     Bitmask permission engine
+    Web/            Active HTML/JS frontend assets
+    Permission/     Tool permission policy JSON
+    Process/Versioning/  Release manifest schema
     docs/           CHANGELOG, architecture, policies
+src/
+    ai/             TypeScript Agent and OpenAI-compatible client
+    cli/            TypeScript CLI and doctor entry points
+    core/           Runtime paths, permissions, users, audit helpers
+    tools/          Tool registry and async terminal jobs
+    web/            Express server, settings, session store and adapters
+dist/               Built TypeScript output
 ```
 
 ## Configuration
@@ -64,8 +69,6 @@ TindaAgent/
 | `DEEPSEEK_API_KEY` | (required) | API key |
 | `DEEPSEEK_BASE_URL` | `https://api.deepseek.com` | API endpoint |
 | `DEEPSEEK_MODEL` | `deepseek-v4-flash` | Default model |
-| `TINDA_TITLE_MODEL` | `deepseek-v4-flash` | Title generation model |
-| `TINDA_COMPRESS_MODEL` | `deepseek-v4-flash` | Context compression model |
 | `TAVILY_API_KEY` | (optional) | Enables Tavily-backed `search_web` results |
 | `TAVILY_BASE_URL` | `https://api.tavily.com` | Tavily-compatible base URL |
 | `TAVILY_SEARCH_URL` | (optional) | Full Tavily-compatible search endpoint override |
@@ -76,10 +79,8 @@ Set these in `.env` at the project root.
 ## Runtime Data
 
 - User accounts are stored in `~/.tinda/agent/user/users.json`.
-- Legacy user data at `~/.tinda/agent/Data/User/users.json` is treated as a migration/compatibility source.
 - Sessions are stored under `~/.tinda/agent/Data/Sessions`.
 - Logs are stored under `~/.tinda/agent/log`.
-- DeepSeek tokenizer files are loaded from `~/.tinda/agent/tokenizer/` when available; otherwise token counting falls back to a heuristic estimator.
 - Latest LLM request snapshots are logged to `~/.tinda/agent/log/llm_request.jsonl` by default, or `TINDA_LLM_REQUEST_LOG` if overridden.
 
 ## LLM Request Assembly
@@ -102,10 +103,7 @@ TindaAgent exposes native tools through the same permission-aware registry used 
 - `read_file` / `edit_file` provide Codex/Claude Code style exact text edits with optional `expected_sha256`, `dry_run`, and create support.
 - `search_files` finds files by path/name substring and optional text content, returning bounded path, line, and snippet results for edit planning.
 - `search_web` searches the network with `source=auto|tavily|builtin|index`: Tavily is used when `TAVILY_API_KEY` exists, built-in mode parses DuckDuckGo HTML without a paid API key, and index mode returns curated search links for common engines, docs, repositories, Q&A, package registries, AI docs, and research sites.
-- MCP stdio servers can be configured with `mcp_add_server`, discovered with `mcp_list_servers` / `mcp_list_tools`, and called through `mcp_call_tool`.
-- Local skills live under `~/.tinda/agent/skills/{name}/SKILL.md`, with extra roots available through `TINDA_SKILL_PATHS`; use `skill_list` and `skill_read` to load instructions on demand.
-
-MCP tools and skills are intentionally exposed through compact bridge tools instead of injecting every external tool or skill into the prompt, keeping request bodies smaller and cache-friendlier.
+MCP and local skill bridge tools were part of the removed Python runtime and are not present in the TypeScript-only stack yet.
 
 ## Web Motion
 
@@ -117,6 +115,17 @@ The Web UI uses a layered motion system rather than single-step fades:
 - Chat exit closes transient UI first, including terminal, model/time/session overlays, then plays the page exit transition.
 - Settings, logs, model diagnostics, and user administration share the same theme bootstrap, dark glass palette, button alignment, and explicit transition rules.
 - Motion respects reduced-motion preferences through CSS `prefers-reduced-motion` fallbacks.
+
+## Web Terminal Performance
+
+The Web terminal is optimized for long tool output and `search_web` traces:
+
+- Chat page runtime JavaScript is split under `Web/chat_runtime/` and loaded as ordered assets instead of one large inline script.
+- Terminal DOM writes are batched with `requestAnimationFrame` and `DocumentFragment`.
+- Each logical terminal output shows at most 6 preview lines.
+- Long output adds a `查看完整信息` action below the terminal bubble.
+- Full output is loaded from an in-memory LRU cache only when requested; the active full-output cache keeps the latest 10 items.
+- Terminal history loads a broader recent window, while long text stays out of the DOM until the user opens it.
 
 ## CLI Commands
 
@@ -161,13 +170,16 @@ The Web UI uses a layered motion system rather than single-step fades:
 
 ```bash
 # Install dev dependencies
-pip install -e ".[dev]"
+npm install
 
 # Run doctor diagnostic
-python doctor.py
+npm run doctor
 
-# Run web server with hot reload
-python run_web.py --reload
+# Run web server
+npm start
+
+# Build/type-check
+npm test
 ```
 
 See `docs/DEVELOPMENT_POLICY.md` for coding guidelines and `docs/WSL_WINDOWS_ACCESS.md` for WSL networking setup.

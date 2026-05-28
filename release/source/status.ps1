@@ -98,7 +98,7 @@ function Is-AgentProcess {
     } catch {}
     if ([string]::IsNullOrWhiteSpace($cmd)) { return $false }
     $lc = $cmd.ToLowerInvariant()
-    return ($lc.Contains("run_web.py") -or $lc.Contains("uvicorn") -or $lc.Contains("tindaagent.web.server") -or $lc.Contains("web.server"))
+    return ($lc.Contains("dist/web/server.js") -or $lc.Contains("src/web/server.ts"))
 }
 
 if (Test-Path $portsFile) {

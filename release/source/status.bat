@@ -16,7 +16,7 @@ if /i "%MODE%"=="-h" (
   endlocal & exit /b %RC%
 )
 
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0status.ps1" -Mode --show
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0status.ps1" -Mode "%MODE%"
 set "RC=%ERRORLEVEL%"
 
 endlocal & exit /b %RC%

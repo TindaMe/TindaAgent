@@ -1,18 +1,17 @@
 #!/usr/bin/env bash
-# TindaAgent doctor (Linux/WSL)
+# TindaAgent doctor (Linux/WSL, TypeScript runtime)
 
 set -u
 
 cd "$(cd "$(dirname "$0")" && pwd)"
 
-PY_BIN=""
-if command -v python3 >/dev/null 2>&1; then
-  PY_BIN="python3"
-elif command -v python >/dev/null 2>&1; then
-  PY_BIN="python"
-else
-  echo "[ERROR] python not found (python3/python)"
+if ! command -v node >/dev/null 2>&1; then
+  echo "[ERROR] node not found"
   exit 127
 fi
 
-exec "$PY_BIN" doctor.py "$@"
+if [[ ! -d node_modules ]]; then
+  npm install
+fi
+
+exec npm run doctor -- "$@"

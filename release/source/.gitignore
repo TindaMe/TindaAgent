@@ -9,13 +9,15 @@ venv/
 
 # Version management artifacts
 ~/.tinda/
+.tinda_ports.list
+.tinda_server_*.pid
 *.tmp
 package.bin
 manifest.sig
 
 # Node
 node_modules/
-package-lock.json
+dist/
 
 # Backup/temp
 *.bak

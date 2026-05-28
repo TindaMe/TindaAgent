@@ -4,6 +4,39 @@
 
 > **分类**: `Added` 新增 | `Changed` 变更 | `Fixed` 修复 | `Removed` 移除 | `BREAKING` 破坏性变更 | `Defense` 防御性加固 | `Known Issues` 已知待修
 
+## Unreleased
+
+## v1.11.0 - 2026-05-28
+
+### BREAKING
+
+- **Python 栈彻底移除** — 删除所有 Python 源码、Python 测试、`__pycache__`、`pyproject.toml`、`requirements.txt`、Python doctor 和 Python Web 启动器；仓库运行栈改为 TypeScript + JavaScript + HTML + CSS。
+- **启动方式切换为 Node** — Web 服务使用 `npm start` / `start.sh` / `start.bat` 启动，CLI 使用 `npm run tinda`，doctor 使用 `npm run doctor`；旧的 Python 模块导入路径不再存在。
+
+### Added
+
+- **TypeScript Web 后端** — 新增 Express Web 服务，覆盖首页、Chat、SSE、认证、会话、日志、模型数据、终端事件和系统版本等现有前端 API。
+- **TypeScript Agent 与工具运行时** — 新增 OpenAI-compatible LLM client、工具调用循环、内置工具注册表、文件读写/搜索、Web 搜索、异步终端任务和终端事件轮询。
+- **TypeScript 会话兼容层** — 新增 JSON session store 和 adapter，继续读写 `~/.tinda/agent/Data/Sessions` 下的会话数据格式。
+- **Node doctor/CLI** — 新增 `src/cli/doctor.ts` 与 `src/cli/main.ts`，替代旧 Python doctor 和 CLI 主路径。
+
+### Changed
+
+- **版本提升** — 项目版本从 `1.10.1` 提升到 `1.11.0`，同步更新 `package.json`、`package-lock.json`、Web 版本徽章、Chat/Settings/HOME fallback 和主题脚本标识。
+- **文档切换为 TS-only** — README、架构文档和开发策略全部更新为 TypeScript-only 运行时说明。
+- **端口管理切换为 Node 服务内建** — `src/web/server.ts` 内置端口重试和 `.tinda_ports.list` 追踪，`status.*` / `stop.*` 只识别 Node/TypeScript 服务。
+
+### Removed
+
+- **旧 Python 兼容入口** — 移除 `run_web.py`、`doctor.py`、Python package metadata、Python 单测和 Python-only helper scripts。
+- **旧 Python 后端模块** — 移除 `TindaAgent/CLI`、`Process` Python 实现、`Tool` Python 实现、`User` Python 实现、`Web/*.py` 后端实现和 legacy `Master`/`Tests` Python 测试。
+
+### Defense
+
+- **构建验证** — `npm test` 执行 TypeScript 编译检查。
+- **运行诊断** — `npm run doctor` 验证 Node、运行时目录、用户数据、日志目录、API key 配置和构建产物。
+- **HTTP smoke** — 通过临时端口验证 `/app`、`/auth/local-login`、`/sessions`、`/sessions/{id}/messages` 和 `/model`。
+
 ## v1.10.1 - 2026-05-24
 
 ### Changed

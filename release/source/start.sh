@@ -40,29 +40,27 @@ if ! is_uint "$PORT_RETRIES"; then
   exit 2
 fi
 
-PY_BIN=""
-if command -v python3 >/dev/null 2>&1; then
-  PY_BIN="python3"
-elif command -v python >/dev/null 2>&1; then
-  PY_BIN="python"
-else
-  echo "[ERROR] python not found (python3/python)"
-  echo "[HINT] install python then rerun start.sh"
+if ! command -v node >/dev/null 2>&1; then
+  echo "[ERROR] node not found"
+  echo "[HINT] install Node.js 20+ then rerun start.sh"
   exit 127
 fi
 
-if [[ ! -f "run_web.py" ]]; then
-  echo "[ERROR] run_web.py not found in: $PWD"
+if [[ ! -f "dist/web/server.js" ]]; then
+  echo "[INFO] dist/web/server.js not found; building TypeScript..."
+  npm run build
+fi
+
+if [[ ! -f "dist/web/server.js" ]]; then
+  echo "[ERROR] dist/web/server.js not found in: $PWD"
   exit 2
 fi
 
 echo " TindaAgent 启动中..."
 echo "   工作目录: $PWD"
-echo "   监听地址: ${HOST}:${PORT}（起始端口，实际端口见 run_web.py 输出）"
-echo "   端口重试: ${PORT_RETRIES} 次（占用时每次 +1）"
-echo "   首端口等待: 1800ms（Ctrl+C 后优先复用起始端口）"
+echo "   监听地址: ${HOST}:${PORT}"
+echo "   端口重试: ${PORT_RETRIES} 次（当前 TS 入口使用起始端口）"
 echo "   按 Ctrl+C 停止"
 echo ""
 
-# Keep wrapper transparent; run_web.py handles port retry/selection and prints final URL.
-exec "$PY_BIN" run_web.py --host "$HOST" --port "$PORT" --port-retries "$PORT_RETRIES" --first-port-wait-ms 1800 --reload
+HOST="$HOST" PORT="$PORT" PORT_RETRIES="$PORT_RETRIES" exec node dist/web/server.js --host="$HOST" --port="$PORT" --port-retries="$PORT_RETRIES"
