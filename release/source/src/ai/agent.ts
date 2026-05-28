@@ -6,7 +6,7 @@ import { logRoot, projectRoot } from "../core/paths.js";
 import { nowIso, writeJson } from "../core/json.js";
 import { listToolSchemas, runAgentTool, toolTraceStep } from "../tools/toolRegistry.js";
 
-dotenvConfig({ path: path.join(projectRoot(), ".env") });
+dotenvConfig({ path: path.join(projectRoot(), ".env"), quiet: true });
 
 export interface ChatMessage {
   role: "system" | "user" | "assistant" | "tool";

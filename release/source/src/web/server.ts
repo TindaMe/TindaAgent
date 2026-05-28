@@ -43,7 +43,7 @@ import {
 } from "./settings.js";
 import { ToolRuntimeManager } from "../tools/toolRuntime.js";
 
-dotenvConfig({ path: path.join(projectRoot(), ".env") });
+dotenvConfig({ path: path.join(projectRoot(), ".env"), quiet: true });
 ensureRuntimeDirs();
 
 declare global {
@@ -309,6 +309,12 @@ function buildUserText(body: any): string {
     raw = `[文件: ${name}]\n\`\`\`\n${contents[idx] || ""}\n\`\`\`\n${raw}`;
   });
   return raw;
+}
+
+function commandFromToolJobBody(body: any): string {
+  const args = body && typeof body.args === "object" && !Array.isArray(body.args) ? body.args : {};
+  const command = body?.command ?? body?.cmd ?? args.command ?? args.cmd ?? body?.message ?? body?.text;
+  return String(command || "").trim();
 }
 
 app.get("/", (_req, res) => sendHtml(res, "home.html"));
@@ -739,7 +745,7 @@ app.post("/sessions/:session_id/tool-jobs", (req, res) => {
   const user = requireLogin(req);
   const sid = sessionAccess(req, req.params.session_id);
   try {
-    const job = toolRuntime.submitCommand(sid, req.body?.command || "", user.perm);
+    const job = toolRuntime.submitCommand(sid, commandFromToolJobBody(req.body), user.perm);
     res.json({ ok: true, job });
   } catch (error: any) {
     jsonError(res, 400, String(error?.message || error));
