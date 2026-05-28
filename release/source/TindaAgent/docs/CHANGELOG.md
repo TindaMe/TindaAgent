@@ -6,6 +6,19 @@
 
 ## Unreleased
 
+## v1.11.1 - 2026-05-29
+
+### Fixed
+
+- **会话存储兼容性补齐** — TypeScript session store 恢复旧 Python 栈的 legacy JSONL fallback，旧 `.jsonl` 会话可按原规则迁移为新 JSON dict。
+- **LLM 上下文加载一致性** — 对话上下文转换恢复文件块、assistant thinking、tool marker 回放、system summary 和 terminal context 注入，避免历史消息在下一轮请求中丢失细节。
+- **压缩摘要锚点语义** — 恢复 `summary_anchor_msg_id` / `latest_summary_message_id` / `last_compress_anchor_msg_id` 的有效消息筛选逻辑，压缩后保留摘要 + 最近 4 条 chat tail，并阻止重复压缩同一锚点。
+- **Reset 后上下文隔离** — reset anchor 后的前端消息和 LLM 请求上下文只保留锚点后的消息，同时清空旧摘要锚点。
+
+### Added
+
+- **Session 兼容冒烟测试** — `npm test` 新增 `test:session-compat`，覆盖旧 JSONL、文件块、thinking、工具记录、terminal、压缩摘要、重复压缩保护和 reset 语义。
+
 ## v1.11.0 - 2026-05-28
 
 ### BREAKING

@@ -274,7 +274,7 @@ function logFileCandidates(name: string): string[] {
   return [path.join(logRoot(), name), path.join(legacyLogRoot(), name)];
 }
 
-function estimateUsage(rows: Array<{ content?: string }>): number {
+function estimateUsage(rows: Array<{ content?: string | null }>): number {
   return rows.reduce((sum, row) => sum + textOf(row.content).length, 0);
 }
 

@@ -6,7 +6,9 @@ import { nowIso, readJson, safeId, writeJson } from "../core/json.js";
 import {
   buildAssistantMessage,
   buildSystemMessage,
+  buildUserMessage,
   effectiveStoreDict,
+  filterRawChatEntries,
   normalizeStoreDict,
   normalizeStoreEntry,
   storeDictToAgentMessages,
@@ -53,6 +55,12 @@ export class SessionStore {
     const sid = safeId(sessionId);
     if (!sid) throw new Error("session_id invalid");
     return path.join(this.messagesDir, `${sid}.json`);
+  }
+
+  private legacyMessagesPath(sessionId: string): string {
+    const sid = safeId(sessionId);
+    if (!sid) throw new Error("session_id invalid");
+    return path.join(this.legacyRootDir, "messages", `${sid}.jsonl`);
   }
 
   private terminalPath(sessionId: string): string {
@@ -151,7 +159,13 @@ export class SessionStore {
     const sid = safeId(sessionId);
     if (!sid) return {};
     const file = this.messagesPath(sid);
-    return readJson<StoreDict>(file, {});
+    if (fs.existsSync(file)) {
+      const data = readJson<StoreDict>(file, {});
+      return data && typeof data === "object" && !Array.isArray(data) ? data : {};
+    }
+    const legacy = this.legacyMessagesPath(sid);
+    if (fs.existsSync(legacy)) return this.migrateJsonlToDict(legacy);
+    return {};
   }
 
   loadMessages(sessionId: string): StoreDict {
@@ -169,6 +183,62 @@ export class SessionStore {
 
   writeMessages(sessionId: string, data: StoreDict): void {
     writeJson(this.messagesPath(sessionId), data);
+  }
+
+  private migrateJsonlToDict(file: string): StoreDict {
+    const out: StoreDict = {};
+    let seq = 0;
+    let lines: string[] = [];
+    try {
+      lines = fs.readFileSync(file, "utf8").split(/\r?\n/);
+    } catch {
+      return {};
+    }
+    for (const line of lines) {
+      const raw = line.trim();
+      if (!raw) continue;
+      let row: Record<string, any>;
+      try {
+        row = JSON.parse(raw);
+      } catch {
+        continue;
+      }
+      const role = String(row.role || "").trim();
+      const entryType = String(row.entry_type || "chat").trim();
+      const content = String(row.content || "");
+      if (role === "user") {
+        seq += 1;
+        out[String(seq)] = buildUserMessage(content);
+      } else if (entryType === "notice") {
+        seq += 1;
+        out[String(seq)] = buildSystemMessage(content);
+      } else if (role === "assistant" && entryType === "chat") {
+        const substeps: StoreEntry[] = [];
+        const reasoning = String(row.reasoning_content || "").trim();
+        if (reasoning) substeps.push({ kind: "thinking", content: reasoning });
+        substeps.push({ kind: "text", content });
+        seq += 1;
+        out[String(seq)] = buildAssistantMessage(substeps);
+      } else if (entryType === "tool_marker" && seq > 0 && out[String(seq)]?.role === "assistant") {
+        const previous = out[String(seq)];
+        const previousContent = previous.content && typeof previous.content === "object" ? previous.content : {};
+        const maxSub = Math.max(0, ...Object.keys(previousContent).filter((k) => /^\d+$/.test(k)).map(Number));
+        previousContent[String(maxSub + 1)] = {
+          tool_marker: {
+            name: String(row.name || row.tool_name || "unknown"),
+            ok: row.ok !== false,
+            stdin: String(row.stdin || "").slice(0, 500),
+            stdout: String(row.stdout || content || "").slice(0, 4000),
+            id: String(row.id || row.call_id || ""),
+            tool_call_id: String(row.tool_call_id || row.call_id || ""),
+            arguments: row.arguments || row.args || {},
+            result: row.result || {}
+          }
+        };
+        previous.content = previousContent;
+      }
+    }
+    return out;
   }
 
   appendMessages(sessionId: string, messages: StoreEntry[]) {
@@ -227,7 +297,9 @@ export class SessionStore {
   }
 
   getContextMessages(sessionId: string) {
-    return storeDictToAgentMessages(this.loadEffectiveMessages(sessionId));
+    const sid = safeId(sessionId);
+    if (!sid) return [];
+    return storeDictToAgentMessages(this.loadMessages(sid), this.getSession(sid) || {}, this.loadTerminal(sid));
   }
 
   frontendMessages(sessionId: string, limit = 0, beforeSeq = 0) {
@@ -351,13 +423,54 @@ export class SessionStore {
   compressContext(sessionId: string, summaryText: string) {
     const sid = safeId(sessionId);
     const data = this.loadMessages(sid);
+    const meta: Partial<SessionMeta> = this.getSession(sid) || {};
+    const fullRows = filterRawChatEntries(data);
+    if (fullRows.length >= 4) {
+      const lastAnchorId = String(fullRows[fullRows.length - 4]?.id || "");
+      if (lastAnchorId && lastAnchorId === String(meta.last_compress_anchor_msg_id || "")) {
+        return {
+          session_id: sid,
+          compressed: false,
+          reason: "already_compressed",
+          anchor_message_id: lastAnchorId,
+          visible_count: Object.keys(this.loadEffectiveMessages(sid)).filter((k) => /^\d+$/.test(k)).length
+        };
+      }
+    }
+    const rawRows = filterRawChatEntries(effectiveStoreDict(data, meta));
+    if (rawRows.length < 6) throw new Error("消息数量不足，至少需要 6 条消息才能压缩");
+    const keepTail = rawRows.slice(-4);
+    const older = rawRows.slice(0, -4);
+    const anchorId = String(keepTail[0]?.id || "");
+    const summary = buildSystemMessage(summaryText, { is_summary: true, type: "summary", display_target: "chat", context_policy: "summary" });
     const keys = Object.keys(data).filter((k) => /^\d+$/.test(k)).map(Number).sort((a, b) => a - b);
-    if (keys.length < 6) throw new Error("消息数量不足，至少需要 6 条消息才能压缩");
-    const summary = buildSystemMessage(summaryText, { is_summary: true, type: "summary", context_policy: "summary" });
-    const max = Math.max(...keys);
-    data[String(max + 1)] = summary;
+    const max = Math.max(0, ...keys);
+    const tailStart = Number(keepTail[0]?.seq || keepTail[0]?.source_seq || 0);
+    let inserted = false;
+    if (tailStart > 0) {
+      for (let key = tailStart; key <= max; key += 1) {
+        if (!data[String(key)]) {
+          data[String(key)] = summary;
+          inserted = true;
+          break;
+        }
+      }
+    }
+    if (!inserted) data[String(max + 1)] = summary;
     this.writeMessages(sid, data);
-    this.touchMeta(sid, { latest_summary_message_id: String(summary.id || ""), message_count: Object.keys(data).length });
-    return { session_id: sid, compressed: true, compressed_count: Math.max(0, keys.length - 4), summary_message_id: summary.id };
+    this.touchMeta(sid, {
+      latest_summary_message_id: String(summary.id || ""),
+      summary_anchor_msg_id: anchorId,
+      last_compress_anchor_msg_id: anchorId,
+      message_count: Object.keys(data).filter((k) => /^\d+$/.test(k)).length
+    });
+    return {
+      session_id: sid,
+      compressed: true,
+      compressed_count: older.length,
+      summary_message_id: summary.id,
+      anchor_message_id: anchorId,
+      visible_count: 1 + keepTail.length
+    };
   }
 }
