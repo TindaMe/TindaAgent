@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import OpenAI from "openai";
 import { logRoot, projectRoot } from "../core/paths.js";
 import { nowIso, writeJson } from "../core/json.js";
 import { llmEnvConfig, loadRuntimeEnv, maskSecret, type LlmEnvConfig } from "../core/env.js";
@@ -52,7 +51,7 @@ function systemPrompt(modelName = ""): string {
 }
 
 export class LlmClient {
-  client: OpenAI;
+  private clientPromise: Promise<any> | null = null;
   model: string;
   baseURL: string;
   provider: LlmEnvConfig["provider"];
@@ -68,10 +67,18 @@ export class LlmClient {
     this.model = cfg.model;
     this.apiKeySource = cfg.apiKeySource;
     this.apiKeyConfigured = !!cfg.apiKey;
-    this.client = new OpenAI({
-      apiKey: cfg.apiKey || "missing",
-      baseURL: this.baseURL
-    });
+  }
+
+  private client(): Promise<any> {
+    if (!this.clientPromise) {
+      this.clientPromise = import("openai").then(({ default: OpenAI }) =>
+        new OpenAI({
+          apiKey: llmEnvConfig().apiKey || "missing",
+          baseURL: this.baseURL
+        })
+      );
+    }
+    return this.clientPromise;
   }
 
   private llmError(error: any): Error {
@@ -139,7 +146,7 @@ export class LlmClient {
       this.logRequest(payload);
       let resp: any;
       try {
-        resp = await this.client.chat.completions.create(payload);
+        resp = await (await this.client()).chat.completions.create(payload);
       } catch (error: any) {
         throw this.llmError(error);
       }
@@ -215,7 +222,7 @@ export class LlmClient {
       this.logRequest(payload);
       let stream: AsyncIterable<any>;
       try {
-        stream = (await this.client.chat.completions.create(payload)) as unknown as AsyncIterable<any>;
+        stream = (await (await this.client()).chat.completions.create(payload)) as unknown as AsyncIterable<any>;
       } catch (error: any) {
         throw this.llmError(error);
       }
@@ -355,7 +362,7 @@ export class LlmClient {
         temperature: 0
       };
       this.logRequest(payload);
-      const resp: any = await this.client.chat.completions.create(payload, { signal: controller.signal });
+      const resp: any = await (await this.client()).chat.completions.create(payload, { signal: controller.signal });
       const msg = resp.choices?.[0]?.message || {};
       return {
         content: String(msg.content || ""),

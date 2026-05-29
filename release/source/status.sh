@@ -182,7 +182,7 @@ is_agent_pid() {
   fi
   local cmd
   cmd="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)"
-  [[ "$cmd" == *"dist/web/server.js"* || "$cmd" == *"src/web/server.ts"* ]]
+  [[ "$cmd" == *"dist/web/server.bundle.js"* || "$cmd" == *"dist/web/server.js"* || "$cmd" == *"src/web/server.ts"* ]]
 }
 
 collect_listening_ports() {

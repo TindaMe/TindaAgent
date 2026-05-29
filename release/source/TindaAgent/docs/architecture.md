@@ -8,7 +8,7 @@ removed from the repository.
 ```mermaid
 flowchart TB
     subgraph Entry[Entry]
-        npm_start["npm start"]
+        npm_start["npm start · dist/web/server.bundle.js"]
         start_sh["start.sh / start.bat"]
         cli["npm run tinda"]
         doctor["npm run doctor"]

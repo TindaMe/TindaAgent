@@ -37,20 +37,22 @@ if %ERRORLEVEL% NEQ 0 (
   exit /b 127
 )
 
-if not exist "dist\web\server.js" (
-  echo [INFO] dist\web\server.js not found; building TypeScript...
+set "ENTRY=dist\web\server.bundle.js"
+
+if not exist "%ENTRY%" (
+  echo [INFO] %ENTRY% not found; building TypeScript...
   call npm run build
 )
 
-if not exist "dist\web\server.js" (
-  echo [ERROR] dist\web\server.js not found in: %CD%
+if not exist "%ENTRY%" (
+  echo [ERROR] %ENTRY% not found in: %CD%
   if "%PAUSE_ON_EXIT%"=="1" pause
   exit /b 2
 )
 
 set "HOST=0.0.0.0"
 set "PORT=%PORT%"
-node dist\web\server.js --host=%HOST% --port=%PORT% --port-retries=%PORT_RETRIES%
+node "%ENTRY%" --host=%HOST% --port=%PORT% --port-retries=%PORT_RETRIES%
 
 set "EXIT_CODE=%ERRORLEVEL%"
 echo.

@@ -24,7 +24,7 @@ async function request(path: string, options: RequestInit = {}) {
 }
 
 async function main() {
-  const proc = spawn(process.execPath, ["dist/web/server.js", "--host=127.0.0.1", `--port=${port}`, "--port-retries=0"], {
+  const proc = spawn(process.execPath, ["dist/web/server.bundle.js", "--host=127.0.0.1", `--port=${port}`, "--port-retries=0"], {
     cwd: process.cwd(),
     env: { ...process.env, PORT: String(port), HOST: "127.0.0.1", PORT_RETRIES: "0", TINDA_DEEP_ALIGNMENT_OFFLINE: "1" },
     stdio: ["ignore", "pipe", "pipe"]

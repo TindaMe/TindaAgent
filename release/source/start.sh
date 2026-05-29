@@ -22,6 +22,7 @@ fi
 PORT="${1:-8000}"
 PORT_RETRIES="${2:-20}"
 HOST="${3:-0.0.0.0}"
+ENTRY="dist/web/server.bundle.js"
 
 is_uint() {
   local v="${1:-}"
@@ -46,13 +47,13 @@ if ! command -v node >/dev/null 2>&1; then
   exit 127
 fi
 
-if [[ ! -f "dist/web/server.js" ]]; then
-  echo "[INFO] dist/web/server.js not found; building TypeScript..."
+if [[ ! -f "$ENTRY" ]]; then
+  echo "[INFO] $ENTRY not found; building TypeScript..."
   npm run build
 fi
 
-if [[ ! -f "dist/web/server.js" ]]; then
-  echo "[ERROR] dist/web/server.js not found in: $PWD"
+if [[ ! -f "$ENTRY" ]]; then
+  echo "[ERROR] $ENTRY not found in: $PWD"
   exit 2
 fi
 
@@ -63,4 +64,4 @@ echo "   端口重试: ${PORT_RETRIES} 次（当前 TS 入口使用起始端口�
 echo "   按 Ctrl+C 停止"
 echo ""
 
-HOST="$HOST" PORT="$PORT" PORT_RETRIES="$PORT_RETRIES" exec node dist/web/server.js --host="$HOST" --port="$PORT" --port-retries="$PORT_RETRIES"
+HOST="$HOST" PORT="$PORT" PORT_RETRIES="$PORT_RETRIES" exec node "$ENTRY" --host="$HOST" --port="$PORT" --port-retries="$PORT_RETRIES"

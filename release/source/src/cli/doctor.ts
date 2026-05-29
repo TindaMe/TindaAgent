@@ -30,8 +30,8 @@ if (!llm.apiKey) {
   ok("llm_base_url", `${llm.baseURL} (${llm.baseURLSource})`);
   ok("llm_model", llm.model);
 }
-if (!fs.existsSync("dist/web/server.js")) {
-  warn("build", "dist/web/server.js not found; run npm run build");
+if (!fs.existsSync("dist/web/server.bundle.js")) {
+  warn("build", "dist/web/server.bundle.js not found; run npm run build");
 } else {
-  ok("build", "dist/web/server.js");
+  ok("build", "dist/web/server.bundle.js");
 }

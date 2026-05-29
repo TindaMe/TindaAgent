@@ -19,6 +19,9 @@ npm start
 # → http://localhost:8000
 ```
 
+`npm start` runs the already-built Web bundle for fast startup. Use `npm run start:build`
+when you want to type-check, rebuild, and start in one command.
+
 ## Features
 
 - **Dual interface** — CLI (`tinda`) with Node readline and Web UI (Express) with streaming SSE
@@ -60,6 +63,7 @@ src/
     tools/          Tool registry and async terminal jobs
     web/            Express server, settings, session store and adapters
 dist/               Built TypeScript output
+dist/web/server.bundle.js  Bundled Web server entry used by npm start/start scripts
 ```
 
 ## Configuration

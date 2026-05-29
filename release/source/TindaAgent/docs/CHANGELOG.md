@@ -6,6 +6,17 @@
 
 ## Unreleased
 
+## v1.11.3 - 2026-05-29
+
+### Changed
+
+- **Web 启动加速** — Web 服务构建新增 `dist/web/server.bundle.js`，将 Express 启动依赖打包为单入口，减少 WSL/挂载盘上大量小文件加载带来的冷启动等待。
+- **默认启动不再强制重编译** — `npm start` 改为直接运行已构建 Web bundle；需要编译并启动时使用 `npm run start:build`，`start.sh` / `start.bat` 仅在 bundle 缺失时自动构建。
+
+### Fixed
+
+- **LLM SDK 延迟加载** — OpenAI-compatible SDK 改为首次模型请求时加载，Web 服务监听、首页、认证、会话列表和系统版本接口不再被模型 SDK 导入阻塞。
+
 ## v1.11.2 - 2026-05-29
 
 ### Added
