@@ -509,7 +509,9 @@ app.get("/chat-runtime/:file", (req, res) => {
 
 app.get("/home/changelog", (_req, res) => {
   const file = path.join(projectRoot(), "TindaAgent", "docs", "CHANGELOG.md");
-  res.type("text/markdown").send(fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "# TindaAgent\n\n暂无更新日志。");
+  const markdown = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "# TindaAgent\n\n暂无更新日志。";
+  const version = markdown.match(/^##\s+(v[^\n]+)$/m)?.[1]?.trim() || markdown.match(/^##\s+(.+)$/m)?.[1]?.trim() || "CHANGELOG.md";
+  res.json({ ok: true, markdown, version, source: "TindaAgent/docs/CHANGELOG.md" });
 });
 
 app.get("/home/stats", (req, res) => {

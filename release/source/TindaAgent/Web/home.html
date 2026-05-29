@@ -2091,7 +2091,7 @@
     <span class="brand-name">TindaAgent</span>
   </div>
   <div class="header-actions">
-    <button id="versionBadge" type="button" class="version-badge version-badge-btn" title="点击选择版本">v1.12.1</button>
+    <button id="versionBadge" type="button" class="version-badge version-badge-btn" title="点击选择版本">v1.12.2</button>
     <button id="themeToggle" class="theme-toggle" type="button" aria-label="切换深色模式" data-theme="light">
       <svg class="theme-icon theme-sun" viewBox="0 0 24 24" aria-hidden="true">
         <circle cx="12" cy="12" r="4.5"></circle>
@@ -3115,9 +3115,19 @@
       bodyEl.classList.remove("is-markdown-ready");
       try {
         const r = await fetch("/home/changelog", { cache: "no-store" });
-        const j = await r.json();
-        if (!j || !j.ok) throw new Error("changelog response not ok");
-        const md = String(j.markdown || "");
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const contentType = String(r.headers.get("content-type") || "");
+        let md = "";
+        let version = "";
+        if (contentType.includes("application/json")) {
+          const j = await r.json();
+          if (!j || j.ok === false) throw new Error("changelog response not ok");
+          md = String(j.markdown || "");
+          version = String(j.version || "");
+        } else {
+          md = await r.text();
+        }
+        if (!md.trim()) throw new Error("changelog is empty");
         const renderer = window.MarkdownRenderer && window.MarkdownRenderer.render;
         if (typeof renderer !== "function") {
           bodyEl.innerHTML = '<div class="changelog-skeleton">渲染器未加载</div>';
@@ -3127,8 +3137,9 @@
         bodyEl.innerHTML = renderer(md);
         bodyEl.classList.add("is-markdown-ready");
         // 提取首个 ## 标题作为副标题
+        const versionMatch = md.match(/^##\s+(v[^\n]+)$/m);
         const m = md.match(/^##\s+(.+)$/m);
-        if (m && versionEl) versionEl.textContent = m[1].trim();
+        if (versionEl) versionEl.textContent = version || (versionMatch ? versionMatch[1].trim() : (m ? m[1].trim() : "CHANGELOG.md"));
       } catch (e) {
         if (bodyEl) bodyEl.innerHTML = '<div class="changelog-skeleton">加载失败，稍后重试</div>';
         if (bodyEl) bodyEl.classList.add("is-markdown-ready");

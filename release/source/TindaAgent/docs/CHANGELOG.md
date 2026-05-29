@@ -6,6 +6,12 @@
 
 ## Unreleased
 
+## v1.12.2 - 2026-05-30
+
+### Fixed
+
+- **HOME 左侧更新日志读取** — `/home/changelog` 恢复返回 JSON 载荷，前端同步兼容 JSON 与纯 Markdown 响应，修复左侧 changelog 面板加载失败。
+
 ## v1.12.1 - 2026-05-29
 
 ### Added
