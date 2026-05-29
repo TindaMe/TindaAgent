@@ -6,6 +6,12 @@
 
 ## Unreleased
 
+## v1.12.4 - 2026-05-30
+
+### Fixed
+
+- **思考内容重载保真** — LLM 返回的 `reasoning_content` 在普通对话、流式对话和确认续跑后都会写入 assistant 的 `thinking` 子段，刷新/切换会话后继续渲染。
+
 ## v1.12.3 - 2026-05-30
 
 ### Fixed

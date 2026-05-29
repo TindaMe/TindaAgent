@@ -485,6 +485,15 @@ function commandFromToolJobBody(body: any): string {
   return String(command || "").trim();
 }
 
+function assistantSubstepsFromResult(result: any): Array<Record<string, any>> {
+  const reply = textOf(result?.reply || "");
+  const reasoning = textOf(result?.reasoning_content || "").trim();
+  const substeps: Array<Record<string, any>> = [...toolTraceToSubsteps(result?.tool_trace || [])];
+  substeps.push({ kind: "text", content: reply || "（无回复）" });
+  if (reasoning) substeps.push({ kind: "thinking", content: reasoning });
+  return substeps;
+}
+
 app.get("/", (_req, res) => sendHtml(res, "home.html"));
 app.get("/home", (_req, res) => sendHtml(res, "home.html"));
 app.get("/chat", (_req, res) => sendHtml(res, "chat.html"));
@@ -888,8 +897,7 @@ app.post("/chat", async (req, res, next) => {
     const pending = pendingItemsFromTrace(result.tool_trace, turnId);
     setPending(sid, pending);
     updatePlanFromTrace(sid, result.tool_trace);
-    const substeps = [...toolTraceToSubsteps(result.tool_trace), { kind: "text", content: result.reply || "（无回复）" }];
-    store.appendMessages(sid, [buildUserMessage(textOf(req.body?.message), { turn_id: turnId }), buildAssistantMessage(substeps, { turn_id: turnId })]);
+    store.appendMessages(sid, [buildUserMessage(textOf(req.body?.message), { turn_id: turnId }), buildAssistantMessage(assistantSubstepsFromResult(result), { turn_id: turnId })]);
     res.json({ ...result, turn_id: turnId, pending_confirmation: pending.length > 0, pending_confirm_count: pending.length, pending, plan: loadPlanPayload(sid) });
   } catch (error) {
     next(error);
@@ -937,8 +945,7 @@ app.get("/chat/stream", async (req, res, next) => {
     const pending = pendingItemsFromTrace(final?.tool_trace || [], turnId);
     setPending(sid, pending);
     updatePlanFromTrace(sid, final?.tool_trace || []);
-    const substeps = [...toolTraceToSubsteps(final?.tool_trace || []), { kind: "text", content: reply || "（无回复）" }];
-    store.replaceAssistantByTurn(sid, turnId, substeps);
+    store.replaceAssistantByTurn(sid, turnId, assistantSubstepsFromResult({ ...(final || {}), reply }));
     res.end();
   } catch (error) {
     if (streamStarted || res.headersSent) {
@@ -1001,7 +1008,7 @@ app.post("/terminal/confirm", async (req, res) => {
       const combinedPending = [...remaining, ...nextPending];
       setPending(sid, combinedPending);
       updatePlanFromTrace(sid, result.tool_trace || []);
-      const substeps = [...toolTraceToSubsteps(result.tool_trace || []), { kind: "text", content: result.reply || "（无回复）" }];
+      const substeps = assistantSubstepsFromResult(result);
       if (substeps.length) store.appendMessages(sid, [buildAssistantMessage(substeps, { turn_id: String(target.turn_id || "") || undefined })]);
       return res.json({ ok: true, session_id: sid, reply: result.reply, tool_trace: result.tool_trace, tool_steps: result.tool_steps, pending_confirmation: combinedPending.length > 0, pending_confirm_count: combinedPending.length, pending: combinedPending });
     } catch (error: any) {

@@ -58,6 +58,9 @@ assert(hasContent(beforeCompress, "[文件: a.txt]"), "user file block not inclu
 assert(beforeCompress.some((row) => row.role === "assistant" && String(row.reasoning_content || "").includes("思考一")), "thinking not preserved");
 assert(beforeCompress.some((row) => row.role === "tool" && row.tool_call_id === "call_echo"), "tool marker not converted to tool row");
 assert(hasContent(beforeCompress, "[Terminal Context]"), "terminal context not included");
+const renderedBeforeCompress = store.frontendMessages(sid).entries;
+const thinkingEntry = renderedBeforeCompress.find((entry) => entry.role === "assistant" && Array.isArray(entry.content) && entry.content.some((step: any) => step.kind === "thinking"));
+assert(thinkingEntry?.content?.some((step: any) => step.kind === "thinking" && String(step.data || "").includes("思考一")), "thinking substep not preserved for frontend reload");
 
 const compressed = store.compressContext(sid, "摘要：第一轮到第二轮。");
 assert(compressed.compressed === true, "first compression did not run");
