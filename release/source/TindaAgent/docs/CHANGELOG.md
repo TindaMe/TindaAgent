@@ -6,6 +6,21 @@
 
 ## Unreleased
 
+## v1.11.2 - 2026-05-29
+
+### Added
+
+- **Deep 对齐 TS 持久化** — 新增 TypeScript Deep Alignment 状态文件，支持 align/revise/back/confirm/cancel 和刷新恢复；确认摘要优先由当前 LLM 生成，离线或失败时回退到本地摘要。
+- **Plan 工具迁移** — 新增 TS `plan` 工具和会话计划持久化，消息接口返回当前 plan 状态，前端计划浮窗刷新后可恢复。
+- **用户澄清工具迁移** — 新增 TS `ask_user_question` 工具，工具循环遇到 pending confirmation 会暂停，`/terminal/confirm` 可提交回答并恢复模型生成。
+- **功能冒烟测试** — `npm test` 新增 HTTP feature smoke，覆盖 session config、Deep、plan envelope、plan 删除和 terminal pending 错误路径。
+
+### Fixed
+
+- **Session config 持久化** — 会话 token/context 配置从内存 Map 改为 runtime 文件存储，服务重启后仍可恢复。
+- **模型诊断不再假成功** — connectivity/reasoning 改为真实 LLM probe；当前未接入的 image/video 多模态诊断明确返回 unsupported。
+- **危险终端确认链路** — `run_terminal` 对需要确认的命令返回 pending confirmation，确认端点不再无条件清空成功。
+
 ## v1.11.1 - 2026-05-29
 
 ### Fixed

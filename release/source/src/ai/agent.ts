@@ -22,6 +22,8 @@ export interface ChatResult {
   tool_trace: any[];
   tool_steps: number;
   history_delta: ChatMessage[];
+  pending_confirmation?: boolean;
+  pending?: any[];
 }
 
 interface StreamToolCall {
@@ -165,11 +167,22 @@ export class LlmClient {
         const args = this.parseToolArguments(String(fn.arguments || "{}"));
         const callId = `tc_${Math.random().toString(16).slice(2, 10)}`;
         const result = await runAgentTool(name, args, userPerm, sessionId, callId);
+        trace.push(toolTraceStep(name, callId, args, result, String(call.id || "")));
+        if (result?.pending_confirmation) {
+          return {
+            reply: "",
+            reasoning_content: assistant.reasoning_content || "",
+            tool_trace: trace,
+            tool_steps: trace.length,
+            history_delta: delta,
+            pending_confirmation: true,
+            pending: [result]
+          };
+        }
         const raw = JSON.stringify(result);
         const toolMessage: ChatMessage = { role: "tool", tool_call_id: String(call.id || callId), content: raw };
         history.push(toolMessage);
         delta.push(toolMessage);
-        trace.push(toolTraceStep(name, callId, args, result, String(call.id || "")));
       }
     }
     return {
@@ -264,13 +277,26 @@ export class LlmClient {
         const args = this.parseToolArguments(fn.arguments);
         const callId = `tc_${Math.random().toString(16).slice(2, 10)}`;
         const result = await runAgentTool(String(fn.name || ""), args, userPerm, sessionId, callId);
+        const stepTrace = toolTraceStep(String(fn.name || ""), callId, args, result, String(call.id || ""));
+        trace.push(stepTrace);
+        yield { type: "tool_step", trace: [stepTrace] };
+        if (result?.pending_confirmation) {
+          const pendingResult: ChatResult = {
+            reply: "",
+            reasoning_content: reasoning,
+            tool_trace: trace,
+            tool_steps: trace.length,
+            history_delta: delta,
+            pending_confirmation: true,
+            pending: [result]
+          };
+          yield { type: "done", ...pendingResult };
+          return pendingResult;
+        }
         const raw = JSON.stringify(result);
         const toolMessage: ChatMessage = { role: "tool", tool_call_id: String(call.id || callId), content: raw };
         history.push(toolMessage);
         delta.push(toolMessage);
-        const stepTrace = toolTraceStep(String(fn.name || ""), callId, args, result, String(call.id || ""));
-        trace.push(stepTrace);
-        yield { type: "tool_step", trace: [stepTrace] };
       }
     }
     const result: ChatResult = {
@@ -318,6 +344,31 @@ export class LlmClient {
     this.model = clean;
   }
 
+  async probe(model: string, messages: ChatMessage[], timeoutMs = 30000): Promise<{ content: string; reasoning_content: string; latency_ms: number }> {
+    const started = Date.now();
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), Math.max(1000, timeoutMs));
+    try {
+      const payload: any = {
+        model: String(model || this.model),
+        messages,
+        temperature: 0
+      };
+      this.logRequest(payload);
+      const resp: any = await this.client.chat.completions.create(payload, { signal: controller.signal });
+      const msg = resp.choices?.[0]?.message || {};
+      return {
+        content: String(msg.content || ""),
+        reasoning_content: String(msg.reasoning_content || msg.reasoning || ""),
+        latency_ms: Date.now() - started
+      };
+    } catch (error: any) {
+      throw this.llmError(error);
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
   async fetchBalance() {
     const cfg = llmEnvConfig();
     const key = cfg.apiKeySource === "DEEPSEEK_API_KEY" ? cfg.apiKey : "";
@@ -355,6 +406,15 @@ export class Agent {
     requestHistory.push({ role: "user", content: message });
     const result = await this.client.chatWithTools(requestHistory, this.userPerm, this.sessionId);
     this.history.push({ role: "user", content: message }, ...result.history_delta);
+    return result;
+  }
+
+  async resumeWithToolResult(toolCallId: string, resultPayload: Record<string, any>): Promise<ChatResult> {
+    const callId = String(toolCallId || "").trim();
+    if (!callId) throw new Error("tool_call_id required");
+    this.history.push({ role: "tool", tool_call_id: callId, content: JSON.stringify(resultPayload) });
+    const result = await this.client.chatWithTools(this.history, this.userPerm, this.sessionId);
+    this.history.push(...result.history_delta);
     return result;
   }
 

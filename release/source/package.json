@@ -1,6 +1,6 @@
 {
   "name": "tinda-agent",
-  "version": "1.11.1",
+  "version": "1.11.2",
   "description": "TindaAgent - TypeScript web and CLI agent platform",
   "type": "module",
   "private": true,
@@ -10,8 +10,9 @@
     "dev": "tsx src/web/server.ts",
     "doctor": "tsx src/cli/doctor.ts",
     "tinda": "tsx src/cli/main.ts",
-    "test": "npm run build && npm run test:session-compat",
-    "test:session-compat": "tsx src/cli/sessionCompatSmoke.ts"
+    "test": "npm run build && npm run test:session-compat && npm run test:http-features",
+    "test:session-compat": "tsx src/cli/sessionCompatSmoke.ts",
+    "test:http-features": "tsx src/cli/httpFeatureSmoke.ts"
   },
   "bin": {
     "tinda": "dist/cli/main.js"

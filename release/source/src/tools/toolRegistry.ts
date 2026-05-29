@@ -349,7 +349,16 @@ register({
     const command = String(cmd || "").trim();
     if (!command) return { ok: false, error: "cmd required" };
     if (dangerousCommand(command) && !hasPerm(context.userPerm, SYSTEM_EXECUTE)) {
-      return { ok: false, error: "command requires SYSTEM_EXECUTE permission", pending_confirmation: false };
+      const callId = context.callId || `term_${crypto.randomBytes(5).toString("hex")}`;
+      return {
+        ok: false,
+        pending_confirmation: true,
+        kind: "terminal",
+        call_id: callId,
+        confirm_id: callId,
+        cmd: command,
+        message: "command requires user confirmation"
+      };
     }
     const shell = process.platform === "win32" ? "cmd.exe" : "bash";
     const args = process.platform === "win32" ? ["/d", "/s", "/c", command] : ["-lc", command];
@@ -370,6 +379,108 @@ register({
         returncode: Number(error?.code || 1)
       };
     }
+  }
+});
+
+register({
+  name: "ask_user_question",
+  description: "Ask the user one blocking clarification question and wait for their answer before continuing.",
+  perm: PUBLIC_EXECUTE,
+  parameters: schema({
+    question: { type: "string" },
+    options: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          label: { type: "string" },
+          value: { type: "string" },
+          description: { type: "string" }
+        },
+        additionalProperties: true
+      }
+    },
+    allow_custom: { type: "boolean" },
+    placeholder: { type: "string" }
+  }, ["question"]),
+  handler: ({ question, options, allow_custom, placeholder }, context) => {
+    const callId = context.callId || `ask_${crypto.randomBytes(5).toString("hex")}`;
+    return {
+      ok: false,
+      pending_confirmation: true,
+      kind: "question",
+      flow: "agent",
+      call_id: callId,
+      confirm_id: callId,
+      question: String(question || "需要你补充一个条件。"),
+      options: Array.isArray(options) ? options : [],
+      allow_custom: allow_custom !== false,
+      placeholder: String(placeholder || "补充你的答案或限制条件..."),
+      message: "waiting for user clarification"
+    };
+  }
+});
+
+function normalizePlanSteps(raw: unknown): Array<{ index: number; text: string; status: string }> {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((item, idx) => {
+      if (typeof item === "string") return { index: idx + 1, text: item.trim(), status: "pending" };
+      if (item && typeof item === "object") {
+        const row = item as Record<string, any>;
+        return {
+          index: Number(row.index || idx + 1),
+          text: String(row.text || row.title || row.content || "").trim(),
+          status: String(row.status || "pending").trim() || "pending"
+        };
+      }
+      return { index: idx + 1, text: "", status: "pending" };
+    })
+    .filter((step) => step.text);
+}
+
+register({
+  name: "plan",
+  description: "Create or update the visible task plan. Actions: create, update, set_step_status, block, complete, clear.",
+  perm: PUBLIC_EXECUTE,
+  parameters: schema({
+    action: { type: "string" },
+    goal: { type: "string" },
+    steps: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          index: { type: "number" },
+          text: { type: "string" },
+          status: { type: "string" }
+        },
+        additionalProperties: true
+      }
+    },
+    status: { type: "string" },
+    step_index: { type: "number" },
+    step_status: { type: "string" },
+    notes: { type: "string" },
+    completion_note: { type: "string" }
+  }),
+  handler: (args) => {
+    const action = String(args.action || "update").trim() || "update";
+    const status = String(args.status || (action === "complete" ? "complete" : action === "block" ? "blocked" : "planned")).trim();
+    return {
+      ok: true,
+      kind: "plan",
+      action,
+      goal: String(args.goal || "").trim(),
+      steps: normalizePlanSteps(args.steps),
+      status,
+      completed: status === "complete" || action === "complete",
+      step_index: Number(args.step_index || 0),
+      step_status: String(args.step_status || "").trim(),
+      notes: String(args.notes || "").trim(),
+      completion_note: String(args.completion_note || "").trim(),
+      updated_at: nowIso()
+    };
   }
 });
 

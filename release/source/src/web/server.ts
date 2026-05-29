@@ -6,8 +6,8 @@ import crypto from "node:crypto";
 import { Agent, LlmClient, latestLlmRequest, type ChatMessage } from "../ai/agent.js";
 import { auditEvent } from "../core/audit.js";
 import { loadRuntimeEnv } from "../core/env.js";
-import { appVersion, ensureRuntimeDirs, legacyLogRoot, logRoot, projectRoot, webRoot } from "../core/paths.js";
-import { nowIso, safeId, textOf } from "../core/json.js";
+import { appVersion, dataRoot, ensureRuntimeDirs, legacyLogRoot, logRoot, projectRoot, webRoot } from "../core/paths.js";
+import { nowIso, readJson, safeId, textOf, writeJson } from "../core/json.js";
 import {
   PUBLIC_EXECUTE,
   PUBLIC_READ,
@@ -32,6 +32,16 @@ import {
 } from "../core/users.js";
 import { buildAssistantMessage, buildSystemMessage, buildUserMessage } from "./sessionAdapter.js";
 import { SessionStore } from "./sessionStore.js";
+import {
+  answerDeepQuestion,
+  createDeepQuestion,
+  deepPublicPayload,
+  deleteDeepState,
+  loadDeepState,
+  saveDeepState,
+  startDeepState
+} from "./deepAlignment.js";
+import { deleteSessionConfig, loadSessionConfig, saveSessionConfig } from "./sessionConfig.js";
 import {
   loadTavilySettings,
   loadTerminalSettings,
@@ -60,7 +70,6 @@ const llm = new LlmClient();
 const toolRuntime = new ToolRuntimeManager();
 const agents = new Map<string, Agent>();
 const pendingBySession = new Map<string, any[]>();
-const sessionConfig = new Map<string, Record<string, any>>();
 
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
@@ -310,6 +319,148 @@ function toolTraceToSubsteps(trace: any[]) {
   }));
 }
 
+function planStatePath(sessionId: string): string {
+  const sid = safeId(sessionId);
+  if (!sid) throw new Error("session_id invalid");
+  return path.join(dataRoot(), "Plan", `${sid}.json`);
+}
+
+function normalizePlanPayload(raw: any): Record<string, any> | null {
+  const source = raw?.result && typeof raw.result === "object" ? raw.result : raw;
+  if (!source || typeof source !== "object") return null;
+  if (String(source.kind || "") !== "plan" && String(source.name || source.agent_tool || "") !== "plan") return null;
+  const action = String(source.action || "update").trim() || "update";
+  if (action === "clear") return { kind: "plan", action: "clear", deleted: true, updated_at: nowIso() };
+  const steps = Array.isArray(source.steps)
+    ? source.steps
+        .map((step: any, idx: number) =>
+          typeof step === "string"
+            ? { index: idx + 1, text: step, status: "pending" }
+            : {
+                index: Number(step?.index || idx + 1),
+                text: textOf(step?.text || step?.title || step?.content),
+                status: textOf(step?.status || "pending") || "pending"
+              }
+        )
+        .filter((step: any) => String(step.text || "").trim())
+    : [];
+  return {
+    kind: "plan",
+    action,
+    goal: textOf(source.goal),
+    steps,
+    status: textOf(source.status || (source.completed ? "complete" : "planned")),
+    completed: Boolean(source.completed) || textOf(source.status) === "complete",
+    notes: textOf(source.notes),
+    completion_note: textOf(source.completion_note),
+    step_index: Number(source.step_index || 0),
+    step_status: textOf(source.step_status),
+    updated_at: textOf(source.updated_at || nowIso())
+  };
+}
+
+function mergePlanPayload(current: Record<string, any> | null, update: Record<string, any>): Record<string, any> | null {
+  if (!update) return current;
+  if (update.action === "clear") return null;
+  const base: Record<string, any> | null = current && typeof current === "object" ? { ...current, steps: Array.isArray(current.steps) ? [...current.steps] : [] } : null;
+  if (update.action === "set_step_status" && base) {
+    const idx = Number(update.step_index || 0) - 1;
+    if (idx >= 0 && idx < base.steps.length) base.steps[idx] = { ...base.steps[idx], status: update.step_status || update.status || "done" };
+    base.updated_at = update.updated_at || nowIso();
+    return base;
+  }
+  return { ...(base || {}), ...update, steps: update.steps?.length ? update.steps : base?.steps || [] };
+}
+
+function loadPlanPayload(sessionId: string): { current: Record<string, any> | null; deleted: boolean; deleted_at?: string } {
+  const sid = safeId(sessionId);
+  if (!sid) return { current: null, deleted: false };
+  const saved = store.loadPlan(sid);
+  if (saved && typeof saved === "object" && ("current" in saved || "deleted" in saved)) {
+    return { current: saved.deleted ? null : saved.current || null, deleted: Boolean(saved.deleted), deleted_at: saved.deleted_at || "" };
+  }
+  const legacy = readJson<Record<string, any>>(planStatePath(sid), {});
+  return { current: legacy.current || null, deleted: Boolean(legacy.deleted), deleted_at: legacy.deleted_at || "" };
+}
+
+function savePlanPayload(sessionId: string, current: Record<string, any> | null, deleted = false) {
+  const payload = store.savePlan(sessionId, current, deleted);
+  writeJson(planStatePath(sessionId), { ...payload, deleted_at: deleted ? nowIso() : "" });
+  return payload;
+}
+
+function updatePlanFromTrace(sessionId: string, trace: any[]): Record<string, any> | null {
+  let current = loadPlanPayload(sessionId).current;
+  let changed = false;
+  for (const step of trace || []) {
+    const name = String(step?.agent_tool || step?.name || step?.tool_name || "").trim();
+    if (name !== "plan") continue;
+    const payload = normalizePlanPayload(step);
+    if (!payload) continue;
+    current = mergePlanPayload(current, payload);
+    changed = true;
+  }
+  if (changed) savePlanPayload(sessionId, current, current === null);
+  return current;
+}
+
+function pendingItemsFromTrace(trace: any[], turnId: string): any[] {
+  const out: any[] = [];
+  for (const step of trace || []) {
+    const result = step?.result && typeof step.result === "object" ? step.result : {};
+    if (!result.pending_confirmation) continue;
+    const kind = String(result.kind || "").trim() || "terminal";
+    if (kind === "question") {
+      out.push({
+        flow: result.flow || "agent",
+        kind: "question",
+        call_id: String(result.call_id || step.call_id || ""),
+        confirm_id: String(result.confirm_id || result.call_id || step.call_id || ""),
+        question: String(result.question || "需要你补充一个条件。"),
+        options: Array.isArray(result.options) ? result.options : [],
+        allow_custom: result.allow_custom !== false,
+        placeholder: String(result.placeholder || "补充你的答案或限制条件..."),
+        turn_id: turnId
+      });
+    } else {
+      out.push({
+        kind: kind || "terminal",
+        call_id: String(result.call_id || step.call_id || ""),
+        confirm_id: String(result.confirm_id || result.call_id || step.call_id || ""),
+        cmd: String(result.cmd || result.command || step.arguments?.cmd || ""),
+        turn_id: turnId
+      });
+    }
+  }
+  return out;
+}
+
+function setPending(sessionId: string, items: any[]): void {
+  const clean = (items || []).filter((item) => item && typeof item === "object");
+  if (clean.length) pendingBySession.set(sessionId, clean);
+  else pendingBySession.delete(sessionId);
+}
+
+async function generateDeepAlignmentText(message: string, fileNames: string[], revision = ""): Promise<string> {
+  if (String(process.env.TINDA_DEEP_ALIGNMENT_OFFLINE || "").trim() === "1") return "";
+  const prompt = [
+    "你是 TindaAgent 的 Deep 对齐模块。请用中文写一段简洁的用户确认摘要。",
+    "只做意图和约束对齐，不要执行任务，不要制定冗长计划。",
+    "",
+    `用户请求：${message || "(无文本，仅附件)"}`,
+    fileNames.length ? `附件：${fileNames.filter(Boolean).join("、")}` : "附件：无",
+    revision ? `用户修正：${revision}` : "",
+    "",
+    "输出包括：我理解的目标、关键约束、确认后我会做什么。"
+  ].filter(Boolean).join("\n");
+  try {
+    const probe = await llm.probe(llm.model, [{ role: "user", content: prompt }], 45000);
+    return probe.content.trim();
+  } catch {
+    return "";
+  }
+}
+
 function buildUserText(body: any): string {
   let raw = textOf(body.message).trim();
   const names = Array.isArray(body.file_names) ? body.file_names : [];
@@ -557,16 +708,42 @@ app.get("/model-data/latest", (_req, res) => {
   res.json({ ...data, exists: !!data.request, payload: data.request, log_file: path.join(logRoot(), "llm_request.jsonl") });
 });
 app.post("/model-diagnostics/run", async (req, res) => {
-  requireLogin(req);
-  const tests = Array.isArray(req.body?.tests) ? req.body.tests.map(String) : ["connectivity"];
-  res.json({
-    ok: true,
-    provider: req.body?.provider || "deepseek",
-    model: req.body?.model || llm.model,
-    started_at: nowIso(),
-    finished_at: nowIso(),
-    results: tests.map((test: string) => ({ test, status: test === "connectivity" ? "pass" : "unsupported", latency_ms: 0, summary: "TypeScript runtime diagnostic", detail: "" }))
-  });
+  try {
+    requireLogin(req);
+    const allowed = new Set(["connectivity", "reasoning", "image", "video"]);
+    const tests = (Array.isArray(req.body?.tests) ? req.body.tests.map((x: any) => String(x).trim().toLowerCase()).filter(Boolean) : ["connectivity"]).filter((test: string, idx: number, arr: string[]) => arr.indexOf(test) === idx);
+    if (!tests.length) return jsonError(res, 400, "tests 不能为空");
+    const invalid = tests.find((test: string) => !allowed.has(test));
+    if (invalid) return jsonError(res, 400, `不支持的 tests 项: ${invalid}`);
+    const model = String(req.body?.model || llm.model).trim();
+    if (!model) return jsonError(res, 400, "model 无效");
+    const startedAt = nowIso();
+    const results = [];
+    for (const test of tests) {
+      if (test === "connectivity") {
+        try {
+          const probe = await llm.probe(model, [{ role: "user", content: "请仅回复：PONG" }]);
+          const ok = /pong/i.test(probe.content);
+          results.push({ test, status: ok ? "pass" : "warn", latency_ms: probe.latency_ms, summary: ok ? "连接正常" : "模型有响应但未按预期回复 PONG", detail: probe.content });
+        } catch (error: any) {
+          results.push({ test, status: "fail", latency_ms: 0, summary: "连接失败", detail: String(error?.message || error) });
+        }
+      } else if (test === "reasoning") {
+        try {
+          const probe = await llm.probe(model, [{ role: "user", content: "小李比小王大2岁，小王比小张大3岁。请问小李比小张大几岁？只回答数字和单位。" }]);
+          const ok = probe.content.includes("5");
+          results.push({ test, status: ok ? "pass" : "warn", latency_ms: probe.latency_ms, summary: ok ? "基础推理正常" : "模型有响应但答案需人工确认", detail: probe.content, reasoning_content: probe.reasoning_content });
+        } catch (error: any) {
+          results.push({ test, status: "fail", latency_ms: 0, summary: "推理测试失败", detail: String(error?.message || error) });
+        }
+      } else {
+        results.push({ test, status: "unsupported", latency_ms: 0, summary: "当前 TypeScript OpenAI-compatible 文本通道暂未启用该多模态诊断", detail: "" });
+      }
+    }
+    res.json({ ok: true, provider: req.body?.provider || llm.provider, model, started_at: startedAt, finished_at: nowIso(), results });
+  } catch (error) {
+    jsonError(res, 500, String((error as any)?.message || error));
+  }
 });
 
 app.post("/sessions", (req, res) => {
@@ -580,17 +757,16 @@ app.get("/sessions", (req, res) => {
 });
 app.patch("/sessions/:session_id/config", (req, res) => {
   const sid = sessionAccess(req, req.params.session_id);
-  const cfg = { ...(sessionConfig.get(sid) || {}), ...(req.body || {}) };
-  sessionConfig.set(sid, cfg);
+  const cfg = saveSessionConfig(sid, req.body || {});
   res.json({ ok: true, session_id: sid, config: cfg });
 });
 app.get("/sessions/:session_id/config", (req, res) => {
   const sid = sessionAccess(req, req.params.session_id);
-  res.json({ ok: true, session_id: sid, config: sessionConfig.get(sid) || {} });
+  res.json({ ok: true, session_id: sid, config: loadSessionConfig(sid) });
 });
 app.get("/sessions/:session_id/messages", (req, res) => {
   const sid = sessionAccess(req, req.params.session_id, false);
-  res.json({ ...store.frontendMessages(sid, Number(req.query.limit || 0), Number(req.query.before_seq || 0)), plan: { current: null, deleted: false } });
+  res.json({ ...store.frontendMessages(sid, Number(req.query.limit || 0), Number(req.query.before_seq || 0)), plan: loadPlanPayload(sid) });
 });
 app.post("/sessions/:session_id/title", (req, res) => {
   const sid = sessionAccess(req, req.params.session_id);
@@ -599,6 +775,9 @@ app.post("/sessions/:session_id/title", (req, res) => {
 app.delete("/sessions/:session_id", (req, res) => {
   const sid = sessionAccess(req, req.params.session_id, false);
   agents.delete(sid);
+  pendingBySession.delete(sid);
+  deleteDeepState(sid);
+  deleteSessionConfig(sid);
   const ok = store.deleteSession(sid);
   res.status(ok ? 200 : 404).json(ok ? { ok: true, session_id: sid } : { ok: false, error: "session not found" });
 });
@@ -611,13 +790,15 @@ app.delete("/sessions", (req, res) => {
 app.delete("/sessions/:session_id/plan", (req, res) => {
   const sid = sessionAccess(req, req.params.session_id, false);
   const row = store.markPlanDeleted(sid);
+  savePlanPayload(sid, null, true);
   res.json({ ok: true, session_id: sid, plan: { deleted: true, deleted_at: row.plan_deleted_at } });
 });
 app.get("/sessions/:session_id/context-usage", (req, res) => {
   const sid = sessionAccess(req, req.params.session_id, false);
   const rows = store.getContextMessages(sid);
   const meta = store.getSession(sid);
-  const tokenLimit = Number((sessionConfig.get(sid) || {}).token_limit || loadWebSettings().token_limit || 16000);
+  const cfg = loadSessionConfig(sid);
+  const tokenLimit = Number(cfg.token_limit || cfg.max_context_tokens || loadWebSettings().token_limit || 16000);
   res.json({ ok: true, session_id: sid, title: meta?.title || "新对话", usage_length: estimateUsage(rows), max_context_tokens: tokenLimit });
 });
 app.post("/sessions/:session_id/compress", (req, res) => {
@@ -632,13 +813,71 @@ app.post("/sessions/:session_id/compress", (req, res) => {
 
 app.get("/sessions/:session_id/deep", (req, res) => {
   const sid = sessionAccess(req, req.params.session_id, false);
+  res.json(deepPublicPayload(sid));
+});
+app.post("/sessions/:session_id/deep/align", async (req, res) => {
+  const sid = sessionAccess(req, req.params.session_id);
+  const reqSid = safeId(req.body?.session_id || sid);
+  if (reqSid && reqSid !== sid) return jsonError(res, 400, "session_id mismatch");
+  const message = textOf(req.body?.message).trim();
+  const fileNames = Array.isArray(req.body?.file_names) ? req.body.file_names.map(textOf) : [];
+  if (!message && !fileNames.length) return jsonError(res, 400, "message required");
+  const revision = textOf(req.body?.revision);
+  const alignmentText = await generateDeepAlignmentText(message, fileNames, revision);
+  startDeepState(sid, {
+    message,
+    file_names: fileNames,
+    file_contents: Array.isArray(req.body?.file_contents) ? req.body.file_contents.map(textOf) : [],
+    revision,
+    alignment_text: alignmentText
+  });
+  if (String(req.body?.require_question || "").trim() === "1") {
+    const pending = createDeepQuestion(sid);
+    setPending(sid, [pending]);
+    return res.json({ ...deepPublicPayload(sid), pending_confirmation: true, pending_confirm_count: 1, pending: [pending] });
+  }
+  setPending(sid, []);
+  res.json(deepPublicPayload(sid));
+});
+app.post("/sessions/:session_id/deep/revise", async (req, res) => {
+  const sid = sessionAccess(req, req.params.session_id, false);
+  const state = loadDeepState(sid);
+  if (!state) return jsonError(res, 404, "no active deep alignment");
+  const revision = textOf(req.body?.revision);
+  const alignmentText = await generateDeepAlignmentText(state.original_message, state.file_names, revision);
+  startDeepState(sid, {
+    message: state.original_message,
+    file_names: state.file_names,
+    file_contents: state.file_contents,
+    revision,
+    alignment_text: alignmentText
+  });
+  res.json(deepPublicPayload(sid));
+});
+app.post("/sessions/:session_id/deep/back", (req, res) => {
+  const sid = sessionAccess(req, req.params.session_id, false);
+  const state = loadDeepState(sid);
+  if (!state) return jsonError(res, 404, "no active deep alignment");
+  state.active_index = Math.max(0, state.active_index - 1);
+  state.state = "waiting_confirm";
+  state.pending_deep_ask = null;
+  saveDeepState(sid, state);
+  res.json(deepPublicPayload(sid));
+});
+app.post("/sessions/:session_id/deep/confirm", (req, res) => {
+  const sid = sessionAccess(req, req.params.session_id, false);
+  if (!loadDeepState(sid)) return jsonError(res, 404, "no active deep alignment");
+  const payload = deepPublicPayload(sid);
+  deleteDeepState(sid);
+  setPending(sid, []);
+  res.json({ ...payload, state: "confirmed", active: false });
+});
+app.post("/sessions/:session_id/deep/cancel", (req, res) => {
+  const sid = sessionAccess(req, req.params.session_id, false);
+  deleteDeepState(sid);
+  setPending(sid, []);
   res.json({ ok: true, session_id: sid, active: false, state: "idle" });
 });
-app.post("/sessions/:session_id/deep/align", (req, res) => res.json({ ok: true, session_id: req.params.session_id, active: false, state: "confirmed", alignment_text: textOf(req.body?.message) }));
-app.post("/sessions/:session_id/deep/revise", (req, res) => res.json({ ok: true, session_id: req.params.session_id, active: false, state: "confirmed", alignment_text: textOf(req.body?.revision) }));
-app.post("/sessions/:session_id/deep/back", (req, res) => res.json({ ok: true, session_id: req.params.session_id, active: false, state: "idle" }));
-app.post("/sessions/:session_id/deep/confirm", (req, res) => res.json({ ok: true, session_id: req.params.session_id, active: false, state: "confirmed" }));
-app.post("/sessions/:session_id/deep/cancel", (req, res) => res.json({ ok: true, session_id: req.params.session_id, active: false, state: "idle" }));
 
 app.post("/chat", async (req, res, next) => {
   try {
@@ -659,9 +898,12 @@ app.post("/chat", async (req, res, next) => {
     const agent = getAgent(sid, user);
     const planMode = /^\/plan(?:\s|$)/i.test(message);
     const result = await agent.chat(stripPlanPrefix(message), chatTransientContext(planMode, Boolean(req.body?.web_search_enabled)));
+    const pending = pendingItemsFromTrace(result.tool_trace, turnId);
+    setPending(sid, pending);
+    updatePlanFromTrace(sid, result.tool_trace);
     const substeps = [...toolTraceToSubsteps(result.tool_trace), { kind: "text", content: result.reply || "（无回复）" }];
     store.appendMessages(sid, [buildUserMessage(textOf(req.body?.message), { turn_id: turnId }), buildAssistantMessage(substeps, { turn_id: turnId })]);
-    res.json({ ...result, turn_id: turnId, pending_confirmation: false, pending_confirm_count: 0, pending: [] });
+    res.json({ ...result, turn_id: turnId, pending_confirmation: pending.length > 0, pending_confirm_count: pending.length, pending, plan: loadPlanPayload(sid) });
   } catch (error) {
     next(error);
   }
@@ -710,6 +952,9 @@ app.get("/chat/stream", async (req, res, next) => {
       res.write(sse(event.type, event));
     }
     const reply = textOf(final?.reply || "");
+    const pending = pendingItemsFromTrace(final?.tool_trace || [], turnId);
+    setPending(sid, pending);
+    updatePlanFromTrace(sid, final?.tool_trace || []);
     const substeps = [...toolTraceToSubsteps(final?.tool_trace || []), { kind: "text", content: reply || "（无回复）" }];
     store.replaceAssistantByTurn(sid, turnId, substeps);
     res.end();
@@ -727,14 +972,66 @@ app.get("/terminal/pending", (req, res) => {
   const pending = pendingBySession.get(sid) || [];
   res.json({ ok: true, session_id: sid, pending, pending_confirm_count: pending.length });
 });
-app.post("/terminal/confirm", (req, res) => {
+app.post("/terminal/confirm", async (req, res) => {
   const sid = sessionAccess(req, req.body?.session_id, false);
-  pendingBySession.set(sid, []);
-  res.json({ ok: true, session_id: sid, reply: "", tool_trace: [], tool_steps: 0, pending_confirmation: false, pending_confirm_count: 0, pending: [] });
+  const pending = pendingBySession.get(sid) || [];
+  if (!pending.length) return res.status(409).json({ ok: false, error: "no pending confirmation for this session", error_code: "no_pending_confirmation", pending_confirm_count: 0, pending: [] });
+  const callId = textOf(req.body?.call_id || req.body?.confirm_id);
+  const index = callId ? pending.findIndex((item) => [item.call_id, item.confirm_id].map(textOf).includes(callId)) : 0;
+  if (index < 0) return jsonError(res, 400, `call_id not pending: ${callId}`);
+  const target = pending[index];
+  const remaining = pending.filter((_, idx) => idx !== index);
+  if (String(target.flow || "") === "deep_alignment" && String(target.kind || "") === "question") {
+    if (!req.body?.approval) {
+      deleteDeepState(sid);
+      setPending(sid, remaining);
+      return res.json({ ok: true, flow: "deep_alignment", state: "cancelled", active: false, session_id: sid, reply: "", tool_trace: [], tool_steps: 0, pending_confirmation: remaining.length > 0, pending_confirm_count: remaining.length, pending: remaining });
+    }
+    answerDeepQuestion(sid, textOf(req.body?.answer), textOf(req.body?.choice));
+    setPending(sid, remaining);
+    return res.json({ ...deepPublicPayload(sid), flow: "deep_alignment", reply: "", tool_trace: [], tool_steps: 0, pending_confirmation: remaining.length > 0, pending_confirm_count: remaining.length, pending: remaining });
+  }
+  setPending(sid, remaining);
+  const agent = agents.get(sid);
+  if (agent && String(target.call_id || target.confirm_id || "").trim()) {
+    const approval = Boolean(req.body?.approval);
+    const kind = String(target.kind || "").trim();
+    const resultPayload =
+      kind === "question"
+        ? {
+            ok: approval,
+            kind: "question_answer",
+            approval,
+            question: String(target.question || ""),
+            answer: textOf(req.body?.answer || req.body?.choice || (approval ? "按当前理解继续" : "用户取消")),
+            message: approval ? "The user answered the clarification question. Continue using this answer." : "The user cancelled the clarification question."
+          }
+        : {
+            ok: approval,
+            kind: "terminal_confirmation",
+            approval,
+            cmd: String(target.cmd || ""),
+            message: approval ? "The user approved the command. Continue with this confirmation." : "The user denied the command. Do not execute it."
+          };
+    try {
+      const result = await agent.resumeWithToolResult(String(target.call_id || target.confirm_id), resultPayload);
+      const nextPending = pendingItemsFromTrace(result.tool_trace || [], String(target.turn_id || ""));
+      const combinedPending = [...remaining, ...nextPending];
+      setPending(sid, combinedPending);
+      updatePlanFromTrace(sid, result.tool_trace || []);
+      const substeps = [...toolTraceToSubsteps(result.tool_trace || []), { kind: "text", content: result.reply || "（无回复）" }];
+      if (substeps.length) store.appendMessages(sid, [buildAssistantMessage(substeps, { turn_id: String(target.turn_id || "") || undefined })]);
+      return res.json({ ok: true, session_id: sid, reply: result.reply, tool_trace: result.tool_trace, tool_steps: result.tool_steps, pending_confirmation: combinedPending.length > 0, pending_confirm_count: combinedPending.length, pending: combinedPending });
+    } catch (error: any) {
+      return jsonError(res, 500, String(error?.message || error));
+    }
+  }
+  res.json({ ok: true, session_id: sid, reply: "", tool_trace: [], tool_steps: 0, pending_confirmation: remaining.length > 0, pending_confirm_count: remaining.length, pending: remaining });
 });
 app.post("/reset", (req, res) => {
   const sid = sessionAccess(req, req.body?.session_id, false);
   agents.delete(sid);
+  pendingBySession.delete(sid);
   res.json({ ok: true, ...store.markResetAnchor(sid) });
 });
 app.post("/session/events", (req, res) => {
