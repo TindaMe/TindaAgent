@@ -6,7 +6,7 @@ await build({
   platform: "node",
   target: "node20",
   format: "esm",
-  external: ["openai"],
+  external: ["openai", "node:sqlite"],
   outfile: "dist/web/server.bundle.js",
   banner: {
     js: [

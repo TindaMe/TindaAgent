@@ -52,7 +52,7 @@ if not exist "%ENTRY%" (
 
 set "HOST=0.0.0.0"
 set "PORT=%PORT%"
-node "%ENTRY%" --host=%HOST% --port=%PORT% --port-retries=%PORT_RETRIES%
+node --no-warnings=ExperimentalWarning "%ENTRY%" --host=%HOST% --port=%PORT% --port-retries=%PORT_RETRIES%
 
 set "EXIT_CODE=%ERRORLEVEL%"
 echo.

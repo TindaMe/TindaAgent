@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
-import { legacySessionsRoot, sessionsRoot } from "../core/paths.js";
-import { nowIso, readJson, safeId, writeJson } from "../core/json.js";
+import { legacySessionsRoot, sessionsRoot, sqliteDbFile } from "../core/paths.js";
+import { nowIso, readJson, safeId } from "../core/json.js";
 import {
   buildAssistantMessage,
   buildSystemMessage,
@@ -17,6 +17,7 @@ import {
   type StoreDict,
   type StoreEntry
 } from "./sessionAdapter.js";
+import { SessionSqlStore } from "./sessionSqlStore.js";
 
 export interface SessionMeta {
   id: string;
@@ -39,6 +40,8 @@ export class SessionStore {
   messagesDir: string;
   plansDir: string;
   exportsDir: string;
+  private sql: SessionSqlStore;
+  private legacyIndexImported = false;
 
   constructor(rootDir = sessionsRoot(), legacyRootDir = legacySessionsRoot()) {
     this.rootDir = path.resolve(rootDir);
@@ -48,7 +51,8 @@ export class SessionStore {
     this.plansDir = path.join(this.rootDir, "plans");
     this.exportsDir = path.join(this.rootDir, "exports");
     [this.rootDir, this.messagesDir, this.plansDir, this.exportsDir].forEach((dir) => fs.mkdirSync(dir, { recursive: true }));
-    if (!fs.existsSync(this.sessionsFile)) writeJson(this.sessionsFile, { sessions: [] });
+    const dbFile = path.resolve(this.rootDir) === path.resolve(sessionsRoot()) ? sqliteDbFile() : path.join(this.rootDir, "sessions.sqlite3");
+    this.sql = new SessionSqlStore(dbFile);
   }
 
   private messagesPath(sessionId: string): string {
@@ -82,45 +86,22 @@ export class SessionStore {
     return readJson<{ sessions: SessionMeta[] }>(legacy, { sessions: [] });
   }
 
-  private writeSessions(payload: { sessions: SessionMeta[] }): void {
-    writeJson(this.sessionsFile, payload);
+  private importLegacySessionIndex(): void {
+    if (this.legacyIndexImported) return;
+    this.legacyIndexImported = true;
+    this.sql.importJsonSessions(this.readSessions());
   }
 
   private touchMeta(sessionId: string, patch: Partial<SessionMeta> = {}): SessionMeta {
-    const sid = safeId(sessionId);
-    if (!sid) throw new Error("session_id invalid");
-    const payload = this.readSessions();
-    const now = nowIso();
-    let row = payload.sessions.find((s) => s.id === sid);
-    if (!row) {
-      row = {
-        id: sid,
-        title: "新对话",
-        created_at: now,
-        updated_at: now,
-        owner_uid: "",
-        message_count: 0,
-        reset_anchor_msg_id: "",
-        summary_anchor_msg_id: "",
-        latest_summary_message_id: "",
-        last_compress_anchor_msg_id: "",
-        plan_deleted_at: ""
-      };
-      payload.sessions.push(row);
-    }
-    Object.assign(row, patch);
-    row.updated_at = now;
-    if (patch.title !== undefined) row.title = String(patch.title || "新对话").trim().slice(0, 15) || "新对话";
-    payload.sessions.sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)));
-    this.writeSessions(payload);
-    return { ...row };
+    return this.sql.touchMeta(sessionId, patch);
   }
 
   createSession(title = "新对话", sessionId = "", ownerUid = ""): SessionMeta {
+    this.importLegacySessionIndex();
     let sid = safeId(sessionId || `s_${crypto.randomBytes(6).toString("hex")}`);
-    const existing = new Set(this.readSessions().sessions.map((s) => s.id));
+    const existing = new Set(this.sql.listSessions(10000, 0).sessions.map((s) => s.id));
     if (existing.has(sid)) sid = `${sid}_${crypto.randomBytes(3).toString("hex")}`;
-    return this.touchMeta(sid, { title, owner_uid: ownerUid, message_count: 0 });
+    return this.sql.createSession(title, sid, ownerUid);
   }
 
   ensureSession(sessionId: string, ownerUid = ""): SessionMeta {
@@ -136,23 +117,15 @@ export class SessionStore {
   }
 
   getSession(sessionId: string): SessionMeta | null {
+    this.importLegacySessionIndex();
     const sid = safeId(sessionId);
     if (!sid) return null;
-    const row = this.readSessions().sessions.find((s) => s.id === sid);
-    return row ? { ...row } : null;
+    return this.sql.getSession(sid);
   }
 
   listSessions(limit = 200, offset = 0, ownerUid = "") {
-    const owner = String(ownerUid || "");
-    let rows = this.readSessions().sessions
-      .filter((s) => !owner || !String(s.owner_uid || "").trim() || String(s.owner_uid) === owner)
-      .filter((s) => Number(s.message_count || 0) > 0)
-      .sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)));
-    const total = rows.length;
-    limit = Math.max(1, Math.min(Number(limit) || 200, 500));
-    offset = Math.max(0, Number(offset) || 0);
-    rows = rows.slice(offset, offset + limit);
-    return { sessions: rows, total, limit, offset };
+    this.importLegacySessionIndex();
+    return this.sql.listSessions(limit, offset, ownerUid);
   }
 
   loadMessagesRaw(sessionId: string): StoreDict {
@@ -171,7 +144,11 @@ export class SessionStore {
   loadMessages(sessionId: string): StoreDict {
     const sid = safeId(sessionId);
     if (!sid) return {};
-    const raw = this.loadMessagesRaw(sid);
+    let raw = this.sql.loadMessages(sid);
+    if (!Object.keys(raw).length) {
+      raw = this.loadMessagesRaw(sid);
+      if (Object.keys(raw).length) this.sql.importMessages(sid, raw);
+    }
     const [normalized, changed] = normalizeStoreDict(raw);
     if (changed) this.writeMessages(sid, normalized);
     return normalized;
@@ -182,7 +159,7 @@ export class SessionStore {
   }
 
   writeMessages(sessionId: string, data: StoreDict): void {
-    writeJson(this.messagesPath(sessionId), data);
+    this.sql.writeMessages(sessionId, data);
   }
 
   private migrateJsonlToDict(file: string): StoreDict {
@@ -327,7 +304,7 @@ export class SessionStore {
       newest_seq: keys[keys.length - 1] || 0,
       has_more: Boolean(keys[0] && keys[0] > 1),
       limit: requested,
-      source: "json_store"
+      source: "sqlite_store"
     };
   }
 
@@ -338,18 +315,15 @@ export class SessionStore {
   deleteSession(sessionId: string): boolean {
     const sid = safeId(sessionId);
     if (!sid) return false;
-    const payload = this.readSessions();
-    const next = payload.sessions.filter((s) => s.id !== sid);
-    if (next.length === payload.sessions.length) return false;
-    this.writeSessions({ sessions: next });
+    const deleted = this.sql.deleteSession(sid);
     [this.messagesPath(sid), this.terminalPath(sid), this.planPath(sid)].forEach((file) => {
       try {
         fs.rmSync(file, { force: true });
       } catch {
-        // ignore
+        // ignore legacy cleanup failure
       }
     });
-    return true;
+    return deleted;
   }
 
   clearAll(ownerUid = ""): number {
@@ -377,13 +351,18 @@ export class SessionStore {
   }
 
   loadPlan(sessionId: string): Record<string, any> {
-    return readJson<Record<string, any>>(this.planPath(sessionId), {});
+    const sid = safeId(sessionId);
+    if (!sid) return {};
+    const current = this.sql.loadPlan(sid);
+    if (Object.keys(current).length) return current;
+    const legacy = readJson<Record<string, any>>(this.planPath(sid), {});
+    if (Object.keys(legacy).length) this.sql.savePlan(sid, legacy);
+    return legacy;
   }
 
   savePlan(sessionId: string, current: Record<string, any> | null, deleted = false) {
     const payload = { version: 1, session_id: safeId(sessionId), updated_at: nowIso(), deleted, current: deleted ? null : current };
-    writeJson(this.planPath(sessionId), payload);
-    return payload;
+    return this.sql.savePlan(sessionId, payload);
   }
 
   markPlanDeleted(sessionId: string) {
@@ -393,16 +372,18 @@ export class SessionStore {
   }
 
   appendTerminal(sessionId: string, entries: any[]) {
-    const sid = safeId(sessionId);
-    const file = this.terminalPath(sid);
-    const existing = readJson<any[]>(file, []);
-    const next = [...existing, ...(entries || [])];
-    writeJson(file, next);
-    return { session_id: sid, added: entries.length, total: next.length };
+    return this.sql.appendTerminal(sessionId, entries || []);
   }
 
   loadTerminal(sessionId: string): any[] {
-    return readJson<any[]>(this.terminalPath(sessionId), []);
+    const sid = safeId(sessionId);
+    if (!sid) return [];
+    let rows = this.sql.loadTerminal(sid);
+    if (!rows.length) {
+      this.sql.importTerminal(sid, this.terminalPath(sid));
+      rows = this.sql.loadTerminal(sid);
+    }
+    return rows;
   }
 
   frontendTerminal(sessionId: string, limit = 300) {

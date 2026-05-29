@@ -1,6 +1,6 @@
 {
   "name": "tinda-agent",
-  "version": "1.11.3",
+  "version": "1.12.0",
   "description": "TindaAgent - TypeScript web and CLI agent platform",
   "type": "module",
   "private": true,
@@ -8,7 +8,7 @@
     "build": "tsc -p tsconfig.json && npm run build:web",
     "build:ts": "tsc -p tsconfig.json",
     "build:web": "node scripts/build-web.mjs",
-    "start": "node dist/web/server.bundle.js",
+    "start": "node --no-warnings=ExperimentalWarning dist/web/server.bundle.js",
     "start:build": "npm run build && npm start",
     "dev": "tsx src/web/server.ts",
     "doctor": "tsx src/cli/doctor.ts",
@@ -35,6 +35,6 @@
     "typescript": "^5.9.3"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   }
 }

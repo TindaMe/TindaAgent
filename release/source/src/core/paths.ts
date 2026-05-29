@@ -31,6 +31,7 @@ export function runtimeRoot(): string {
 export const dataRoot = () => path.join(runtimeRoot(), "Data");
 export const logRoot = () => path.join(runtimeRoot(), "log");
 export const sessionsRoot = () => path.join(dataRoot(), "Sessions");
+export const sqliteDbFile = () => path.join(dataRoot(), "tinda-agent.sqlite3");
 export const systemRoot = () => path.join(dataRoot(), "System");
 export const userRoot = () => path.join(runtimeRoot(), "user");
 export const usersFile = () => path.join(userRoot(), "users.json");
@@ -49,6 +50,7 @@ export function ensureRuntimeDirs(): void {
     path.join(sessionsRoot(), "messages"),
     path.join(sessionsRoot(), "plans"),
     path.join(sessionsRoot(), "exports"),
+    path.dirname(sqliteDbFile()),
     systemRoot(),
     userRoot(),
     logRoot(),

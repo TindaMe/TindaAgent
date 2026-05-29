@@ -1,10 +1,23 @@
 import { spawn } from "node:child_process";
+import net from "node:net";
 
-const port = 18641 + Math.floor(Math.random() * 200);
-const base = `http://127.0.0.1:${port}`;
+let port = 0;
+let base = "";
 
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function freePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      const selected = typeof address === "object" && address ? address.port : 0;
+      server.close(() => resolve(selected));
+    });
+  });
 }
 
 async function request(path: string, options: RequestInit = {}) {
@@ -24,7 +37,9 @@ async function request(path: string, options: RequestInit = {}) {
 }
 
 async function main() {
-  const proc = spawn(process.execPath, ["dist/web/server.bundle.js", "--host=127.0.0.1", `--port=${port}`, "--port-retries=0"], {
+  port = await freePort();
+  base = `http://127.0.0.1:${port}`;
+  const proc = spawn(process.execPath, ["--no-warnings=ExperimentalWarning", "dist/web/server.bundle.js", "--host=127.0.0.1", `--port=${port}`, "--port-retries=0"], {
     cwd: process.cwd(),
     env: { ...process.env, PORT: String(port), HOST: "127.0.0.1", PORT_RETRIES: "0", TINDA_DEEP_ALIGNMENT_OFFLINE: "1" },
     stdio: ["ignore", "pipe", "pipe"]

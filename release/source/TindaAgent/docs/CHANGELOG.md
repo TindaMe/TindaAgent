@@ -6,6 +6,18 @@
 
 ## Unreleased
 
+## v1.12.0 - 2026-05-29
+
+### BREAKING
+
+- **运行时要求 Node 22+** — 存储层改用 Node 内置 SQLite，需要 `node:sqlite` 的 `DatabaseSync` 支持；启动脚本默认屏蔽 SQLite 实验特性 warning。
+
+### Changed
+
+- **会话主存储切换到 SQLite** — sessions、messages、terminal events、plan 和 session config 改为写入 `Data/tinda-agent.sqlite3`，HTTP/API 传输仍保持 JSON。
+- **旧 JSON/JSONL 懒迁移** — 旧 `sessions.json`、每会话 `.json`、legacy `.jsonl`、terminal/config/plan JSON 文件保留为迁移源，首次读取时自动导入 SQLite。
+- **LLM 请求日志瘦身** — 最新模型请求记录改写入 SQLite，默认只保存摘要和最近有限条；完整 payload 需显式设置 `TINDA_LLM_REQUEST_FULL=1`。
+
 ## v1.11.3 - 2026-05-29
 
 ### Changed

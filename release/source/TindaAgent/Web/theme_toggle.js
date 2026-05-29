@@ -1,4 +1,4 @@
-/* TindaAgent theme toggle — v1.11.3
+/* TindaAgent theme toggle — v1.12.0
  * 浅色 ⟷ 深色模式切换。光线状态语义:light → 太阳,dark → 月亮。
  *
  * 持久化:localStorage["tinda_theme"]

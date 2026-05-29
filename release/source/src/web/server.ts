@@ -6,7 +6,7 @@ import crypto from "node:crypto";
 import { Agent, LlmClient, latestLlmRequest, type ChatMessage } from "../ai/agent.js";
 import { auditEvent } from "../core/audit.js";
 import { loadRuntimeEnv } from "../core/env.js";
-import { appVersion, dataRoot, ensureRuntimeDirs, legacyLogRoot, logRoot, projectRoot, webRoot } from "../core/paths.js";
+import { appVersion, dataRoot, ensureRuntimeDirs, legacyLogRoot, logRoot, projectRoot, sqliteDbFile, webRoot } from "../core/paths.js";
 import { nowIso, readJson, safeId, textOf, writeJson } from "../core/json.js";
 import {
   PUBLIC_EXECUTE,
@@ -699,13 +699,13 @@ app.post("/model-data/providers", (_req, res) => res.json(modelProvidersPayload(
 app.post("/model-data/models", (req, res) => res.json({ ok: true, provider: req.body?.provider || "deepseek", model_id: req.body?.model_id || "" }));
 app.delete("/model-data/models", (req, res) => res.json({ ok: true, provider: req.query.provider || "deepseek", model_id: req.query.model_id || "" }));
 app.get("/model-data/balance", async (req, res) => res.json(await llm.fetchBalance()));
-app.get("/llm-request/latest", (_req, res) => {
-  const data = latestLlmRequest();
-  res.json({ ...data, exists: !!data.request, payload: data.request, log_file: path.join(logRoot(), "llm_request.jsonl") });
+app.get("/llm-request/latest", async (_req, res) => {
+  const data = await latestLlmRequest();
+  res.json({ ...data, exists: !!data.request, payload: data.request, log_file: sqliteDbFile() });
 });
-app.get("/model-data/latest", (_req, res) => {
-  const data = latestLlmRequest();
-  res.json({ ...data, exists: !!data.request, payload: data.request, log_file: path.join(logRoot(), "llm_request.jsonl") });
+app.get("/model-data/latest", async (_req, res) => {
+  const data = await latestLlmRequest();
+  res.json({ ...data, exists: !!data.request, payload: data.request, log_file: sqliteDbFile() });
 });
 app.post("/model-diagnostics/run", async (req, res) => {
   try {

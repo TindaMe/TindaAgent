@@ -1,7 +1,5 @@
-import fs from "node:fs";
-import path from "node:path";
-import { logRoot, projectRoot } from "../core/paths.js";
-import { nowIso, writeJson } from "../core/json.js";
+import { projectRoot } from "../core/paths.js";
+import { writeJson } from "../core/json.js";
 import { llmEnvConfig, loadRuntimeEnv, maskSecret, type LlmEnvConfig } from "../core/env.js";
 import { listToolSchemas, runAgentTool, toolTraceStep } from "../tools/toolRegistry.js";
 
@@ -96,13 +94,7 @@ export class LlmClient {
   }
 
   private logRequest(payload: unknown): void {
-    try {
-      const file = process.env.TINDA_LLM_REQUEST_LOG || path.join(logRoot(), "llm_request.jsonl");
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.appendFileSync(file, `${JSON.stringify({ ts: nowIso(), request: payload })}\n`, "utf8");
-    } catch {
-      // best effort
-    }
+    void import("./llmRequestLog.js").then(({ logLlmRequest }) => logLlmRequest(payload)).catch(() => {});
   }
 
   private parseToolArguments(raw: string): Record<string, any> {
@@ -442,23 +434,7 @@ export class Agent {
 }
 
 export function latestLlmRequest() {
-  const file = process.env.TINDA_LLM_REQUEST_LOG || path.join(logRoot(), "llm_request.jsonl");
-  try {
-    if (!fs.existsSync(file)) return { ok: true, latest: null, summary: {} };
-    const lines = fs.readFileSync(file, "utf8").trim().split(/\r?\n/);
-    const latest = JSON.parse(lines[lines.length - 1] || "{}");
-    const request = latest.request || {};
-    return {
-      ok: true,
-      latest,
-      request,
-      summary: {
-        model: request.model || "",
-        message_count: Array.isArray(request.messages) ? request.messages.length : 0,
-        tool_count: Array.isArray(request.tools) ? request.tools.length : 0
-      }
-    };
-  } catch (error: any) {
-    return { ok: false, error: String(error?.message || error) };
-  }
+  return import("./llmRequestLog.js")
+    .then(({ latestLlmRequestRecord }) => latestLlmRequestRecord())
+    .catch((error: any) => ({ ok: false, error: String(error?.message || error), latest: null, request: null, summary: {}, source: "sqlite" }));
 }

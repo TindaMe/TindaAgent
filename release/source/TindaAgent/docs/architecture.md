@@ -46,6 +46,7 @@ flowchart TB
 
     subgraph Sessions[Sessions · src/web]
         store["sessionStore.ts"]
+        sqlite["Data/tinda-agent.sqlite3"]
         adapter["sessionAdapter.ts"]
         settings["settings.ts"]
     end
@@ -66,6 +67,7 @@ flowchart TB
     AI --> Tools
     Tools --> Core
     Sessions --> Core
+    store --> sqlite
     Web --> Frontend
 ```
 
@@ -73,9 +75,10 @@ flowchart TB
 
 - Runtime root: `TINDA_HOME` or `~/.tinda/agent`
 - Users: `user/users.json`
-- Sessions: `Data/Sessions`
+- Primary app database: `Data/tinda-agent.sqlite3`
+- Legacy session JSON/JSONL files: `Data/Sessions` and project `Data/Sessions`, used as migration input
 - Logs: `log`
-- Latest LLM request log: `log/llm_request.jsonl` unless `TINDA_LLM_REQUEST_LOG` is set
+- Latest LLM request metadata: SQLite table `llm_requests`; full payloads require `TINDA_LLM_REQUEST_FULL=1`
 
 ## Compatibility Surface
 

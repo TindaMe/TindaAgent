@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { llmEnvConfig, loadRuntimeEnv, maskSecret } from "../core/env.js";
-import { appVersion, ensureRuntimeDirs, logRoot, projectRoot, runtimeRoot, sessionsRoot, usersFile } from "../core/paths.js";
+import { appVersion, ensureRuntimeDirs, logRoot, projectRoot, runtimeRoot, sessionsRoot, sqliteDbFile, usersFile } from "../core/paths.js";
+import { appDb } from "../core/sqlite.js";
 import { iterUsers } from "../core/users.js";
 
 function ok(label: string, value: string): void {
@@ -20,8 +21,15 @@ ok("project_root", projectRoot());
 ok("runtime_root", runtimeRoot());
 ok("sessions_root", sessionsRoot());
 ok("log_root", logRoot());
+ok("sqlite_db", sqliteDbFile());
 ok("users_file", usersFile());
 ok("users", String(iterUsers().length));
+try {
+  appDb().prepare("SELECT 1").get();
+  ok("sqlite", "available");
+} catch (error: any) {
+  warn("sqlite", String(error?.message || error));
+}
 const llm = llmEnvConfig();
 if (!llm.apiKey) {
   warn("llm_api_key", "DEEPSEEK_API_KEY/OPENAI_API_KEY not configured");

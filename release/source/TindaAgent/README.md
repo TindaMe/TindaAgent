@@ -45,7 +45,7 @@ when you want to type-check, rebuild, and start in one command.
 | LLM client | OpenAI JS SDK (DeepSeek-compatible) |
 | CLI | Node readline |
 | Frontend | Vanilla HTML/CSS/JS, pink theme |
-| Data | JSON file storage |
+| Data | SQLite primary store with JSON migration fallback |
 | Validation | TypeScript runtime checks |
 
 ## Directory Structure
@@ -83,9 +83,10 @@ Set these in `.env` at the project root.
 ## Runtime Data
 
 - User accounts are stored in `~/.tinda/agent/user/users.json`.
-- Sessions are stored under `~/.tinda/agent/Data/Sessions`.
+- Sessions, messages, terminal events, plans, session config, and latest LLM request metadata are stored in `~/.tinda/agent/Data/tinda-agent.sqlite3`.
+- Older JSON/JSONL session files under `~/.tinda/agent/Data/Sessions` remain supported as migration input.
 - Logs are stored under `~/.tinda/agent/log`.
-- Latest LLM request snapshots are logged to `~/.tinda/agent/log/llm_request.jsonl` by default, or `TINDA_LLM_REQUEST_LOG` if overridden.
+- Full LLM request payload logging is off by default; set `TINDA_LLM_REQUEST_FULL=1` to store full payloads in SQLite.
 
 ## LLM Request Assembly
 
