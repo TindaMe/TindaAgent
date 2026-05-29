@@ -371,14 +371,40 @@ export class LlmClient {
   async fetchBalance() {
     const cfg = llmEnvConfig();
     const key = cfg.apiKeySource === "DEEPSEEK_API_KEY" ? cfg.apiKey : "";
-    if (!key) return { ok: false, error: "DEEPSEEK_API_KEY not configured" };
+    const providerLabel = this.provider === "deepseek" ? "DeepSeek" : "OpenAI-compatible";
+    if (!key) {
+      return {
+        ok: false,
+        provider: this.provider,
+        label: providerLabel,
+        name: providerLabel,
+        key_masked: "",
+        error: "DEEPSEEK_API_KEY not configured"
+      };
+    }
     try {
       const root = cfg.baseURL.replace(/\/+$/, "");
       const res = await fetch(`${root}/user/balance`, { headers: { Authorization: `Bearer ${key}` } });
       const data = await res.json().catch(() => ({}));
-      return { ok: res.ok, status: res.status, api_key: maskSecret(key), ...data };
+      return {
+        ok: res.ok,
+        status: res.status,
+        provider: this.provider,
+        label: providerLabel,
+        name: providerLabel,
+        key_masked: maskSecret(key),
+        api_key: maskSecret(key),
+        ...data
+      };
     } catch (error: any) {
-      return { ok: false, error: String(error?.message || error) };
+      return {
+        ok: false,
+        provider: this.provider,
+        label: providerLabel,
+        name: providerLabel,
+        key_masked: maskSecret(key),
+        error: String(error?.message || error)
+      };
     }
   }
 }

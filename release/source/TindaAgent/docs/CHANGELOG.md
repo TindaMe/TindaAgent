@@ -6,6 +6,17 @@
 
 ## Unreleased
 
+## v1.12.1 - 2026-05-29
+
+### Added
+
+- **HOME 真实统计链路** — `/home/stats` 接入 SQLite 请求采样、历史 `Data/System/home_usage.jsonl` 懒迁移、会话/消息/LLM 事件统计，恢复月度热力图和 24 小时使用柱状图真实数据。
+- **HOME 系统资源采样** — 首页运行状态卡片恢复系统内存、进程内存、load average、启动时间、运行时长和多磁盘容量采样。
+
+### Fixed
+
+- **HOME 余额字段兼容** — DeepSeek 余额接口补齐 provider 元数据和 `key_masked`，前端余额卡片不再依赖原始 API 字段猜测。
+
 ## v1.12.0 - 2026-05-29
 
 ### BREAKING

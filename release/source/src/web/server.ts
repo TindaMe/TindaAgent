@@ -42,6 +42,7 @@ import {
   startDeepState
 } from "./deepAlignment.js";
 import { deleteSessionConfig, loadSessionConfig, saveSessionConfig } from "./sessionConfig.js";
+import { buildHomeStats, recordHomeUsage } from "./homeStats.js";
 import {
   loadTavilySettings,
   loadTerminalSettings,
@@ -130,6 +131,13 @@ app.use((req, res, next) => {
       func: `${req.method} ${req.path}`,
       content: `${req.method} ${req.path} -> ${res.statusCode}`,
       extra: { duration_ms: Date.now() - started, uid: req.user?.uid || "" }
+    });
+    recordHomeUsage({
+      method: req.method,
+      path: req.path,
+      status: res.statusCode,
+      durationMs: Date.now() - started,
+      uid: req.user?.uid || ""
     });
   });
   next();
@@ -505,36 +513,13 @@ app.get("/home/changelog", (_req, res) => {
 });
 
 app.get("/home/stats", (req, res) => {
-  const now = new Date();
-  const month = String(req.query.month || `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`);
-  const [year, mon] = month.split("-").map(Number);
-  const daysInMonth = new Date(year || now.getFullYear(), mon || now.getMonth() + 1, 0).getDate();
-  const days = Array.from({ length: daysInMonth }, (_, i) => {
-    const day = `${year}-${String(mon).padStart(2, "0")}-${String(i + 1).padStart(2, "0")}`;
-    return { date: day, count: 0, level: 0 };
-  });
-  const usage_24h = Array.from({ length: 8 }, (_, i) => ({ label: `${String(i * 3).padStart(2, "0")}`, count: 0, percent: 0 }));
-  const memory = process.memoryUsage();
+  const stats = buildHomeStats(req.query.month);
   res.json({
-    ok: true,
-    month,
-    current_month: month,
-    months: [month],
-    days,
-    usage_24h,
+    ...stats,
     runtime: {
-      app_version: appVersion(),
-      pid: process.pid,
-      node: process.version,
-      uptime_sec: Math.round(process.uptime()),
-      system_time: nowIso()
-    },
-    memory: {
-      rss_bytes: memory.rss,
-      heap_used_bytes: memory.heapUsed,
-      heap_total_bytes: memory.heapTotal
-    },
-    storage: []
+      ...stats.runtime,
+      app_version: appVersion()
+    }
   });
 });
 
