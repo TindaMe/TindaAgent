@@ -79,5 +79,36 @@ assert(afterReset.length === 2, `reset effective count expected 2, got ${afterRe
 assert(hasContent(store.getContextMessages(sid), "reset 后消息"), "post-reset row missing from LLM context");
 assert(!hasContent(store.getContextMessages(sid), "第三轮"), "pre-reset row leaked into LLM context");
 
+const draftSid = "draft_placeholder";
+writeJson(path.join(runtime, "sessions.json"), { sessions: [] });
+writeJson(path.join(runtime, "messages", `${draftSid}.json`), {
+  "1": {
+    role: "user",
+    id: "m_user",
+    type: "user_message",
+    display_target: "chat",
+    context_policy: "include",
+    content: { "1": { user: "历史消息" } },
+    created_at: "2026-05-30T00:00:00.000Z",
+    turn_id: "turn_draft"
+  },
+  "2": {
+    role: "assistant",
+    id: "m_draft",
+    type: "assistant_message",
+    display_target: "chat",
+    context_policy: "include",
+    content: { "1": { text: "（正在生成，若页面刷新可稍后继续查看）" } },
+    created_at: "2026-05-30T00:00:01.000Z",
+    turn_id: "turn_draft"
+  }
+});
+const draftStore = new SessionStore(runtime, legacy);
+const loadedDraft = draftStore.loadMessages(draftSid);
+assert(Object.keys(loadedDraft).length === 1, "draft placeholder was not stripped from loaded messages");
+assert(!hasContent(draftStore.frontendMessages(draftSid).entries, "正在生成，若页面刷新可稍后继续查看"), "draft placeholder leaked into frontend render");
+draftStore.appendMessages(draftSid, [buildUserMessage("新的消息")]);
+assert(fs.existsSync(path.join(runtime, "messages", `${draftSid}.json`)), "session messages json partition was not written");
+
 fs.rmSync(root, { recursive: true, force: true });
 console.log("session compatibility smoke passed");

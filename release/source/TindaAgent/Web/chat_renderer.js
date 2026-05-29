@@ -5,6 +5,8 @@
 (function () {
   "use strict";
 
+  var STREAM_DRAFT_PLACEHOLDER = "（正在生成，若页面刷新可稍后继续查看）";
+
   var activeRenderToken = 0;
   var assistantTurnBubbleById = new Map();
 
@@ -486,6 +488,7 @@
       parts.push(_extractText(content));
     }
     var text = parts.filter(function(p) { return p.trim(); }).join("\n\n");
+    if (String(text || "").trim() === STREAM_DRAFT_PLACEHOLDER) return;
     if (text.trim()) renderBubble(text, "bot", { turnId: entry.turn_id || entry.turnId || "" });
   }
 

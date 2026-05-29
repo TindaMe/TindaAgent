@@ -925,12 +925,7 @@ app.get("/chat/stream", async (req, res, next) => {
       res.end();
       return;
     }
-    store.ensureTurnDraft(
-      sid,
-      buildUserMessage(message, { turn_id: turnId }),
-      buildAssistantMessage([{ kind: "text", content: "（正在生成，若页面刷新可稍后继续查看）" }], { turn_id: turnId }),
-      turnId
-    );
+    store.ensureTurnUser(sid, buildUserMessage(message, { turn_id: turnId }), turnId);
     const agent = getAgent(sid, user);
     const planMode = /^\/plan(?:\s|$)/i.test(message);
     let final: any = null;

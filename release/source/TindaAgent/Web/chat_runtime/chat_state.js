@@ -94,7 +94,7 @@
   };
   const USER_ADMIN_PERM = 511;
   const AUTH_TOKEN_KEY = "ta_auth_token";
-  const VERSION_FALLBACK = "v1.12.2";
+  const VERSION_FALLBACK = "v1.12.3";
   const CONTEXT_TOKEN_DEFAULT = 16000;
   const CONTEXT_TOKEN_MIN = 16000;
   const CONTEXT_TOKEN_MAX = 200000;

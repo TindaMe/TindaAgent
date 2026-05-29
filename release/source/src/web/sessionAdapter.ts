@@ -12,6 +12,8 @@ export interface AgentMessage {
   reasoning_content?: string;
 }
 
+export const STREAM_DRAFT_PLACEHOLDER = "（正在生成，若页面刷新可稍后继续查看）";
+
 const TOOL_CALLS_BLOCK_RE = /\s*<[^>]*(?:tool[_\-\u2581]?calls|toolcalls)[^>]*>.*?<\/[^>]*(?:tool[_\-\u2581]?calls|toolcalls)[^>]*>\s*/gis;
 const INVOKE_BLOCK_RE = /\s*<[^>]*invoke[^>]*name\s*=\s*(['"])(.*?)\1[^>]*>.*?<\/[^>]*invoke[^>]*>\s*/gis;
 const INVOKE_RE = /<[^>]*invoke[^>]*name\s*=\s*(['"])(.*?)\1[^>]*>(.*?)<\/[^>]*invoke[^>]*>/gis;
@@ -282,6 +284,38 @@ function firstText(content: unknown): string {
     if ("system" in step) return isRecord(step.system) ? textOf(step.system.text) : textOf(step.system);
   }
   return textOf(content.user ?? content.text ?? "");
+}
+
+export function isTransientAssistantDraft(entry: unknown): boolean {
+  if (!isRecord(entry)) return false;
+  if (textOf(entry.role).trim() !== "assistant") return false;
+  const type = textOf(entry.type).trim();
+  if (type === "assistant_draft") return true;
+  const content = entry.content;
+  if (!isRecord(content)) return textOf(content).trim() === STREAM_DRAFT_PLACEHOLDER;
+  const keys = sortedNumericKeys(content);
+  if (keys.length !== 1) return false;
+  const only = content[keys[0]];
+  if (!isRecord(only)) return false;
+  return "text" in only && textOf(only.text).trim() === STREAM_DRAFT_PLACEHOLDER;
+}
+
+export function stripTransientAssistantDrafts(raw: StoreDict): [StoreDict, boolean] {
+  if (!isRecord(raw)) return [{}, true];
+  const out: StoreDict = {};
+  let changed = false;
+  let next = 0;
+  for (const key of sortedNumericKeys(raw)) {
+    const entry = raw[key];
+    if (isTransientAssistantDraft(entry)) {
+      changed = true;
+      continue;
+    }
+    next += 1;
+    out[String(next)] = entry;
+    if (String(next) !== key) changed = true;
+  }
+  return [out, changed];
 }
 
 export function normalizeStoreDict(raw: StoreDict): [StoreDict, boolean] {

@@ -2,17 +2,19 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { legacySessionsRoot, sessionsRoot, sqliteDbFile } from "../core/paths.js";
-import { nowIso, readJson, safeId } from "../core/json.js";
+import { nowIso, readJson, safeId, writeJson } from "../core/json.js";
 import {
   buildAssistantMessage,
   buildSystemMessage,
   buildUserMessage,
   effectiveStoreDict,
   filterRawChatEntries,
+  isTransientAssistantDraft,
   normalizeStoreDict,
   normalizeStoreEntry,
   storeDictToAgentMessages,
   storeDictToFrontend,
+  stripTransientAssistantDrafts,
   terminalEntriesToFrontend,
   type StoreDict,
   type StoreEntry
@@ -79,11 +81,36 @@ export class SessionStore {
     return path.join(this.plansDir, `${sid}.json`);
   }
 
+  private configPath(sessionId: string): string {
+    const sid = safeId(sessionId);
+    if (!sid) throw new Error("session_id invalid");
+    return path.join(this.rootDir, "config", `${sid}.json`);
+  }
+
   private readSessions(): { sessions: SessionMeta[] } {
     const primary = readJson<{ sessions?: SessionMeta[] }>(this.sessionsFile, { sessions: [] });
     if (Array.isArray(primary.sessions)) return { sessions: primary.sessions };
     const legacy = path.join(this.legacyRootDir, "sessions.json");
     return readJson<{ sessions: SessionMeta[] }>(legacy, { sessions: [] });
+  }
+
+  private writeSessions(payload: { sessions: SessionMeta[] }): void {
+    writeJson(this.sessionsFile, { sessions: payload.sessions });
+  }
+
+  private syncMetaToJson(meta: SessionMeta): void {
+    const payload = this.readSessions();
+    const byId = new Map<string, SessionMeta>();
+    for (const row of Array.isArray(payload.sessions) ? payload.sessions : []) {
+      if (row?.id) byId.set(row.id, row);
+    }
+    for (const row of this.sql.listAllSessions(10000, 0).sessions) {
+      if (row?.id) byId.set(row.id, { ...(byId.get(row.id) || {}), ...row });
+    }
+    byId.set(meta.id, { ...(byId.get(meta.id) || {}), ...meta });
+    const rows = Array.from(byId.values());
+    rows.sort((a, b) => String(b.updated_at || "").localeCompare(String(a.updated_at || "")));
+    this.writeSessions({ sessions: rows });
   }
 
   private importLegacySessionIndex(): void {
@@ -93,7 +120,9 @@ export class SessionStore {
   }
 
   private touchMeta(sessionId: string, patch: Partial<SessionMeta> = {}): SessionMeta {
-    return this.sql.touchMeta(sessionId, patch);
+    const meta = this.sql.touchMeta(sessionId, patch);
+    this.syncMetaToJson(meta);
+    return meta;
   }
 
   createSession(title = "新对话", sessionId = "", ownerUid = ""): SessionMeta {
@@ -101,7 +130,7 @@ export class SessionStore {
     let sid = safeId(sessionId || `s_${crypto.randomBytes(6).toString("hex")}`);
     const existing = new Set(this.sql.listSessions(10000, 0).sessions.map((s) => s.id));
     if (existing.has(sid)) sid = `${sid}_${crypto.randomBytes(3).toString("hex")}`;
-    return this.sql.createSession(title, sid, ownerUid);
+    return this.touchMeta(sid, { title, owner_uid: ownerUid, message_count: 0 });
   }
 
   ensureSession(sessionId: string, ownerUid = ""): SessionMeta {
@@ -144,13 +173,16 @@ export class SessionStore {
   loadMessages(sessionId: string): StoreDict {
     const sid = safeId(sessionId);
     if (!sid) return {};
-    let raw = this.sql.loadMessages(sid);
-    if (!Object.keys(raw).length) {
-      raw = this.loadMessagesRaw(sid);
-      if (Object.keys(raw).length) this.sql.importMessages(sid, raw);
+    let raw = this.loadMessagesRaw(sid);
+    if (Object.keys(raw).length) this.sql.importMessages(sid, raw);
+    else {
+      raw = this.sql.loadMessages(sid);
+      if (Object.keys(raw).length) writeJson(this.messagesPath(sid), raw);
     }
+    const [withoutDrafts, removedDrafts] = stripTransientAssistantDrafts(raw);
+    if (removedDrafts) raw = withoutDrafts;
     const [normalized, changed] = normalizeStoreDict(raw);
-    if (changed) this.writeMessages(sid, normalized);
+    if (changed || removedDrafts) this.writeMessages(sid, normalized);
     return normalized;
   }
 
@@ -159,7 +191,12 @@ export class SessionStore {
   }
 
   writeMessages(sessionId: string, data: StoreDict): void {
-    this.sql.writeMessages(sessionId, data);
+    const sid = safeId(sessionId);
+    if (!sid) throw new Error("session_id invalid");
+    writeJson(this.messagesPath(sid), data);
+    this.sql.writeMessages(sid, data);
+    const meta = this.sql.getSession(sid);
+    if (meta) this.syncMetaToJson(meta);
   }
 
   private migrateJsonlToDict(file: string): StoreDict {
@@ -241,13 +278,51 @@ export class SessionStore {
     const cleanTurn = String(turnId || "").trim();
     if (!sid || !cleanTurn) return false;
     const data = this.loadMessages(sid);
-    const keys = Object.keys(data).filter((k) => /^\d+$/.test(k)).sort((a, b) => Number(b) - Number(a));
-    const key = keys.find((k) => data[k]?.role === "assistant" && String(data[k]?.turn_id || "") === cleanTurn);
-    if (!key) return false;
-    const replacement = buildAssistantMessage(substeps, { ...data[key], turn_id: cleanTurn });
-    data[key] = { ...data[key], content: replacement.content, turn_id: cleanTurn };
+    const descKeys = Object.keys(data).filter((k) => /^\d+$/.test(k)).sort((a, b) => Number(b) - Number(a));
+    const key = descKeys.find((k) => data[k]?.role === "assistant" && String(data[k]?.turn_id || "") === cleanTurn);
+    if (key) {
+      const replacement = buildAssistantMessage(substeps, { ...data[key], turn_id: cleanTurn, type: "assistant_message", context_policy: "include", display_target: "chat" });
+      data[key] = { ...data[key], content: replacement.content, turn_id: cleanTurn, type: "assistant_message", context_policy: "include", display_target: "chat" };
+    } else {
+      const ascKeys = descKeys.slice().sort((a, b) => Number(a) - Number(b));
+      const userKey = ascKeys.find((k) => data[k]?.role === "user" && String(data[k]?.turn_id || "") === cleanTurn);
+      const insertAt = userKey ? Number(userKey) + 1 : Math.max(0, ...ascKeys.map(Number)) + 1;
+      const nextData: StoreDict = {};
+      const keys = ascKeys.map(Number);
+      let inserted = false;
+      for (const seq of keys) {
+        if (!inserted && seq >= insertAt) {
+          nextData[String(insertAt)] = buildAssistantMessage(substeps, { turn_id: cleanTurn });
+          inserted = true;
+        }
+        const targetSeq = inserted && seq >= insertAt ? seq + 1 : seq;
+        nextData[String(targetSeq)] = data[String(seq)];
+      }
+      if (!inserted) nextData[String(insertAt)] = buildAssistantMessage(substeps, { turn_id: cleanTurn });
+      Object.keys(data).forEach((k) => delete data[k]);
+      Object.assign(data, nextData);
+    }
     this.writeMessages(sid, data);
+    this.touchMeta(sid, { message_count: Object.keys(data).filter((k) => /^\d+$/.test(k)).length });
     return true;
+  }
+
+  ensureTurnUser(sessionId: string, userMessage: StoreEntry, turnId: string) {
+    const sid = safeId(sessionId);
+    if (!sid) throw new Error("session_id invalid");
+    const cleanTurn = String(turnId || "").trim();
+    const data = this.loadMessages(sid);
+    const keys = Object.keys(data).filter((k) => /^\d+$/.test(k)).sort((a, b) => Number(a) - Number(b));
+    let userKey = keys.find((k) => data[k]?.role === "user" && data[k]?.turn_id === cleanTurn);
+    let max = Math.max(0, ...keys.map(Number));
+    const userNorm = normalizeStoreEntry({ ...userMessage, turn_id: cleanTurn });
+    if (userNorm && !userKey) {
+      userKey = String(++max);
+      data[userKey] = userNorm;
+      this.writeMessages(sid, data);
+      this.touchMeta(sid, { message_count: Object.keys(data).filter((k) => /^\d+$/.test(k)).length });
+    }
+    return { session_id: sid, user_key: userKey || "", message_count: Object.keys(data).length };
   }
 
   ensureTurnDraft(sessionId: string, userMessage: StoreEntry, assistantMessage: StoreEntry, turnId: string) {
@@ -264,7 +339,7 @@ export class SessionStore {
       userKey = String(++max);
       data[userKey] = userNorm;
     }
-    if (assistantNorm && !assistantKey) {
+    if (assistantNorm && !assistantKey && !isTransientAssistantDraft(assistantNorm)) {
       assistantKey = String(++max);
       data[assistantKey] = assistantNorm;
     }
@@ -304,7 +379,7 @@ export class SessionStore {
       newest_seq: keys[keys.length - 1] || 0,
       has_more: Boolean(keys[0] && keys[0] > 1),
       limit: requested,
-      source: "sqlite_store"
+      source: "json_partition_store"
     };
   }
 
@@ -316,13 +391,25 @@ export class SessionStore {
     const sid = safeId(sessionId);
     if (!sid) return false;
     const deleted = this.sql.deleteSession(sid);
-    [this.messagesPath(sid), this.terminalPath(sid), this.planPath(sid)].forEach((file) => {
+    [this.messagesPath(sid), this.terminalPath(sid), this.planPath(sid), this.configPath(sid)].forEach((file) => {
       try {
         fs.rmSync(file, { force: true });
       } catch {
         // ignore legacy cleanup failure
       }
     });
+    const payload = this.readSessions();
+    const byId = new Map<string, SessionMeta>();
+    for (const row of Array.isArray(payload.sessions) ? payload.sessions : []) {
+      if (row?.id) byId.set(row.id, row);
+    }
+    for (const row of this.sql.listAllSessions(10000, 0).sessions) {
+      if (row?.id) byId.set(row.id, { ...(byId.get(row.id) || {}), ...row });
+    }
+    byId.delete(sid);
+    const rows = Array.from(byId.values());
+    rows.sort((a, b) => String(b.updated_at || "").localeCompare(String(a.updated_at || "")));
+    this.writeSessions({ sessions: rows });
     return deleted;
   }
 
@@ -353,16 +440,23 @@ export class SessionStore {
   loadPlan(sessionId: string): Record<string, any> {
     const sid = safeId(sessionId);
     if (!sid) return {};
-    const current = this.sql.loadPlan(sid);
-    if (Object.keys(current).length) return current;
     const legacy = readJson<Record<string, any>>(this.planPath(sid), {});
-    if (Object.keys(legacy).length) this.sql.savePlan(sid, legacy);
-    return legacy;
+    if (Object.keys(legacy).length) {
+      this.sql.savePlan(sid, legacy);
+      return legacy;
+    }
+    const current = this.sql.loadPlan(sid);
+    if (Object.keys(current).length) writeJson(this.planPath(sid), current);
+    return current;
   }
 
   savePlan(sessionId: string, current: Record<string, any> | null, deleted = false) {
     const payload = { version: 1, session_id: safeId(sessionId), updated_at: nowIso(), deleted, current: deleted ? null : current };
-    return this.sql.savePlan(sessionId, payload);
+    writeJson(this.planPath(sessionId), payload);
+    const saved = this.sql.savePlan(sessionId, payload);
+    const meta = this.sql.getSession(sessionId);
+    if (meta) this.syncMetaToJson(meta);
+    return saved;
   }
 
   markPlanDeleted(sessionId: string) {
@@ -372,17 +466,27 @@ export class SessionStore {
   }
 
   appendTerminal(sessionId: string, entries: any[]) {
-    return this.sql.appendTerminal(sessionId, entries || []);
+    const sid = safeId(sessionId);
+    if (!sid) throw new Error("session_id invalid");
+    const existing = this.loadTerminal(sid);
+    const rows = [...existing, ...(entries || [])];
+    writeJson(this.terminalPath(sid), rows);
+    const result = this.sql.appendTerminal(sid, entries || []);
+    const meta = this.sql.getSession(sid);
+    if (meta) this.syncMetaToJson(meta);
+    return result;
   }
 
   loadTerminal(sessionId: string): any[] {
     const sid = safeId(sessionId);
     if (!sid) return [];
-    let rows = this.sql.loadTerminal(sid);
-    if (!rows.length) {
+    const fileRows = readJson<any[]>(this.terminalPath(sid), []);
+    if (fileRows.length) {
       this.sql.importTerminal(sid, this.terminalPath(sid));
-      rows = this.sql.loadTerminal(sid);
+      return fileRows;
     }
+    const rows = this.sql.loadTerminal(sid);
+    if (rows.length) writeJson(this.terminalPath(sid), rows);
     return rows;
   }
 

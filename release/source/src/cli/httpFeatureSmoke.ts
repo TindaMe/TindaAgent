@@ -1,5 +1,8 @@
+import fs from "node:fs";
+import path from "node:path";
 import { spawn } from "node:child_process";
 import net from "node:net";
+import { sessionsRoot } from "../core/paths.js";
 
 let port = 0;
 let base = "";
@@ -70,6 +73,8 @@ async function main() {
     if (cfg.config?.token_limit !== 32000) throw new Error("session config did not persist token limit");
     const cfg2 = await request(`/sessions/${sid}/config`, { headers });
     if (cfg2.config?.max_context_tokens !== 32000) throw new Error("session config did not reload");
+    const configFile = path.join(sessionsRoot(), "config", `${sid}.json`);
+    if (!fs.existsSync(configFile)) throw new Error("session config json partition was not written");
 
     const deep = await request(`/sessions/${sid}/deep/align`, { method: "POST", headers, body: JSON.stringify({ session_id: sid, message: "迁移 Deep 对齐", file_names: ["a.txt"], file_contents: ["x"] }) });
     if (!deep.active || !deep.rounds?.length || !String(deep.alignment_text || "").includes("迁移 Deep 对齐")) throw new Error("deep align state invalid");

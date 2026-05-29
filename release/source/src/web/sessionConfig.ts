@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { sessionsRoot, sqliteDbFile } from "../core/paths.js";
-import { nowIso, readJson, safeId } from "../core/json.js";
+import { nowIso, readJson, safeId, writeJson } from "../core/json.js";
 import { normalizeContextTokenLimit } from "./settings.js";
 import { SessionSqlStore } from "./sessionSqlStore.js";
 
@@ -17,10 +17,10 @@ function sqlStore(): SessionSqlStore {
 export function loadSessionConfig(sessionId: string): Record<string, any> {
   const sid = safeId(sessionId);
   if (!sid) return {};
-  let raw = sqlStore().loadConfig(sid);
+  let raw = readJson<Record<string, any>>(configPath(sid), {});
   if (!Object.keys(raw).length) {
-    raw = readJson<Record<string, any>>(configPath(sid), {});
-    if (Object.keys(raw).length) sqlStore().saveConfig(sid, raw);
+    raw = sqlStore().loadConfig(sid);
+    if (Object.keys(raw).length) writeJson(configPath(sid), raw);
   }
   const out = raw && typeof raw === "object" && !Array.isArray(raw) ? { ...raw } : {};
   if (out.token_limit !== undefined || out.max_context_tokens !== undefined) {
@@ -41,6 +41,7 @@ export function saveSessionConfig(sessionId: string, patch: Record<string, any>)
     next.token_limit = value;
     next.max_context_tokens = value;
   }
+  writeJson(configPath(sid), next);
   sqlStore().saveConfig(sid, next);
   return loadSessionConfig(sid);
 }

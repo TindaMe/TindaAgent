@@ -197,6 +197,23 @@ export class SessionSqlStore {
     }
   }
 
+  listAllSessions(limit = 200, offset = 0, ownerUid = "") {
+    const safeLimit = Math.max(1, Math.min(Number(limit) || 200, 20000));
+    const safeOffset = Math.max(0, Number(offset) || 0);
+    const owner = String(ownerUid || "");
+    const db = this.db();
+    try {
+      const where = owner ? "WHERE owner_uid = '' OR owner_uid = ?" : "";
+      const totalRow = db.prepare(`SELECT COUNT(*) AS count FROM sessions ${where}`).get(...(owner ? [owner] : [])) as any;
+      const rows = db
+        .prepare(`SELECT * FROM sessions ${where} ORDER BY updated_at DESC LIMIT ? OFFSET ?`)
+        .all(...(owner ? [owner, safeLimit, safeOffset] : [safeLimit, safeOffset])) as any[];
+      return { sessions: rows.map((row) => this.rowToMeta(row)), total: Number(totalRow?.count || 0), limit: safeLimit, offset: safeOffset };
+    } finally {
+      db.close();
+    }
+  }
+
   touchMeta(sessionId: string, patch: Partial<SessionMeta> = {}): SessionMeta {
     const db = this.db();
     try {
