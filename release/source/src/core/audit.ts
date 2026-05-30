@@ -38,6 +38,7 @@ export interface AuditEventRow {
 
 type ParsedAuditEvent = Omit<AuditEventRow, "created_at"> & { raw_json?: string };
 type AuditSourceSummary = { name: string; size_bytes: number; updated_at: string; row_count: number; source: string };
+type LegacyLogFileEntry = AuditSourceSummary & { source_path: string; mtime_ms: number };
 type LogTail = { lines: string[]; truncated: boolean };
 
 const SCHEMA_SQL = `
@@ -69,6 +70,27 @@ const SCHEMA_SQL = `
     imported_at TEXT NOT NULL,
     row_count INTEGER NOT NULL DEFAULT 0
   );
+
+  CREATE TABLE IF NOT EXISTS audit_legacy_file_index (
+    source_file TEXT PRIMARY KEY,
+    source_path TEXT NOT NULL DEFAULT '',
+    size_bytes INTEGER NOT NULL DEFAULT 0,
+    mtime_ms INTEGER NOT NULL DEFAULT 0,
+    min_id INTEGER NOT NULL DEFAULT 0,
+    max_id INTEGER NOT NULL DEFAULT 0,
+    indexed_at TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS audit_legacy_event_index (
+    event_id INTEGER PRIMARY KEY,
+    source_file TEXT NOT NULL DEFAULT '',
+    source_path TEXT NOT NULL DEFAULT '',
+    size_bytes INTEGER NOT NULL DEFAULT 0,
+    mtime_ms INTEGER NOT NULL DEFAULT 0,
+    source_line INTEGER NOT NULL DEFAULT 0,
+    raw_line TEXT NOT NULL DEFAULT '',
+    indexed_at TEXT NOT NULL
+  );
 `;
 
 const DEFAULT_LEGACY_LOG_NAMES = ["total.jsonl"];
@@ -92,6 +114,10 @@ const FULL_LEGACY_LOG_NAMES = [
 
 const IMPORT_LINE_LIMIT = 50000;
 const IMPORT_TAIL_CHUNK_BYTES = 64 * 1024;
+const LOG_TAIL_MAX_BYTES = 2 * 1024 * 1024;
+const LOG_HEAD_BYTES = 256 * 1024;
+const LOG_RANGE_TAIL_LINES = 80;
+const LEGACY_SOURCE_CACHE_MS = 5000;
 const LEGACY_TEXT_RE = /^\[(\d+)\]\s+\[([^\]]*)\]\s+\[([^\]]*)\]\s+\[([^\]]*)\]\s+\[([^\]]*)\]\s+\[([^\]]*)\]\s+\[([^\]]*)\]\s*(.*)$/;
 const SKIP_LEGACY_LOG_NAMES = new Set(["__init__.py", "id_counter.txt", "total.idx"]);
 const HEAVY_NON_AUDIT_LOG_NAMES = new Set(["llm_request.jsonl", "llm_context.jsonl"]);
@@ -99,6 +125,7 @@ const HEAVY_NON_AUDIT_LOG_NAMES = new Set(["llm_request.jsonl", "llm_context.jso
 let schemaReady = false;
 let legacyImported = false;
 let sequenceSeeded = false;
+let legacySourceCache: { expiresAt: number; files: LegacyLogFileEntry[] } | null = null;
 
 function db() {
   const database = appDb();
@@ -322,14 +349,17 @@ function readPlainLogTail(file: string, maxLines: number): LogTail {
     fd = fs.openSync(file, "r");
     let position = stat.size;
     let newlineCount = 0;
+    let bytesReadTotal = 0;
     const chunks: Buffer[] = [];
-    while (position > 0 && newlineCount <= maxLines) {
-      const readSize = Math.min(IMPORT_TAIL_CHUNK_BYTES, position);
+    const maxBytes = Math.max(IMPORT_TAIL_CHUNK_BYTES, Math.min(LOG_TAIL_MAX_BYTES, maxLines * 32 * 1024));
+    while (position > 0 && newlineCount <= maxLines && bytesReadTotal < maxBytes) {
+      const readSize = Math.min(IMPORT_TAIL_CHUNK_BYTES, position, maxBytes - bytesReadTotal);
       position -= readSize;
       const buffer = Buffer.allocUnsafe(readSize);
       const bytesRead = fs.readSync(fd, buffer, 0, readSize, position);
       const chunk = Buffer.from(buffer.subarray(0, bytesRead));
       chunks.push(chunk);
+      bytesReadTotal += bytesRead;
       for (const byte of chunk) {
         if (byte === 10) newlineCount += 1;
       }
@@ -366,6 +396,29 @@ function readLogLines(file: string, maxLines = IMPORT_LINE_LIMIT): string[] {
   return readLogTail(file, maxLines).lines;
 }
 
+function readPlainLogHeadLines(file: string, maxBytes = LOG_HEAD_BYTES): string[] {
+  let fd: number | null = null;
+  try {
+    const stat = fs.statSync(file);
+    if (stat.size <= 0) return [];
+    const readSize = Math.min(maxBytes, stat.size);
+    const buffer = Buffer.allocUnsafe(readSize);
+    fd = fs.openSync(file, "r");
+    const bytesRead = fs.readSync(fd, buffer, 0, readSize, 0);
+    return splitLines(buffer.toString("utf8", 0, bytesRead));
+  } catch {
+    return [];
+  } finally {
+    if (fd !== null) {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        // ignore close failure during best-effort legacy probing
+      }
+    }
+  }
+}
+
 function readAllLogLines(file: string): string[] {
   try {
     const text = file.endsWith(".gz") ? zlib.gunzipSync(fs.readFileSync(file)).toString("utf8") : fs.readFileSync(file, "utf8");
@@ -375,9 +428,92 @@ function readAllLogLines(file: string): string[] {
   }
 }
 
+function findLineById(file: string, sourceFile: string, id: number): { line: string; lineNumber: number } | null {
+  if (file.endsWith(".gz")) {
+    const lines = readAllLogLines(file);
+    for (let index = lines.length - 1; index >= 0; index -= 1) {
+      if (!lineMayContainId(lines[index], id)) continue;
+      const parsed = parseAuditLine(lines[index], sourceFile);
+      if (Number(parsed?.id || 0) === id) return { line: lines[index], lineNumber: index + 1 };
+    }
+    return null;
+  }
+  let fd: number | null = null;
+  try {
+    const stat = fs.statSync(file);
+    fd = fs.openSync(file, "r");
+    let position = stat.size;
+    let carry = "";
+    while (position > 0) {
+      const readSize = Math.min(IMPORT_TAIL_CHUNK_BYTES, position);
+      position -= readSize;
+      const buffer = Buffer.allocUnsafe(readSize);
+      const bytesRead = fs.readSync(fd, buffer, 0, readSize, position);
+      const text = buffer.toString("utf8", 0, bytesRead) + carry;
+      const parts = text.split(/\r?\n/);
+      carry = parts.shift() || "";
+      for (let index = parts.length - 1; index >= 0; index -= 1) {
+        const line = parts[index];
+        if (!line.trim()) continue;
+        if (!lineMayContainId(line, id)) continue;
+        const parsed = parseAuditLine(line, sourceFile);
+        if (Number(parsed?.id || 0) !== id) continue;
+        return { line, lineNumber: 0 };
+      }
+    }
+    if (carry.trim() && lineMayContainId(carry, id)) {
+      const parsed = parseAuditLine(carry, sourceFile);
+      if (Number(parsed?.id || 0) === id) return { line: carry, lineNumber: 0 };
+    }
+    return null;
+  } catch {
+    return null;
+  } finally {
+    if (fd !== null) {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        // ignore close failure during best-effort legacy search
+      }
+    }
+  }
+}
+
 function lineMayContainId(line: string, id: number): boolean {
   const text = line.trimStart();
   return text.startsWith(`[${id}]`) || text.includes(`"id": ${id}`) || text.includes(`"id":${id}`);
+}
+
+function parsedLineToRow(parsed: ParsedAuditEvent, sourceFile: string, sourcePath: string, sourceLine: number, rawLine: string): AuditEventRow {
+  return {
+    id: Number(parsed.id || 0),
+    ts: parsed.ts || "",
+    op_type: parsed.op_type || "",
+    subsystem: parsed.subsystem || "",
+    func: parsed.func || "",
+    dir: parsed.dir || "",
+    file: parsed.file || "",
+    file_path: parsed.file_path || "",
+    content: parsed.content || "",
+    extra: parsed.extra || {},
+    source: "legacy_file",
+    source_file: sourceFile,
+    legacy_format: parsed.legacy_format || "",
+    created_at: "",
+    source_path: sourcePath,
+    source_line: sourceLine,
+    raw_line: rawLine
+  };
+}
+
+function auditIdsInLines(lines: string[], sourceFile: string): number[] {
+  const ids: number[] = [];
+  for (const line of lines) {
+    const event = parseAuditLine(line, sourceFile);
+    const id = Number(event?.id || 0);
+    if (Number.isFinite(id) && id > 0) ids.push(id);
+  }
+  return ids;
 }
 
 function maxLegacyAuditId(maxLines = 1000): number {
@@ -492,8 +628,8 @@ function legacyLogFiles(full = false): string[] {
   return files;
 }
 
-function listLegacyLogFiles(): AuditSourceSummary[] {
-  const files: AuditSourceSummary[] = [];
+function scanLegacyLogFiles(): LegacyLogFileEntry[] {
+  const files: LegacyLogFileEntry[] = [];
   const seen = new Set<string>();
   for (const root of legacyLogRoots()) {
     if (!fs.existsSync(root)) continue;
@@ -512,7 +648,9 @@ function listLegacyLogFiles(): AuditSourceSummary[] {
       seen.add(sourceName);
       files.push({
         name: sourceName,
+        source_path: file,
         size_bytes: stat.size,
+        mtime_ms: Math.floor(stat.mtimeMs),
         updated_at: stat.mtime.toISOString(),
         row_count: 0,
         source: "legacy_file"
@@ -521,6 +659,85 @@ function listLegacyLogFiles(): AuditSourceSummary[] {
   }
   files.sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)));
   return files;
+}
+
+function listLegacyLogFiles(): LegacyLogFileEntry[] {
+  const now = Date.now();
+  if (legacySourceCache && legacySourceCache.expiresAt > now) return legacySourceCache.files;
+  const files = scanLegacyLogFiles();
+  legacySourceCache = { expiresAt: now + LEGACY_SOURCE_CACHE_MS, files };
+  return files;
+}
+
+function legacyFilesChanged(database: any): boolean {
+  try {
+    for (const file of listLegacyLogFiles()) {
+      if (file.source !== "legacy_file") continue;
+      const row = database
+        .prepare("SELECT size_bytes, mtime_ms FROM audit_legacy_file_index WHERE source_file = ?")
+        .get(file.name) as any;
+      if (!row || Number(row.size_bytes || 0) !== file.size_bytes || Number(row.mtime_ms || 0) !== file.mtime_ms) return true;
+    }
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+function refreshLegacyFileIndex(database: any, force = false): void {
+  if (!force && !legacyFilesChanged(database)) return;
+  const indexedAt = nowIso();
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    const seen = new Set<string>();
+    for (const file of listLegacyLogFiles()) {
+      seen.add(file.name);
+      const existing = database
+        .prepare("SELECT size_bytes, mtime_ms FROM audit_legacy_file_index WHERE source_file = ?")
+        .get(file.name) as any;
+      if (!force && existing && Number(existing.size_bytes || 0) === file.size_bytes && Number(existing.mtime_ms || 0) === file.mtime_ms) continue;
+      database.prepare("DELETE FROM audit_legacy_event_index WHERE source_file = ?").run(file.name);
+      let minId = 0;
+      let maxId = 0;
+      if (!HEAVY_NON_AUDIT_LOG_NAMES.has(file.name)) {
+        const probeLines = file.name.endsWith(".gz")
+          ? readAllLogLines(file.source_path)
+          : [...readPlainLogHeadLines(file.source_path), ...readLogLines(file.source_path, LOG_RANGE_TAIL_LINES)];
+        for (const id of auditIdsInLines(probeLines, file.name)) {
+          minId = minId ? Math.min(minId, id) : id;
+          maxId = Math.max(maxId, id);
+        }
+      }
+      database
+        .prepare(
+          `INSERT INTO audit_legacy_file_index (source_file, source_path, size_bytes, mtime_ms, min_id, max_id, indexed_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(source_file) DO UPDATE SET
+             source_path = excluded.source_path,
+             size_bytes = excluded.size_bytes,
+             mtime_ms = excluded.mtime_ms,
+             min_id = excluded.min_id,
+             max_id = excluded.max_id,
+             indexed_at = excluded.indexed_at`
+        )
+        .run(file.name, file.source_path, file.size_bytes, file.mtime_ms, minId, maxId, indexedAt);
+    }
+    const rows = database.prepare("SELECT source_file FROM audit_legacy_file_index").all() as any[];
+    for (const row of rows) {
+      const name = String(row.source_file || "");
+      if (!seen.has(name)) {
+        database.prepare("DELETE FROM audit_legacy_file_index WHERE source_file = ?").run(name);
+        database.prepare("DELETE FROM audit_legacy_event_index WHERE source_file = ?").run(name);
+      }
+    }
+    database.exec("COMMIT");
+  } catch {
+    try {
+      database.exec("ROLLBACK");
+    } catch {
+      // ignore rollback failure
+    }
+  }
 }
 
 export function importLegacyAuditLogs(force = false, full = false): void {
@@ -589,7 +806,7 @@ export function auditEvent(args: AuditEventInput): number {
 export function listAuditSources(): AuditSourceSummary[] {
   ensureAuditReady();
   const database = db();
-  const total = database.prepare("SELECT COUNT(*) AS count, MAX(created_at) AS updated_at FROM audit_events").get() as any;
+  const latest = database.prepare("SELECT id, created_at FROM audit_events ORDER BY id DESC LIMIT 1").get() as any;
   const sources = database
     .prepare("SELECT source_file, size_bytes, imported_at, row_count FROM audit_log_sources ORDER BY imported_at DESC")
     .all() as any[];
@@ -597,8 +814,8 @@ export function listAuditSources(): AuditSourceSummary[] {
     {
       name: "audit_events",
       size_bytes: fileSize(sqliteDbFile()),
-      updated_at: String(total?.updated_at || nowIso()),
-      row_count: Number(total?.count || 0),
+      updated_at: String(latest?.created_at || nowIso()),
+      row_count: Number(latest?.id || 0),
       source: "sqlite"
     },
     ...sources.map((row) => ({
@@ -660,34 +877,44 @@ export function getAuditLogEventById(id: number): AuditEventRow | null {
   if (row) return row;
   const safeId = Math.floor(Number(id) || 0);
   if (safeId <= 0) return null;
-  for (const file of listLegacyLogFiles()) {
-    const sourcePath = findLegacyLogFile(file.name);
-    if (!sourcePath || HEAVY_NON_AUDIT_LOG_NAMES.has(file.name)) continue;
-    const lines = readAllLogLines(sourcePath);
-    for (let index = lines.length - 1; index >= 0; index -= 1) {
-      if (!lineMayContainId(lines[index], safeId)) continue;
-      const parsed = parseAuditLine(lines[index], file.name);
-      if (Number(parsed?.id || 0) !== safeId) continue;
-      return {
-        id: safeId,
-        ts: parsed?.ts || "",
-        op_type: parsed?.op_type || "",
-        subsystem: parsed?.subsystem || "",
-        func: parsed?.func || "",
-        dir: parsed?.dir || "",
-        file: parsed?.file || "",
-        file_path: parsed?.file_path || "",
-        content: parsed?.content || "",
-        extra: parsed?.extra || {},
-        source: "legacy_file",
-        source_file: file.name,
-        legacy_format: parsed?.legacy_format || "",
-        created_at: "",
-        source_path: sourcePath,
-        source_line: index + 1,
-        raw_line: lines[index]
-      };
-    }
+  const database = db();
+  refreshLegacyFileIndex(database);
+  const cached = database.prepare("SELECT * FROM audit_legacy_event_index WHERE event_id = ?").get(safeId) as any;
+  if (cached?.raw_line) {
+    const parsed = parseAuditLine(String(cached.raw_line), String(cached.source_file || ""));
+    if (parsed) return parsedLineToRow(parsed, String(cached.source_file || ""), String(cached.source_path || ""), Number(cached.source_line || 0), String(cached.raw_line || ""));
+  }
+  const candidates = database
+    .prepare(
+      `SELECT source_file, source_path, size_bytes, mtime_ms, min_id, max_id
+       FROM audit_legacy_file_index
+       WHERE min_id > 0 AND max_id >= ? AND min_id <= ?
+       ORDER BY max_id DESC`
+    )
+    .all(safeId, safeId) as any[];
+  for (const file of candidates) {
+    const sourceFile = String(file.source_file || "");
+    const sourcePath = String(file.source_path || findLegacyLogFile(sourceFile));
+    if (!sourcePath || HEAVY_NON_AUDIT_LOG_NAMES.has(sourceFile)) continue;
+    const found = findLineById(sourcePath, sourceFile, safeId);
+    if (!found) continue;
+    const parsed = parseAuditLine(found.line, sourceFile);
+    if (!parsed || Number(parsed.id || 0) !== safeId) continue;
+    database
+      .prepare(
+        `INSERT INTO audit_legacy_event_index (event_id, source_file, source_path, size_bytes, mtime_ms, source_line, raw_line, indexed_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(event_id) DO UPDATE SET
+           source_file = excluded.source_file,
+           source_path = excluded.source_path,
+           size_bytes = excluded.size_bytes,
+           mtime_ms = excluded.mtime_ms,
+           source_line = excluded.source_line,
+           raw_line = excluded.raw_line,
+           indexed_at = excluded.indexed_at`
+      )
+      .run(safeId, sourceFile, sourcePath, Number(file.size_bytes || 0), Number(file.mtime_ms || 0), found.lineNumber, found.line, nowIso());
+    return parsedLineToRow(parsed, sourceFile, sourcePath, found.lineNumber, found.line);
   }
   return null;
 }
