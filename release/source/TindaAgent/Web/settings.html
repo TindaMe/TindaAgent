@@ -786,7 +786,7 @@
       <p class="sub">TindaAgent 版本信息</p>
       <div class="version-row">
         <span>版本</span>
-        <span class="ver" id="versionLabel">v1.12.6</span>
+        <span class="ver" id="versionLabel">v1.12.7</span>
       </div>
     </div>
   </div>
@@ -941,11 +941,17 @@
       if (_settingsCache) Object.assign(_settingsCache, obj);
       else _settingsCache = obj;
       try {
-        await apiFetch("/web-settings", {
+        const res = await apiFetch("/web-settings", {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(obj),
         });
+        if (res.ok) {
+          const saved = await res.json();
+          _settingsCache = saved && typeof saved === "object" ? saved : _settingsCache;
+          localStorage.setItem(SETTINGS_KEY, JSON.stringify(_settingsCache));
+          return _settingsCache;
+        }
       } catch {}
       // Also write to localStorage as fallback
       try {
@@ -953,7 +959,9 @@
         const parsed = cur ? JSON.parse(cur) : {};
         Object.assign(parsed, obj);
         localStorage.setItem(SETTINGS_KEY, JSON.stringify(parsed));
+        _settingsCache = parsed;
       } catch {}
+      return _settingsCache || {};
     }
 
     function showToast(text) {
@@ -1087,8 +1095,22 @@
 
     const savedQuick = Array.isArray(s.quick_buttons) ? s.quick_buttons : ["model","stream","terminal","compress"];
     const quickGrid = document.getElementById("quickGrid");
-
+    const quickByKey = new Map(QUICK_ITEMS.map(item => [item.key, item]));
+    const orderedQuickItems = [];
+    const seenQuickItems = new Set();
+    savedQuick.forEach(key => {
+      const item = quickByKey.get(key);
+      if (!item || seenQuickItems.has(key)) return;
+      orderedQuickItems.push(item);
+      seenQuickItems.add(key);
+    });
     QUICK_ITEMS.forEach(item => {
+      if (seenQuickItems.has(item.key)) return;
+      orderedQuickItems.push(item);
+      seenQuickItems.add(item.key);
+    });
+
+    orderedQuickItems.forEach(item => {
       const row = document.createElement("div");
       row.className = "quick-row";
 
@@ -1214,7 +1236,7 @@
       try {
         const res = await apiFetch("/system/version");
         const data = await res.json();
-        const v = data?.effective_version || data?.version || "v1.12.6";
+        const v = data?.effective_version || data?.version || "v1.12.7";
         document.getElementById("versionLabel").textContent = v.startsWith("v") ? v : "v" + v;
       } catch {}
     })();

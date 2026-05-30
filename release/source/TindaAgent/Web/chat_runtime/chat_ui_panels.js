@@ -100,12 +100,8 @@
   };
 
   function getQuickSettings() {
-    try {
-      const raw = localStorage.getItem("tinda_settings");
-      if (!raw) return ["model","stream","terminal","compress"];
-      const s = JSON.parse(raw);
-      return Array.isArray(s.quick_buttons) ? s.quick_buttons : ["model","stream","terminal","compress"];
-    } catch { return ["model","stream","terminal","compress"]; }
+    const source = webSettingsCache || readLocalWebSettings();
+    return normalizeQuickButtonKeys(source?.quick_buttons);
   }
 
   function renderQuickButtons() {
@@ -374,11 +370,7 @@
     }
     if (input) input.value = String(val);
     sessionStorage.setItem("tinda_max_context_tokens", String(val));
-    try {
-      var gs = JSON.parse(localStorage.getItem("tinda_settings") || "{}");
-      gs.token_limit = val;
-      localStorage.setItem("tinda_settings", JSON.stringify(gs));
-    } catch (_) {}
+    await saveWebSettingsPatch({ token_limit: val });
     const sid = getSessionId();
     if (sid && !isDraftSessionId(sid)) {
       try {

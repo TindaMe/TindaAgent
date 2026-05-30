@@ -19,6 +19,8 @@ export const DEFAULT_WEB_SETTINGS = {
   tavily_base_url: ""
 };
 
+const WEB_QUICK_BUTTON_KEYS = new Set(["model", "stream", "terminal", "compress", "sessions", "logs", "llm_request", "diagnostics", "reset", "admin"]);
+
 function settingsPath(): string {
   return path.join(runtimeRoot(), "web-settings.json");
 }
@@ -44,17 +46,31 @@ export function validateContextTokenLimit(value: unknown): [boolean, number, str
   return [true, parsed, ""];
 }
 
+export function normalizeQuickButtons(value: unknown): string[] {
+  if (!Array.isArray(value)) return [...DEFAULT_WEB_SETTINGS.quick_buttons];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of value) {
+    const key = String(item || "").trim();
+    if (!key || !WEB_QUICK_BUTTON_KEYS.has(key) || seen.has(key)) continue;
+    seen.add(key);
+    out.push(key);
+  }
+  return out;
+}
+
 export function loadWebSettings(): typeof DEFAULT_WEB_SETTINGS {
   const raw = readJson<Record<string, unknown>>(settingsPath(), {});
   const merged = { ...DEFAULT_WEB_SETTINGS, ...raw } as typeof DEFAULT_WEB_SETTINGS;
   merged.token_limit = normalizeContextTokenLimit(merged.token_limit);
-  if (!Array.isArray(merged.quick_buttons)) merged.quick_buttons = [...DEFAULT_WEB_SETTINGS.quick_buttons];
+  merged.quick_buttons = normalizeQuickButtons(merged.quick_buttons);
   return merged;
 }
 
 export function saveWebSettings(data: Record<string, unknown>): typeof DEFAULT_WEB_SETTINGS {
   const merged = { ...loadWebSettings(), ...data };
   merged.token_limit = normalizeContextTokenLimit(merged.token_limit);
+  merged.quick_buttons = normalizeQuickButtons(merged.quick_buttons);
   const clean = Object.fromEntries(Object.keys(DEFAULT_WEB_SETTINGS).map((key) => [key, (merged as Record<string, unknown>)[key]]));
   writeJson(settingsPath(), clean);
   return loadWebSettings();

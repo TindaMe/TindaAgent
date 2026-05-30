@@ -94,7 +94,9 @@
   };
   const USER_ADMIN_PERM = 511;
   const AUTH_TOKEN_KEY = "ta_auth_token";
-  const VERSION_FALLBACK = "v1.12.6";
+  const VERSION_FALLBACK = "v1.12.7";
+  const SETTINGS_KEY = "tinda_settings";
+  const DEFAULT_QUICK_BUTTONS = ["model","stream","terminal","compress"];
   const CONTEXT_TOKEN_DEFAULT = 16000;
   const CONTEXT_TOKEN_MIN = 16000;
   const CONTEXT_TOKEN_MAX = 200000;
@@ -104,16 +106,87 @@
   const API_RETRY_DELAY_MS = 180;
   const API_TRANSIENT_ERROR_RE = /Failed to fetch|NetworkError|Load failed|AbortError/i;
 
+  let webSettingsCache = null;
+
+  function normalizeQuickButtonKeys(value) {
+    const allowed = new Set(["model", "stream", "terminal", "compress", "sessions", "logs", "llm_request", "diagnostics", "reset", "admin"]);
+    const out = [];
+    const seen = new Set();
+    if (!Array.isArray(value)) return DEFAULT_QUICK_BUTTONS.slice();
+    value.forEach((item) => {
+      const key = String(item || "").trim();
+      if (!key || !allowed.has(key) || seen.has(key)) return;
+      seen.add(key);
+      out.push(key);
+    });
+    return out;
+  }
+
+  function readLocalWebSettings() {
+    try {
+      const raw = localStorage.getItem(SETTINGS_KEY);
+      return raw ? JSON.parse(raw) || {} : {};
+    } catch (_) {
+      return {};
+    }
+  }
+
+  function persistLocalWebSettings(settings) {
+    if (!settings || typeof settings !== "object") return;
+    try {
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+    } catch (_) {}
+  }
+
+  function applyWebSettings(settings, { syncLegacy = true } = {}) {
+    const next = settings && typeof settings === "object" ? { ...settings } : {};
+    next.quick_buttons = normalizeQuickButtonKeys(next.quick_buttons);
+    webSettingsCache = next;
+    persistLocalWebSettings(next);
+    if (syncLegacy) {
+      if (typeof next.stream_enabled === "boolean") {
+        localStorage.setItem(STREAM_ENABLED_KEY, next.stream_enabled ? "1" : "0");
+      }
+      if (isValidContextTokenLimit(next.token_limit)) {
+        sessionStorage.setItem("tinda_max_context_tokens", String(Math.floor(Number(next.token_limit))));
+      }
+    }
+    return webSettingsCache;
+  }
+
+  async function loadWebSettings({ force = false } = {}) {
+    if (webSettingsCache && !force) return webSettingsCache;
+    try {
+      const res = await apiFetch("/web-settings");
+      if (res.ok) return applyWebSettings(await res.json());
+    } catch (_) {}
+    return applyWebSettings(readLocalWebSettings(), { syncLegacy: false });
+  }
+
+  async function saveWebSettingsPatch(patch) {
+    const nextPatch = patch && typeof patch === "object" ? patch : {};
+    const optimistic = { ...(webSettingsCache || readLocalWebSettings()), ...nextPatch };
+    applyWebSettings(optimistic);
+    try {
+      const res = await apiFetch("/web-settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(nextPatch),
+      });
+      if (res.ok) return applyWebSettings(await res.json());
+    } catch (_) {}
+    return webSettingsCache;
+  }
+
   /**
    * 全局唯一的上下文 token 阈值入口。
-   * 优先级：localStorage 全局设置 > sessionStorage 会话缓存 > 默认 16k。
-   * 只有用户主动在设置页或配置弹窗保存才会改写前两级。
+   * 优先级：服务端 web-settings.json > 本地离线缓存 > sessionStorage 会话缓存 > 默认 16k。
+   * 只有用户主动在设置页或配置弹窗保存才会改写配置。
    */
   function getContextTokenLimit() {
-    try {
-      var s = JSON.parse(localStorage.getItem("tinda_settings") || "{}");
-      if (isValidContextTokenLimit(s.token_limit)) return Math.floor(Number(s.token_limit));
-    } catch (_) {}
+    if (webSettingsCache && isValidContextTokenLimit(webSettingsCache.token_limit)) return Math.floor(Number(webSettingsCache.token_limit));
+    const local = readLocalWebSettings();
+    if (isValidContextTokenLimit(local.token_limit)) return Math.floor(Number(local.token_limit));
     var ss = sessionStorage.getItem("tinda_max_context_tokens");
     if (ss) { var v = parseInt(ss, 10); if (isValidContextTokenLimit(v)) return v; }
     return CONTEXT_TOKEN_DEFAULT;

@@ -2,7 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import net from "node:net";
-import { sessionsRoot } from "../core/paths.js";
+import { runtimeRoot, sessionsRoot } from "../core/paths.js";
+import { readJson, writeJson } from "../core/json.js";
 
 let port = 0;
 let base = "";
@@ -42,6 +43,9 @@ async function request(path: string, options: RequestInit = {}) {
 async function main() {
   port = await freePort();
   base = `http://127.0.0.1:${port}`;
+  const webSettingsFile = path.join(runtimeRoot(), "web-settings.json");
+  const webSettingsExisted = fs.existsSync(webSettingsFile);
+  const webSettingsBefore = readJson<Record<string, unknown>>(webSettingsFile, {});
   const proc = spawn(process.execPath, ["--no-warnings=ExperimentalWarning", "dist/web/server.bundle.js", "--host=127.0.0.1", `--port=${port}`, "--port-retries=0"], {
     cwd: process.cwd(),
     env: { ...process.env, PORT: String(port), HOST: "127.0.0.1", PORT_RETRIES: "0", TINDA_DEEP_ALIGNMENT_OFFLINE: "1" },
@@ -68,6 +72,16 @@ async function main() {
     const headers = { "X-User-Token": String(login.token || "") };
     const sid = `feature_${Date.now()}`;
     await request("/sessions", { method: "POST", headers, body: JSON.stringify({ session_id: sid, title: "feature" }) });
+
+    const webSettings = await request("/web-settings", {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({ quick_buttons: ["logs", "model", "logs", "unknown", "stream"], stream_enabled: false, terminal_open: true })
+    });
+    if (webSettings.quick_buttons?.join(",") !== "logs,model,stream") throw new Error("web settings did not preserve normalized quick button order");
+    if (webSettings.stream_enabled !== false || webSettings.terminal_open !== true) throw new Error("web settings boolean preferences did not persist");
+    const webSettingsReload = await request("/web-settings", { headers });
+    if (webSettingsReload.quick_buttons?.join(",") !== "logs,model,stream") throw new Error("web settings quick button order did not reload");
 
     const cfg = await request(`/sessions/${sid}/config`, { method: "PATCH", headers, body: JSON.stringify({ max_context_tokens: 32000 }) });
     if (cfg.config?.token_limit !== 32000) throw new Error("session config did not persist token limit");
@@ -110,6 +124,8 @@ async function main() {
     await request(`/sessions/${sid}`, { method: "DELETE", headers });
     console.log("http feature smoke passed");
   } finally {
+    if (webSettingsExisted) writeJson(webSettingsFile, webSettingsBefore);
+    else fs.rmSync(webSettingsFile, { force: true });
     proc.kill("SIGTERM");
   }
 }

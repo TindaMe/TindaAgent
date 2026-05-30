@@ -255,6 +255,7 @@
   function toggleStream() {
     streamEnabled = !streamEnabled;
     localStorage.setItem(STREAM_ENABLED_KEY, streamEnabled ? "1" : "0");
+    saveWebSettingsPatch({ stream_enabled: streamEnabled }).catch(() => {});
     setStreamToggleUI();
     addSystemNotice(streamEnabled ? "已开启流式输出" : "已关闭流式输出");
   }

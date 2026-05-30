@@ -19,22 +19,9 @@
   if (savedCustomTime) customTimeValue = savedCustomTime;
   setTimeMode(timeMode, { silent: true });
   webSearchEnabled = localStorage.getItem(WEB_SEARCH_ENABLED_KEY) === "1";
-  streamEnabled = localStorage.getItem(STREAM_ENABLED_KEY) === "1";
-  setStreamToggleUI();
   deepEnabled = localStorage.getItem(DEEP_ENABLED_KEY) === "1";
   setDeepToggleUI();
   renderComposerSelections();
-  // 读取设置页配置
-  try {
-    const s = JSON.parse(localStorage.getItem("tinda_settings") || "{}");
-    if (s.terminal_open === true) openTerm();
-    if (typeof s.token_limit === "number" && s.token_limit >= 100) {
-      const sid = getSessionId();
-      if (sid && !isDraftSessionId(sid)) {
-        syncContextTokenLimitForSession(sid).catch(() => {});
-      }
-    }
-  } catch {}
   (async () => {
     let shouldReleaseInitialRender = false;
     try {
@@ -46,6 +33,16 @@
       }
       shouldReleaseInitialRender = true;
       await ensureUserMetaLoaded();
+      const settings = await loadWebSettings({ force: true });
+      streamEnabled = settings.stream_enabled !== false;
+      setStreamToggleUI();
+      if (settings.terminal_open === true) openTerm();
+      if (isValidContextTokenLimit(settings.token_limit)) {
+        const sid = getSessionId();
+        if (sid && !isDraftSessionId(sid)) {
+          syncContextTokenLimitForSession(sid).catch(() => {});
+        }
+      }
       await loadAccountList();
       renderQuickButtons();
       await Promise.allSettled([loadModelInfo(), syncAppVersion()]);
