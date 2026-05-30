@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { writeJson } from "../core/json.js";
 import { buildAssistantMessage, buildSystemMessage, buildUserMessage } from "../web/sessionAdapter.js";
+import { assistantSubstepsFromResult } from "../web/server.js";
 import { SessionStore } from "../web/sessionStore.js";
 
 function assert(condition: unknown, message: string): void {
@@ -61,6 +62,48 @@ assert(hasContent(beforeCompress, "[Terminal Context]"), "terminal context not i
 const renderedBeforeCompress = store.frontendMessages(sid).entries;
 const thinkingEntry = renderedBeforeCompress.find((entry) => entry.role === "assistant" && Array.isArray(entry.content) && entry.content.some((step: any) => step.kind === "thinking"));
 assert(thinkingEntry?.content?.some((step: any) => step.kind === "thinking" && String(step.data || "").includes("思考一")), "thinking substep not preserved for frontend reload");
+
+const resultSubsteps = assistantSubstepsFromResult({
+  reply: "最终回复",
+  reasoning_content: "最终思考",
+  tool_trace: [],
+  history_delta: [{ role: "assistant", reasoning_content: "真实思考", content: "真实回复" }]
+});
+assert(resultSubsteps[0]?.kind === "thinking" && resultSubsteps[1]?.kind === "text", "assistant result substeps should preserve thinking before text");
+const resultToolSubsteps = assistantSubstepsFromResult({
+  reply: "工具后回复",
+  tool_trace: [{ agent_tool: "echo", call_id: "call_1", tool_call_id: "tool_1", arguments: { text: "ping" }, result: { ok: true, stdout: "pong" }, ok: true }],
+  history_delta: [
+    { role: "assistant", reasoning_content: "工具前思考", content: "", tool_calls: [{ id: "tool_1", function: { name: "echo", arguments: "{\"text\":\"ping\"}" } }] },
+    { role: "tool", tool_call_id: "tool_1", content: "{\"ok\":true}" },
+    { role: "assistant", content: "工具后回复" }
+  ]
+});
+assert(resultToolSubsteps.map((step) => step.kind).join(",") === "thinking,tool_marker,text", "assistant result substeps should preserve tool order without duplicate markers");
+
+const reversedSid = "reversed_reasoning";
+writeJson(path.join(runtime, "messages", `${reversedSid}.json`), {
+  "1": {
+    role: "assistant",
+    id: "reversed_assistant",
+    type: "assistant_message",
+    display_target: "chat",
+    context_policy: "include",
+    content: {
+      "1": { tool_marker: { name: "echo", ok: true, stdout: "pong", id: "call_old", tool_call_id: "tool_old" } },
+      "2": { text: "旧记录最终回复" },
+      "3": { thinking: "旧记录思考" }
+    },
+    created_at: "2026-05-30T00:00:01.000Z"
+  }
+});
+const reversedStore = new SessionStore(runtime, legacy);
+const reversedLoaded = reversedStore.loadMessages(reversedSid);
+assert("tool_marker" in (reversedLoaded["1"]?.content?.["1"] || {}), "legacy reversed assistant content should preserve leading tool marker");
+assert("thinking" in (reversedLoaded["1"]?.content?.["2"] || {}), "legacy reversed assistant content was not repaired to thinking before text");
+assert("text" in (reversedLoaded["1"]?.content?.["3"] || {}), "legacy reversed assistant content text was not preserved after thinking");
+const reversedFrontend = reversedStore.frontendMessages(reversedSid).entries[0];
+assert(reversedFrontend?.content?.[0]?.kind === "tool_marker" && reversedFrontend?.content?.[1]?.kind === "thinking" && reversedFrontend?.content?.[2]?.kind === "text", "frontend content order should render tool marker, thinking, then text after reload");
 
 const chronologicalSid = "chronological_order";
 writeJson(path.join(runtime, "messages", `${chronologicalSid}.json`), {

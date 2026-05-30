@@ -118,7 +118,7 @@
     if (!r && !c) return "";
     if (r) {
       const rBlock = markdownQuoteBlock(r);
-      return c ? c + "\n\n" + rBlock : rBlock;
+      return c ? rBlock + "\n\n" + c : rBlock;
     }
     return c;
   }

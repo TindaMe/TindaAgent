@@ -197,6 +197,36 @@ function normalizeContentSteps(content: unknown, idPrefix: string, fallbackKind:
   return { "1": { [fallbackKind]: textOf(content) } };
 }
 
+function reorderAssistantContentSteps(content: Record<string, any>): [Record<string, any>, boolean] {
+  const keys = sortedNumericKeys(content);
+  if (keys.length < 2) return [content, false];
+
+  let firstTextIdx = -1;
+  let lastThinkingIdx = -1;
+  keys.forEach((key, idx) => {
+    const step = content[key];
+    if (!isRecord(step)) return;
+    if ("thinking" in step) lastThinkingIdx = idx;
+    else if ("text" in step && firstTextIdx < 0) firstTextIdx = idx;
+  });
+  if (lastThinkingIdx < 0 || firstTextIdx < 0 || firstTextIdx > lastThinkingIdx) return [content, false];
+
+  const prefix: StoreEntry[] = [];
+  const thinking: StoreEntry[] = [];
+  const rest: StoreEntry[] = [];
+  keys.forEach((key, idx) => {
+    const step = content[key];
+    if (idx < firstTextIdx) prefix.push(step);
+    else if (isRecord(step) && "thinking" in step) thinking.push(step);
+    else rest.push(step);
+  });
+  const out: Record<string, any> = {};
+  [...prefix, ...thinking, ...rest].forEach((step, idx) => {
+    out[String(idx + 1)] = step;
+  });
+  return [out, true];
+}
+
 function fileContentSteps(extra: Record<string, unknown>): Record<string, any> {
   const content: Record<string, any> = {};
   const names = Array.isArray(extra.file_names) ? extra.file_names : [];
@@ -284,7 +314,9 @@ export function normalizeStoreEntry(raw: StoreEntry): StoreEntry | null {
   if (role === "user") {
     return { ...base, content: normalizeContentSteps(raw.content ?? "", id, "user") };
   }
-  return { ...base, content: normalizeContentSteps(raw.content ?? "", id, "text") };
+  const content = normalizeContentSteps(raw.content ?? "", id, "text");
+  const [orderedContent] = reorderAssistantContentSteps(content);
+  return { ...base, content: orderedContent };
 }
 
 function firstText(content: unknown): string {

@@ -485,12 +485,65 @@ function commandFromToolJobBody(body: any): string {
   return String(command || "").trim();
 }
 
-function assistantSubstepsFromResult(result: any): Array<Record<string, any>> {
+export function assistantSubstepsFromResult(result: any): Array<Record<string, any>> {
   const reply = textOf(result?.reply || "");
   const reasoning = textOf(result?.reasoning_content || "").trim();
-  const substeps: Array<Record<string, any>> = [...toolTraceToSubsteps(result?.tool_trace || [])];
-  substeps.push({ kind: "text", content: reply || "（无回复）" });
+  const substeps: Array<Record<string, any>> = [];
+  const trace = Array.isArray(result?.tool_trace) ? result.tool_trace : [];
+  const traceByToolCallId = new Map<string, any>();
+  const traceByCallId = new Map<string, any>();
+  const emittedTraceKeys = new Set<string>();
+  trace.forEach((step: any) => {
+    const toolCallId = textOf(step?.tool_call_id).trim();
+    const callId = textOf(step?.call_id || step?.id).trim();
+    if (toolCallId) traceByToolCallId.set(toolCallId, step);
+    if (callId) traceByCallId.set(callId, step);
+  });
+
+  const historyDelta = Array.isArray(result?.history_delta) ? result.history_delta : [];
+  historyDelta.forEach((row: any) => {
+    const role = textOf(row?.role).trim();
+    if (role === "assistant") {
+      const rowReasoning = textOf(row?.reasoning_content || row?.reasoning).trim();
+      const rowContent = textOf(row?.content || "");
+      if (rowReasoning) substeps.push({ kind: "thinking", content: rowReasoning });
+      const calls = Array.isArray(row?.tool_calls) ? row.tool_calls : [];
+      calls.forEach((call: any) => {
+        const toolCallId = textOf(call?.id).trim();
+        const name = textOf(call?.function?.name || call?.name || "unknown").trim() || "unknown";
+        const argsText = textOf(call?.function?.arguments || "{}").trim();
+        let args: Record<string, any> = {};
+        try {
+          args = argsText ? JSON.parse(argsText) : {};
+        } catch {
+          args = { raw: argsText };
+        }
+        const traceStep = toolCallId ? traceByToolCallId.get(toolCallId) : null;
+        if (traceStep) {
+          const traceKey = textOf(traceStep.tool_call_id || traceStep.call_id || traceStep.id || toolCallId).trim();
+          if (traceKey) emittedTraceKeys.add(traceKey);
+          substeps.push(...toolTraceToSubsteps([traceStep]));
+        } else {
+          substeps.push({ kind: "tool_marker", name, ok: false, stdin: textOf(args.cmd || args.text || args.path).slice(0, 500), stdout: "", id: toolCallId, tool_call_id: toolCallId, arguments: args, result: {} });
+        }
+      });
+      if (rowContent) substeps.push({ kind: "text", content: rowContent });
+      return;
+    }
+    if (role === "tool") {
+      const toolCallId = textOf(row?.tool_call_id).trim();
+      const traceStep = toolCallId ? traceByToolCallId.get(toolCallId) || traceByCallId.get(toolCallId) : null;
+      const traceKey = textOf(traceStep?.tool_call_id || traceStep?.call_id || traceStep?.id || toolCallId).trim();
+      if (traceStep && (!traceKey || !emittedTraceKeys.has(traceKey))) {
+        if (traceKey) emittedTraceKeys.add(traceKey);
+        substeps.push(...toolTraceToSubsteps([traceStep]));
+      }
+    }
+  });
+
+  if (substeps.length) return substeps;
   if (reasoning) substeps.push({ kind: "thinking", content: reasoning });
+  substeps.push({ kind: "text", content: reply || "（无回复）" });
   return substeps;
 }
 
