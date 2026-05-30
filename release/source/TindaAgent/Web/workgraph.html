@@ -20,6 +20,7 @@
       --blue: #38bdf8;
       --green: #34d399;
       --orange: #f59e0b;
+      --red: #fb7185;
     }
     * { box-sizing: border-box; }
     html, body {
@@ -185,10 +186,20 @@
     .tabs {
       display: flex;
       align-items: center;
+      justify-content: space-between;
       gap: 8px;
       padding: 8px 12px;
       border-bottom: 1px solid rgba(196, 181, 253, 0.12);
       background: rgba(11, 7, 21, 0.38);
+    }
+    .tab-group,
+    .status-legend {
+      display: inline-flex;
+      align-items: center;
+      min-width: 0;
+    }
+    .tab-group {
+      gap: 8px;
     }
     .tab {
       height: 30px;
@@ -209,6 +220,33 @@
       background: rgba(139, 92, 246, 0.14);
       color: #ede9fe;
     }
+    .status-legend {
+      gap: 10px;
+      overflow: hidden;
+    }
+    .legend-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--text-dim);
+      font-size: 10px;
+      font-weight: 950;
+      letter-spacing: 0.08em;
+      white-space: nowrap;
+      text-transform: uppercase;
+    }
+    .legend-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: rgba(196, 181, 253, 0.42);
+      box-shadow: 0 0 12px currentColor;
+    }
+    .legend-item[data-status="active"] .legend-dot { background: var(--purple); color: var(--purple); }
+    .legend-item[data-status="done"] .legend-dot { background: var(--green); color: var(--green); }
+    .legend-item[data-status="blocked"] .legend-dot { background: var(--orange); color: var(--orange); }
+    .legend-item[data-status="failed"] .legend-dot { background: var(--red); color: var(--red); }
+    .legend-item[data-status="audit"] .legend-dot { background: var(--blue); color: var(--blue); }
     .canvas {
       position: relative;
       min-height: 0;
@@ -221,49 +259,149 @@
     .graph-layer {
       position: absolute;
       inset: 0;
-      padding: 28px;
-    }
-    .empty-state {
-      position: absolute;
-      left: 50%;
-      top: 50%;
-      transform: translate(-50%, -50%);
-      width: min(520px, calc(100% - 48px));
-      border: 1px solid rgba(196, 181, 253, 0.20);
-      border-radius: 10px;
-      background: rgba(17, 11, 29, 0.78);
+      overflow: auto;
       padding: 22px;
-      box-shadow: 0 24px 70px rgba(0, 0, 0, 0.26), 0 0 60px rgba(139, 92, 246, 0.10);
     }
-    .empty-title {
-      font-size: 17px;
-      font-weight: 950;
-      letter-spacing: 0.08em;
+    .scene {
+      position: relative;
+      min-width: 100%;
+      min-height: 100%;
+      transform-origin: 0 0;
     }
-    .empty-grid {
-      margin-top: 16px;
-      display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 10px;
+    .edge-layer,
+    .lane-layer,
+    .node-layer {
+      position: absolute;
+      inset: 0;
     }
-    .empty-node {
-      min-height: 72px;
-      border: 1px solid rgba(196, 181, 253, 0.16);
-      border-radius: 8px;
-      background: rgba(32, 22, 51, 0.58);
-      padding: 10px;
+    .edge-layer {
+      overflow: visible;
+      pointer-events: none;
+      z-index: 2;
     }
-    .empty-node b {
-      display: block;
-      color: var(--purple-soft);
-      font-size: 12px;
+    .lane-layer {
+      z-index: 1;
+      pointer-events: none;
     }
-    .empty-node span {
-      display: block;
-      margin-top: 8px;
+    .node-layer {
+      z-index: 3;
+    }
+    .wg-lane {
+      position: absolute;
+      left: 0;
+      border-top: 1px solid rgba(196, 181, 253, 0.09);
+      border-bottom: 1px solid rgba(196, 181, 253, 0.06);
+      background: linear-gradient(90deg, rgba(139, 92, 246, 0.08), transparent 46%);
+    }
+    .wg-lane-label {
+      position: absolute;
+      left: 12px;
+      top: 9px;
       color: var(--text-dim);
       font-size: 11px;
-      line-height: 1.45;
+      font-weight: 900;
+      letter-spacing: 0.08em;
+    }
+    .wg-node {
+      position: absolute;
+      width: var(--node-w);
+      height: var(--node-h);
+      border: 1px solid rgba(196, 181, 253, 0.18);
+      border-radius: 9px;
+      background: rgba(17, 11, 29, 0.88);
+      color: var(--text);
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      justify-content: center;
+      gap: 5px;
+      padding: 9px 10px;
+      text-align: left;
+      cursor: pointer;
+      box-shadow: 0 14px 34px rgba(0, 0, 0, 0.18);
+      transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
+    }
+    .wg-node:hover,
+    .wg-node.selected {
+      transform: translateY(-2px);
+      border-color: rgba(196, 181, 253, 0.72);
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.24), 0 0 30px rgba(139, 92, 246, 0.22);
+    }
+    .wg-node.event {
+      border-radius: 8px;
+    }
+    .wg-node.milestone {
+      border-radius: 999px;
+    }
+    .node-top {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      min-width: 0;
+    }
+    .node-label {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 12px;
+      font-weight: 950;
+      letter-spacing: 0.02em;
+    }
+    .node-status {
+      flex: 0 0 auto;
+      border-radius: 999px;
+      padding: 3px 6px;
+      background: rgba(196, 181, 253, 0.10);
+      color: var(--text-dim);
+      font-size: 9px;
+      font-weight: 950;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .node-sub {
+      width: 100%;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--text-dim);
+      font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Consolas, monospace;
+      font-size: 10.5px;
+    }
+    .wg-node.status-active {
+      border-color: rgba(167, 139, 250, 0.70);
+      box-shadow: 0 0 30px rgba(139, 92, 246, 0.18);
+    }
+    .wg-node.status-active .node-status { color: var(--purple-soft); background: rgba(139, 92, 246, 0.18); }
+    .wg-node.status-done { border-color: rgba(52, 211, 153, 0.56); }
+    .wg-node.status-done .node-status { color: var(--green); background: rgba(52, 211, 153, 0.12); }
+    .wg-node.status-blocked { border-color: rgba(245, 158, 11, 0.68); border-style: dashed; }
+    .wg-node.status-blocked .node-status { color: var(--orange); background: rgba(245, 158, 11, 0.13); }
+    .wg-node.status-failed { border-color: rgba(251, 113, 133, 0.70); box-shadow: 0 0 30px rgba(251, 113, 133, 0.11); }
+    .wg-node.status-failed .node-status { color: var(--red); background: rgba(251, 113, 133, 0.13); }
+    .wg-node.status-audit { border-color: rgba(56, 189, 248, 0.58); }
+    .wg-node.status-audit .node-status { color: var(--blue); background: rgba(56, 189, 248, 0.12); }
+    .wg-edge {
+      fill: none;
+      stroke: rgba(196, 181, 253, 0.30);
+      stroke-width: 1.5;
+    }
+    .wg-edge.arrow { marker-end: url(#arrow-purple); }
+    .wg-edge.dashed { stroke-dasharray: 6 5; }
+    .wg-edge.handoff { stroke: rgba(56, 189, 248, 0.48); marker-end: url(#arrow-blue); }
+    .wg-edge.block { stroke: rgba(245, 158, 11, 0.70); stroke-dasharray: 5 4; marker-end: url(#arrow-orange); }
+    .wg-edge.failure { stroke: rgba(251, 113, 133, 0.76); stroke-dasharray: 8 3; marker-end: url(#arrow-red); }
+    .wg-edge.audit { stroke: rgba(167, 139, 250, 0.58); stroke-dasharray: 2 4; marker-end: url(#arrow-purple); }
+    .wg-edge.active {
+      stroke-width: 2.4;
+      filter: drop-shadow(0 0 8px rgba(139, 92, 246, 0.36));
+    }
+    .wg-edge.selected-edge {
+      stroke-width: 2.2;
+      filter: drop-shadow(0 0 10px rgba(196, 181, 253, 0.30));
     }
     footer {
       min-height: 0;
@@ -305,7 +443,8 @@
       main { grid-template-columns: 1fr; }
       aside { display: none; }
       footer { grid-template-columns: 1fr; }
-      .empty-grid { grid-template-columns: 1fr; }
+      .tabs { overflow-x: auto; }
+      .status-legend { display: none; }
     }
   </style>
 </head>
@@ -318,9 +457,18 @@
       <span>WORKGRAPH</span>
     </div>
     <div class="actions">
-      <a class="btn" href="/">HOME</a>
-      <a class="btn" href="/app">CHAT</a>
-      <button class="btn primary" type="button" id="refreshBtn">REFRESH</button>
+      <a class="btn" href="/">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11l9-8 9 8"></path><path d="M5 10v10h14V10"></path><path d="M9 20v-6h6v6"></path></svg>
+        HOME
+      </a>
+      <a class="btn" href="/app">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"></path></svg>
+        CHAT
+      </a>
+      <button class="btn primary" type="button" id="refreshBtn">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a9 9 0 0 1-15.5 6.2"></path><path d="M3 12A9 9 0 0 1 18.5 5.8"></path><path d="M18 2v4h4"></path><path d="M6 22v-4H2"></path></svg>
+        REFRESH
+      </button>
     </div>
   </header>
 
@@ -328,41 +476,41 @@
     <aside>
       <div class="section-title">Workflows</div>
       <div class="workflow-card active">
-        <div class="workflow-name">workflow.empty</div>
-        <div class="workflow-meta">status=empty · events=0</div>
+        <div class="workflow-name" id="workflowName">workflow.sample</div>
+        <div class="workflow-meta" id="workflowMeta">status=active · events=7</div>
       </div>
       <div class="metrics">
-        <div class="metric"><span>ACTORS</span><strong>0</strong></div>
-        <div class="metric"><span>EVENTS</span><strong>0</strong></div>
-        <div class="metric"><span>LINKS</span><strong>0</strong></div>
-        <div class="metric"><span>LANES</span><strong>0</strong></div>
+        <div class="metric"><span>ACTORS</span><strong id="actorCount">0</strong></div>
+        <div class="metric"><span>EVENTS</span><strong id="eventCount">0</strong></div>
+        <div class="metric"><span>LINKS</span><strong id="linkCount">0</strong></div>
+        <div class="metric"><span>LANES</span><strong id="laneCount">0</strong></div>
       </div>
     </aside>
 
     <section class="workspace">
       <nav class="tabs" aria-label="WorkGraph views">
-        <button class="tab active" type="button" data-view="actor">
-          <svg viewBox="0 0 24 24"><circle cx="6" cy="7" r="2.5"></circle><circle cx="18" cy="7" r="2.5"></circle><circle cx="12" cy="17" r="2.5"></circle><path d="M8.3 8.6l2.3 5.1M15.7 8.6l-2.3 5.1M8.6 7h6.8"></path></svg>
-          Actor Map
-        </button>
-        <button class="tab" type="button" data-view="event">
-          <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h10M4 18h16"></path><circle cx="18" cy="12" r="2"></circle></svg>
-          Event Timeline
-        </button>
-        <button class="tab" type="button" data-view="lane">
-          <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"></path><path d="M8 4v16M16 4v16"></path></svg>
-          Lane Timeline
-        </button>
+        <div class="tab-group">
+          <button class="tab active" type="button" data-view="actor">
+            <svg viewBox="0 0 24 24"><circle cx="6" cy="7" r="2.5"></circle><circle cx="18" cy="7" r="2.5"></circle><circle cx="12" cy="17" r="2.5"></circle><path d="M8.3 8.6l2.3 5.1M15.7 8.6l-2.3 5.1M8.6 7h6.8"></path></svg>
+            Actor Map
+          </button>
+          <button class="tab" type="button" data-view="event">
+            <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h10M4 18h16"></path><circle cx="18" cy="12" r="2"></circle></svg>
+            Event Timeline
+          </button>
+          <button class="tab" type="button" data-view="lane">
+            <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"></path><path d="M8 4v16M16 4v16"></path></svg>
+            Lane Timeline
+          </button>
+        </div>
+        <div class="status-legend" id="statusLegend" aria-label="Execution status legend"></div>
       </nav>
       <div class="canvas">
-        <div class="graph-layer">
-          <div class="empty-state">
-            <div class="empty-title">WORKFLOW RENDERING CANVAS</div>
-            <div class="empty-grid">
-              <div class="empty-node"><b>Actor Map</b><span>actor.parent_id graph</span></div>
-              <div class="empty-node"><b>Event Timeline</b><span>event.time / event_id chain</span></div>
-              <div class="empty-node"><b>Lane Timeline</b><span>actor_id grouped lanes</span></div>
-            </div>
+        <div class="graph-layer" id="graphLayer">
+          <div class="scene" id="scene">
+            <div class="lane-layer" id="laneLayer"></div>
+            <svg class="edge-layer" id="edgeLayer" xmlns="http://www.w3.org/2000/svg"></svg>
+            <div class="node-layer" id="nodeLayer"></div>
           </div>
         </div>
       </div>
@@ -376,17 +524,293 @@
     </section>
     <section class="detail-panel">
       <div class="detail-head">Raw Payload</div>
-      <pre>{
-  "workflow_id": "workflow.empty",
-  "actors": [],
-  "events": [],
-  "links": []
-}</pre>
+      <pre id="rawPanel">{}</pre>
     </section>
   </footer>
 
   <script>
     const AUTH_TOKEN_KEY = "ta_auth_token";
+    const graphLayer = document.getElementById("graphLayer");
+    const sceneEl = document.getElementById("scene");
+    const laneLayer = document.getElementById("laneLayer");
+    const edgeLayer = document.getElementById("edgeLayer");
+    const nodeLayer = document.getElementById("nodeLayer");
+    const selectedPanel = document.getElementById("selectedPanel");
+    const rawPanel = document.getElementById("rawPanel");
+    let activeView = "actor";
+    let activeSelection = "";
+
+    const workflow = {
+      workflow_id: "wf_workgraph_sample",
+      name: "WorkGraph rendering prototype",
+      status: "active",
+      actors: [
+        { id: "client", name: "Client Input", type: "user", role: "source", status: "done" },
+        { id: "router", name: "Workflow Router", type: "system", role: "route", parent_id: "client", status: "done" },
+        { id: "planner", name: "Planner Agent", type: "agent", role: "plan", parent_id: "router", status: "done" },
+        { id: "executor", name: "Executor Agent", type: "agent", role: "execute", parent_id: "planner", status: "active" },
+        { id: "tool", name: "Tool Runtime", type: "tool", role: "tool", parent_id: "executor", status: "blocked" },
+        { id: "audit", name: "Audit Agent", type: "agent", role: "audit", parent_id: "planner", status: "audit" },
+        { id: "guard", name: "Retry Guard", type: "system", role: "recovery", parent_id: "tool", status: "failed" },
+        { id: "delivery", name: "Delivery Channel", type: "external", role: "handoff", parent_id: "audit", status: "idle" }
+      ],
+      events: [
+        { id: "e_001", actor_id: "client", type: "start", time: "2026-05-30T22:00:00+08:00", summary: "用户提出工作流渲染需求", status: "done", payload: { input: "render workflow graphs" } },
+        { id: "e_002", actor_id: "router", type: "plan", time: "2026-05-30T22:01:20+08:00", parent_id: "e_001", summary: "选择 WorkGraph 三视图协议", status: "done", payload: { views: ["actor", "event", "lane"] } },
+        { id: "e_003", actor_id: "planner", type: "assign", time: "2026-05-30T22:02:10+08:00", parent_id: "e_002", summary: "生成 RenderScene 元素规范", status: "done", payload: { nodes: true, edges: true, lanes: true } },
+        { id: "e_004", actor_id: "executor", type: "execute", time: "2026-05-30T22:03:15+08:00", parent_id: "e_003", summary: "绘制 Actor Map 与事件节点", status: "active", payload: { renderer: "svg+html" } },
+        { id: "e_005", actor_id: "tool", type: "issue", time: "2026-05-30T22:04:00+08:00", parent_id: "e_004", summary: "等待真实事件源接入", status: "blocked", payload: { missing: "workflow database API" } },
+        { id: "e_006", actor_id: "guard", type: "recover", time: "2026-05-30T22:04:35+08:00", parent_id: "e_005", summary: "自动恢复路径未命中", status: "failed", payload: { retry: 1, reason: "no persisted event source" } },
+        { id: "e_007", actor_id: "audit", type: "audit", time: "2026-05-30T22:05:30+08:00", parent_id: "e_004", summary: "检查状态色和三视图一致性", status: "audit", payload: { status_palette: "purple/red/orange/green" } },
+        { id: "e_008", actor_id: "delivery", type: "done", time: "2026-05-30T22:06:20+08:00", parent_id: "e_007", summary: "原型待验收", status: "pending", payload: { next: "connect persisted events" } }
+      ],
+      links: [
+        { from: "e_001", to: "e_002", type: "causal" },
+        { from: "e_002", to: "e_003", type: "causal" },
+        { from: "e_003", to: "e_004", type: "handoff" },
+        { from: "e_004", to: "e_005", type: "block" },
+        { from: "e_005", to: "e_006", type: "failure" },
+        { from: "e_004", to: "e_007", type: "audit" },
+        { from: "e_007", to: "e_008", type: "handoff" }
+      ]
+    };
+
+    const statusRank = { active: 1, blocked: 2, failed: 3, audit: 4, done: 5, pending: 6, idle: 7 };
+    const statusLegend = [
+      ["active", "running"],
+      ["done", "done"],
+      ["blocked", "blocked"],
+      ["failed", "failed"],
+      ["audit", "audit"]
+    ];
+
+    function byTime(a, b) {
+      const time = String(a.time || "").localeCompare(String(b.time || ""));
+      return time || String(a.id || "").localeCompare(String(b.id || ""));
+    }
+
+    function edgeKind(type) {
+      if (type === "handoff") return "handoff";
+      if (type === "block") return "block";
+      if (type === "failure") return "failure";
+      if (type === "audit") return "audit";
+      if (type === "report") return "dashed";
+      return "arrow";
+    }
+
+    function layoutActorMap(data) {
+      const children = new Map();
+      data.actors.forEach((actor) => {
+        const parent = actor.parent_id || "__root";
+        if (!children.has(parent)) children.set(parent, []);
+        children.get(parent).push(actor);
+      });
+      for (const list of children.values()) {
+        list.sort((a, b) => (statusRank[a.status] || 99) - (statusRank[b.status] || 99) || a.name.localeCompare(b.name));
+      }
+      const nodes = [];
+      const edges = [];
+      const roots = children.get("__root") || [];
+      let cursor = 40;
+      function walk(actor, depth) {
+        const kids = children.get(actor.id) || [];
+        const yStart = cursor;
+        if (kids.length) kids.forEach((child) => walk(child, depth + 1));
+        const y = kids.length ? (yStart + cursor - 118) / 2 : cursor;
+        if (!kids.length) cursor += 118;
+        nodes.push({
+          id: `actor:${actor.id}`,
+          kind: "actor",
+          x: 46 + depth * 250,
+          y,
+          w: 190,
+          h: 68,
+          label: actor.name,
+          sublabel: `${actor.type} / ${actor.role || "unit"}`,
+          status: actor.status || "idle",
+          source_id: actor.id,
+          source: actor
+        });
+        kids.forEach((child) => edges.push({ id: `edge:${actor.id}:${child.id}`, from: `actor:${actor.id}`, to: `actor:${child.id}`, kind: "solid", source: { type: "structure", from: actor.id, to: child.id } }));
+      }
+      roots.forEach((actor) => walk(actor, 0));
+      const width = Math.max(920, ...nodes.map((node) => node.x + node.w + 80));
+      return { width, height: Math.max(560, cursor + 60), nodes, edges, lanes: [] };
+    }
+
+    function layoutEventTimeline(data) {
+      const events = [...data.events].sort(byTime);
+      const nodes = events.map((event, index) => ({
+        id: `event:${event.id}`,
+        kind: event.type === "done" ? "milestone" : "event",
+        x: 54 + index * 214,
+        y: 210 + (index % 2) * 92,
+        w: event.type === "done" ? 156 : 176,
+        h: event.type === "done" ? 42 : 66,
+        label: `${event.id} ${event.type}`,
+        sublabel: event.summary,
+        status: event.status || "pending",
+        source_id: event.id,
+        source: event
+      }));
+      const nodeIds = new Set(nodes.map((node) => node.id));
+      const parentEdges = events
+        .filter((event) => event.parent_id && nodeIds.has(`event:${event.parent_id}`))
+        .map((event) => ({ id: `parent:${event.parent_id}:${event.id}`, from: `event:${event.parent_id}`, to: `event:${event.id}`, kind: "arrow", source: { type: "parent", from: event.parent_id, to: event.id } }));
+      const linkEdges = data.links.map((link, index) => ({ id: `link:${index}:${link.from}:${link.to}`, from: `event:${link.from}`, to: `event:${link.to}`, kind: edgeKind(link.type), source: link }));
+      return { width: Math.max(980, 130 + events.length * 214), height: 520, nodes, edges: [...parentEdges, ...linkEdges], lanes: [] };
+    }
+
+    function layoutLaneTimeline(data) {
+      const actors = [...data.actors].sort((a, b) => (statusRank[a.status] || 99) - (statusRank[b.status] || 99) || a.name.localeCompare(b.name));
+      const actorIndex = new Map(actors.map((actor, index) => [actor.id, index]));
+      const events = [...data.events].sort(byTime);
+      const lanes = actors.map((actor, index) => ({ id: `lane:${actor.id}`, actor_id: actor.id, label: actor.name, x: 0, y: 42 + index * 88, w: Math.max(1120, 260 + events.length * 188), h: 76, source: actor }));
+      const nodes = events.map((event, index) => {
+        const laneIndex = actorIndex.get(event.actor_id) ?? 0;
+        return {
+          id: `event:${event.id}`,
+          kind: "event",
+          x: 220 + index * 188,
+          y: 53 + laneIndex * 88,
+          w: 158,
+          h: 54,
+          label: `${event.id} ${event.type}`,
+          sublabel: event.summary,
+          status: event.status || "pending",
+          source_id: event.id,
+          source: event
+        };
+      });
+      const edges = data.links.map((link, index) => ({ id: `lane-link:${index}:${link.from}:${link.to}`, from: `event:${link.from}`, to: `event:${link.to}`, kind: edgeKind(link.type), source: link }));
+      return { width: Math.max(1120, 300 + events.length * 188), height: Math.max(620, 150 + actors.length * 88), nodes, edges, lanes };
+    }
+
+    function sceneForView(view) {
+      if (view === "event") return layoutEventTimeline(workflow);
+      if (view === "lane") return layoutLaneTimeline(workflow);
+      return layoutActorMap(workflow);
+    }
+
+    function centerOf(node, side) {
+      if (side === "left") return { x: node.x, y: node.y + node.h / 2 };
+      if (side === "right") return { x: node.x + node.w, y: node.y + node.h / 2 };
+      if (side === "top") return { x: node.x + node.w / 2, y: node.y };
+      return { x: node.x + node.w / 2, y: node.y + node.h };
+    }
+
+    function edgePath(edge, nodeMap) {
+      const from = nodeMap.get(edge.from);
+      const to = nodeMap.get(edge.to);
+      if (!from || !to) return "";
+      const horizontal = Math.abs((to.x || 0) - (from.x || 0)) >= Math.abs((to.y || 0) - (from.y || 0));
+      const a = centerOf(from, horizontal ? "right" : "bottom");
+      const b = centerOf(to, horizontal ? "left" : "top");
+      if (edge.kind === "solid") return `M ${a.x} ${a.y} L ${b.x} ${b.y}`;
+      const c1x = horizontal ? a.x + Math.max(50, (b.x - a.x) * 0.46) : a.x;
+      const c1y = horizontal ? a.y : a.y + Math.max(42, (b.y - a.y) * 0.44);
+      const c2x = horizontal ? b.x - Math.max(50, (b.x - a.x) * 0.46) : b.x;
+      const c2y = horizontal ? b.y : b.y - Math.max(42, (b.y - a.y) * 0.44);
+      return `M ${a.x} ${a.y} C ${c1x} ${c1y}, ${c2x} ${c2y}, ${b.x} ${b.y}`;
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[ch]));
+    }
+
+    function renderScene(scene) {
+      sceneEl.style.width = `${scene.width}px`;
+      sceneEl.style.height = `${scene.height}px`;
+      laneLayer.style.width = `${scene.width}px`;
+      laneLayer.style.height = `${scene.height}px`;
+      nodeLayer.style.width = `${scene.width}px`;
+      nodeLayer.style.height = `${scene.height}px`;
+      edgeLayer.setAttribute("width", String(scene.width));
+      edgeLayer.setAttribute("height", String(scene.height));
+      edgeLayer.setAttribute("viewBox", `0 0 ${scene.width} ${scene.height}`);
+      const nodeMap = new Map(scene.nodes.map((node) => [node.id, node]));
+      laneLayer.innerHTML = scene.lanes.map((lane) => `
+        <div class="wg-lane" style="left:${lane.x || 0}px;top:${lane.y}px;width:${lane.w || scene.width}px;height:${lane.h}px">
+          <span class="wg-lane-label">${escapeHtml(lane.label)}</span>
+        </div>
+      `).join("");
+      edgeLayer.innerHTML = `
+        <defs>
+          <marker id="arrow-purple" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z" fill="#a78bfa"></path></marker>
+          <marker id="arrow-blue" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z" fill="#38bdf8"></path></marker>
+          <marker id="arrow-orange" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z" fill="#f59e0b"></path></marker>
+          <marker id="arrow-red" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z" fill="#fb7185"></path></marker>
+        </defs>
+        ${scene.edges.map((edge) => {
+          const path = edgePath(edge, nodeMap);
+          if (!path) return "";
+          return `<path class="wg-edge ${edge.kind || "arrow"}" data-edge-id="${escapeHtml(edge.id)}" data-from="${escapeHtml(edge.from)}" data-to="${escapeHtml(edge.to)}" d="${path}"></path>`;
+        }).join("")}
+      `;
+      nodeLayer.innerHTML = scene.nodes.map((node) => `
+        <button class="wg-node ${escapeHtml(node.kind)} status-${escapeHtml(node.status || "pending")}" data-node-id="${escapeHtml(node.id)}" style="left:${node.x}px;top:${node.y}px;--node-w:${node.w}px;--node-h:${node.h}px">
+          <span class="node-top">
+            <span class="node-label">${escapeHtml(node.label)}</span>
+            <span class="node-status">${escapeHtml(node.status || "pending")}</span>
+          </span>
+          <span class="node-sub">${escapeHtml(node.sublabel || node.source_id)}</span>
+        </button>
+      `).join("");
+      nodeLayer.querySelectorAll(".wg-node").forEach((button) => {
+        button.addEventListener("click", () => selectNode(button.dataset.nodeId || "", scene));
+        button.addEventListener("mouseenter", () => highlightRelated(button.dataset.nodeId || "", true));
+        button.addEventListener("mouseleave", () => highlightRelated(button.dataset.nodeId || "", false));
+      });
+      if (!activeSelection && scene.nodes[0]) selectNode(scene.nodes[0].id, scene);
+    }
+
+    function highlightRelated(nodeId, active) {
+      edgeLayer.querySelectorAll(".wg-edge").forEach((edge) => {
+        const related = edge.dataset.from === nodeId || edge.dataset.to === nodeId;
+        edge.classList.toggle("active", Boolean(active && related));
+      });
+    }
+
+    function selectNode(nodeId, scene) {
+      activeSelection = nodeId;
+      nodeLayer.querySelectorAll(".wg-node").forEach((node) => node.classList.toggle("selected", node.dataset.nodeId === nodeId));
+      edgeLayer.querySelectorAll(".wg-edge").forEach((edge) => {
+        const related = edge.dataset.from === nodeId || edge.dataset.to === nodeId;
+        edge.classList.toggle("selected-edge", related);
+      });
+      const node = scene.nodes.find((item) => item.id === nodeId);
+      selectedPanel.textContent = JSON.stringify(node ? { id: node.id, kind: node.kind, source_id: node.source_id, status: node.status } : null, null, 2);
+      rawPanel.textContent = JSON.stringify(node?.source || workflow, null, 2);
+    }
+
+    function renderLegend() {
+      const counts = new Map();
+      [...workflow.actors, ...workflow.events].forEach((item) => {
+        const status = String(item.status || "pending");
+        counts.set(status, (counts.get(status) || 0) + 1);
+      });
+      document.getElementById("statusLegend").innerHTML = statusLegend.map(([status, label]) => `
+        <span class="legend-item" data-status="${escapeHtml(status)}">
+          <span class="legend-dot"></span>
+          ${escapeHtml(label)} ${counts.get(status) || 0}
+        </span>
+      `).join("");
+    }
+
+    function render(view = activeView) {
+      activeView = view;
+      const scene = sceneForView(view);
+      document.getElementById("workflowName").textContent = workflow.name;
+      document.getElementById("workflowMeta").textContent = `status=${workflow.status} · events=${workflow.events.length}`;
+      document.getElementById("actorCount").textContent = String(workflow.actors.length);
+      document.getElementById("eventCount").textContent = String(workflow.events.length);
+      document.getElementById("linkCount").textContent = String(workflow.links.length);
+      document.getElementById("laneCount").textContent = String(view === "lane" ? workflow.actors.length : 0);
+      activeSelection = "";
+      renderLegend();
+      renderScene(scene);
+    }
+
     function getAuthToken() {
       const current = String(sessionStorage.getItem(AUTH_TOKEN_KEY) || "").trim();
       if (current) return current;
@@ -411,12 +835,13 @@
       tab.addEventListener("click", () => {
         document.querySelectorAll(".tab").forEach((node) => node.classList.remove("active"));
         tab.classList.add("active");
-        document.getElementById("selectedPanel").textContent = JSON.stringify({ view: tab.dataset.view }, null, 2);
+        render(tab.dataset.view || "actor");
       });
     });
     document.getElementById("refreshBtn")?.addEventListener("click", () => {
-      document.getElementById("selectedPanel").textContent = JSON.stringify({ refreshed_at: new Date().toISOString() }, null, 2);
+      render(activeView);
     });
+    render("actor");
     ensureAuth();
   </script>
 </body>

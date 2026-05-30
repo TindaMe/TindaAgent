@@ -85,6 +85,9 @@ async function main() {
 
     const workgraphPage = await request("/workgraph", { headers });
     if (!String(workgraphPage || "").includes("WORKGRAPH")) throw new Error("workgraph page did not render");
+    if (!String(workgraphPage || "").includes("layoutLaneTimeline") || !String(workgraphPage || "").includes("status-failed")) {
+      throw new Error("workgraph render prototype was incomplete");
+    }
 
     const logFiles = await request("/logs/files", { headers });
     if (!Array.isArray(logFiles.files) || !logFiles.files.some((file: any) => file.name === "audit_events" && file.source === "sqlite")) throw new Error("sqlite audit source was not listed");

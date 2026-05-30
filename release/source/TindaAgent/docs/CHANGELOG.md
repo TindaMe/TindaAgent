@@ -6,6 +6,18 @@
 
 ## Unreleased
 
+## v1.12.12 - 2026-05-30
+
+### Added
+
+- **WorkGraph 渲染原型** — `/workgraph` 从空白骨架升级为本地可交互渲染：支持 Actor Map、Event Timeline、Lane Timeline 三种视图。
+- **执行状态颜色** — WorkGraph 节点与连线新增 running、done、blocked、failed、audit 状态表达，黑紫主视觉下保留红/橙/绿执行反馈。
+- **节点详情联动** — 点击节点会高亮相关连线并在底部保真展示当前节点结构化 payload，便于后续接入真实工作流事件源。
+
+### Fixed
+
+- **WorkGraph 烟测覆盖** — HTTP 功能烟测新增 WorkGraph 渲染原型断言，避免页面回退为空画布时测试仍误通过。
+
 ## v1.12.11 - 2026-05-30
 
 ### Added
