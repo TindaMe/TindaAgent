@@ -62,6 +62,53 @@ const renderedBeforeCompress = store.frontendMessages(sid).entries;
 const thinkingEntry = renderedBeforeCompress.find((entry) => entry.role === "assistant" && Array.isArray(entry.content) && entry.content.some((step: any) => step.kind === "thinking"));
 assert(thinkingEntry?.content?.some((step: any) => step.kind === "thinking" && String(step.data || "").includes("思考一")), "thinking substep not preserved for frontend reload");
 
+const chronologicalSid = "chronological_order";
+writeJson(path.join(runtime, "messages", `${chronologicalSid}.json`), {
+  "1": {
+    role: "assistant",
+    id: "late_assistant",
+    type: "assistant_message",
+    display_target: "chat",
+    context_policy: "include",
+    content: {
+      "10": { text: "后写入但时间较晚" },
+      "2": { thinking: "乱序思考模块" }
+    },
+    created_at: "2026-05-30T00:00:03.000Z"
+  },
+  "2": {
+    role: "user",
+    id: "early_user",
+    type: "user_message",
+    display_target: "chat",
+    context_policy: "include",
+    content: { "3": { user: "时间最早" } },
+    created_at: "2026-05-30T00:00:01.000Z"
+  },
+  "3": {
+    role: "assistant",
+    id: "middle_assistant",
+    type: "assistant_message",
+    display_target: "chat",
+    context_policy: "include",
+    content: { "1": { text: "时间居中" } },
+    created_at: "2026-05-30T00:00:02.000Z"
+  }
+});
+const chronologicalStore = new SessionStore(runtime, legacy);
+const chronologicalLoaded = chronologicalStore.loadMessages(chronologicalSid);
+assert(chronologicalLoaded["1"]?.id === "early_user", "messages were not rekeyed by created_at ascending");
+assert(chronologicalLoaded["2"]?.id === "middle_assistant", "middle timestamp message was not stored second");
+assert(chronologicalLoaded["3"]?.id === "late_assistant", "latest timestamp message was not stored last");
+assert(JSON.stringify(Object.keys(chronologicalLoaded["3"]?.content || {})) === JSON.stringify(["1", "2"]), "assistant content modules were not rekeyed sequentially");
+const chronologicalFrontend = chronologicalStore.frontendMessages(chronologicalSid).entries;
+assert(chronologicalFrontend.map((entry: any) => entry.id).join(",") === "early_user,middle_assistant,late_assistant", "frontend messages were not rendered in chronological order");
+fs.rmSync(path.join(runtime, "messages", `${chronologicalSid}.json`), { force: true });
+const chronologicalSqlStore = new SessionStore(runtime, legacy);
+const chronologicalSqlLoaded = chronologicalSqlStore.loadMessages(chronologicalSid);
+assert(chronologicalSqlLoaded["1"]?.id === "early_user", "sqlite mirror did not preserve chronological message order");
+assert(JSON.stringify(Object.keys(chronologicalSqlLoaded["3"]?.content || {})) === JSON.stringify(["1", "2"]), "sqlite mirror did not preserve numeric content module keys");
+
 const compressed = store.compressContext(sid, "摘要：第一轮到第二轮。");
 assert(compressed.compressed === true, "first compression did not run");
 const effective = store.frontendMessages(sid).entries;

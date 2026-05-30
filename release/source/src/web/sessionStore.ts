@@ -10,6 +10,7 @@ import {
   effectiveStoreDict,
   filterRawChatEntries,
   isTransientAssistantDraft,
+  normalizeChronologicalStoreDict,
   normalizeStoreDict,
   normalizeStoreEntry,
   storeDictToAgentMessages,
@@ -181,7 +182,7 @@ export class SessionStore {
     }
     const [withoutDrafts, removedDrafts] = stripTransientAssistantDrafts(raw);
     if (removedDrafts) raw = withoutDrafts;
-    const [normalized, changed] = normalizeStoreDict(raw);
+    const [normalized, changed] = normalizeChronologicalStoreDict(raw);
     if (changed || removedDrafts) this.writeMessages(sid, normalized);
     return normalized;
   }
@@ -193,8 +194,9 @@ export class SessionStore {
   writeMessages(sessionId: string, data: StoreDict): void {
     const sid = safeId(sessionId);
     if (!sid) throw new Error("session_id invalid");
-    writeJson(this.messagesPath(sid), data);
-    this.sql.writeMessages(sid, data);
+    const [ordered] = normalizeChronologicalStoreDict(data);
+    writeJson(this.messagesPath(sid), ordered);
+    this.sql.writeMessages(sid, ordered);
     const meta = this.sql.getSession(sid);
     if (meta) this.syncMetaToJson(meta);
   }

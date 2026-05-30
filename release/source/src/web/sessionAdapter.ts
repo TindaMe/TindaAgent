@@ -35,6 +35,21 @@ function sortedNumericKeys(obj: Record<string, unknown> | null | undefined): str
     .sort((a, b) => Number(a) - Number(b));
 }
 
+function timestampMs(value: unknown): number | null {
+  const text = textOf(value).trim();
+  if (!text) return null;
+  const ms = new Date(text).getTime();
+  return Number.isFinite(ms) ? ms : null;
+}
+
+function entryOrderMs(entry: StoreEntry): number | null {
+  for (const value of [entry.created_at, entry.updated_at, entry.ts, entry.time]) {
+    const ms = timestampMs(value);
+    if (ms !== null) return ms;
+  }
+  return null;
+}
+
 function stableHash(payload: unknown): string {
   return crypto.createHash("sha1").update(JSON.stringify(payload), "utf8").digest("hex").slice(0, 12);
 }
@@ -250,7 +265,7 @@ export function normalizeStoreEntry(raw: StoreEntry): StoreEntry | null {
   const role = textOf(raw.role).trim();
   if (!["user", "assistant", "system"].includes(role)) return null;
   const id = textOf(raw.id || makeMessageId());
-  const createdAt = textOf(raw.created_at || raw.ts || nowIso());
+  const createdAt = textOf(raw.created_at || raw.updated_at || raw.ts || raw.time || nowIso());
   const base: StoreEntry = {
     ...raw,
     role,
@@ -335,6 +350,28 @@ export function normalizeStoreDict(raw: StoreDict): [StoreDict, boolean] {
   return [out, changed];
 }
 
+export function normalizeChronologicalStoreDict(raw: StoreDict): [StoreDict, boolean] {
+  const [normalized, normalizedChanged] = normalizeStoreDict(raw || {});
+  const rows = sortedNumericKeys(normalized).map((key) => ({
+    key,
+    seq: Number(key),
+    entry: normalized[key],
+    ms: entryOrderMs(normalized[key])
+  }));
+  rows.sort((a, b) => {
+    if (a.ms !== null && b.ms !== null && a.ms !== b.ms) return a.ms - b.ms;
+    return a.seq - b.seq;
+  });
+  const out: StoreDict = {};
+  let changed = normalizedChanged;
+  rows.forEach((row, idx) => {
+    const nextKey = String(idx + 1);
+    out[nextKey] = row.entry;
+    if (nextKey !== row.key) changed = true;
+  });
+  return [out, changed];
+}
+
 function entryType(entry: StoreEntry): string {
   const role = textOf(entry.role);
   return textOf(entry.type || (entry.is_summary ? "summary" : role === "user" ? "user_message" : role === "assistant" ? "assistant_message" : "system_notice"));
@@ -349,6 +386,8 @@ function entryBase(entry: StoreEntry, seq: number) {
     type,
     display_target: textOf(entry.display_target || "chat"),
     context_policy: textOf(entry.context_policy || (type === "summary" ? "summary" : role === "system" ? "exclude" : "include")),
+    created_at: textOf(entry.created_at),
+    updated_at: textOf(entry.updated_at),
     seq,
     source_seq: Number(entry.source_seq || seq),
     ...(entry.turn_id ? { turn_id: textOf(entry.turn_id) } : {})

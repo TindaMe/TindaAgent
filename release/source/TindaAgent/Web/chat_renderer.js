@@ -10,6 +10,30 @@
   var activeRenderToken = 0;
   var assistantTurnBubbleById = new Map();
 
+  function entryTimeMs(entry) {
+    if (!entry) return null;
+    var values = [entry.created_at, entry.updated_at, entry.ts, entry.time];
+    for (var i = 0; i < values.length; i++) {
+      var raw = values[i];
+      if (!raw) continue;
+      var ms = new Date(String(raw)).getTime();
+      if (Number.isFinite(ms)) return ms;
+    }
+    return null;
+  }
+
+  function sortEntriesChronologically(entries) {
+    return (Array.isArray(entries) ? entries.slice() : []).sort(function(a, b) {
+      var as = Number(a && a.seq || 0);
+      var bs = Number(b && b.seq || 0);
+      if (as > 0 && bs > 0 && as !== bs) return as - bs;
+      var am = entryTimeMs(a);
+      var bm = entryTimeMs(b);
+      if (am !== null && bm !== null && am !== bm) return am - bm;
+      return as - bs;
+    });
+  }
+
   function nextFrame() {
     return new Promise(function (resolve) {
       requestAnimationFrame(resolve);
@@ -390,9 +414,10 @@
       messagesEl.dataset.hydrating = "1";
     }
     try {
-      for (var i = 0; i < entries.length; i++) {
+      var orderedEntries = sortEntriesChronologically(entries);
+      for (var i = 0; i < orderedEntries.length; i++) {
         if (token !== activeRenderToken) return false;
-        var entry = entries[i] || {};
+        var entry = orderedEntries[i] || {};
         var target = String(entry.display_target || "chat").trim();
         if (target && target !== "chat") continue;
         var type = String(entry.type || "").trim();
