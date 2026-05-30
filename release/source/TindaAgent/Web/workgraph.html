@@ -36,7 +36,7 @@
     }
     body {
       display: grid;
-      grid-template-rows: 56px 1fr 180px;
+      grid-template-rows: 56px 1fr 148px;
     }
     header {
       display: flex;
@@ -112,7 +112,7 @@
     main {
       min-height: 0;
       display: grid;
-      grid-template-columns: 280px 1fr;
+      grid-template-columns: 264px 1fr;
     }
     aside {
       min-width: 0;
@@ -223,6 +223,9 @@
     .status-legend {
       gap: 10px;
       overflow: hidden;
+      justify-content: flex-end;
+      flex-wrap: wrap;
+      row-gap: 4px;
     }
     .legend-item {
       display: inline-flex;
@@ -260,7 +263,8 @@
       position: absolute;
       inset: 0;
       overflow: auto;
-      padding: 22px;
+      padding: 18px 20px;
+      scrollbar-color: rgba(196, 181, 253, 0.55) rgba(17, 11, 29, 0.88);
     }
     .scene {
       position: relative;
@@ -302,6 +306,22 @@
       font-weight: 900;
       letter-spacing: 0.08em;
     }
+    .wg-axis {
+      position: absolute;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, rgba(167, 139, 250, 0.44), rgba(56, 189, 248, 0.30), transparent);
+      box-shadow: 0 0 24px rgba(139, 92, 246, 0.18);
+      pointer-events: none;
+    }
+    .wg-axis-label {
+      position: absolute;
+      left: 0;
+      top: -23px;
+      color: rgba(196, 181, 253, 0.72);
+      font-size: 10px;
+      font-weight: 950;
+      letter-spacing: 0.12em;
+    }
     .wg-node {
       position: absolute;
       width: var(--node-w);
@@ -315,7 +335,7 @@
       align-items: flex-start;
       justify-content: center;
       gap: 5px;
-      padding: 9px 10px;
+      padding: 10px 11px;
       text-align: left;
       cursor: pointer;
       box-shadow: 0 14px 34px rgba(0, 0, 0, 0.18);
@@ -346,7 +366,7 @@
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
-      font-size: 12px;
+      font-size: 12.5px;
       font-weight: 950;
       letter-spacing: 0.02em;
     }
@@ -365,11 +385,13 @@
       width: 100%;
       min-width: 0;
       overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+      white-space: normal;
       color: var(--text-dim);
-      font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Consolas, monospace;
-      font-size: 10.5px;
+      font-size: 11px;
+      line-height: 1.32;
     }
     .wg-node.status-active {
       border-color: rgba(167, 139, 250, 0.70);
@@ -408,9 +430,9 @@
       border-top: 1px solid rgba(196, 181, 253, 0.12);
       background: rgba(8, 5, 18, 0.82);
       display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 12px;
-      padding: 12px;
+      grid-template-columns: 0.82fr 1.18fr;
+      gap: 10px;
+      padding: 10px 12px 12px;
     }
     .detail-panel {
       min-width: 0;
@@ -477,7 +499,7 @@
       <div class="section-title">Workflows</div>
       <div class="workflow-card active">
         <div class="workflow-name" id="workflowName">workflow.sample</div>
-        <div class="workflow-meta" id="workflowMeta">status=active · events=7</div>
+        <div class="workflow-meta" id="workflowMeta">status=active · events=8</div>
       </div>
       <div class="metrics">
         <div class="metric"><span>ACTORS</span><strong id="actorCount">0</strong></div>
@@ -539,6 +561,7 @@
     const rawPanel = document.getElementById("rawPanel");
     let activeView = "actor";
     let activeSelection = "";
+    let resizeTimer = 0;
 
     const workflow = {
       workflow_id: "wf_workgraph_sample",
@@ -598,6 +621,16 @@
       return "arrow";
     }
 
+    function graphViewportWidth() {
+      return Math.max(760, (graphLayer?.clientWidth || 1180) - 40);
+    }
+
+    function fittedSpacing(count, nodeWidth, start, end, min, max) {
+      if (count <= 1) return max;
+      const available = graphViewportWidth() - start - end - nodeWidth;
+      return Math.max(min, Math.min(max, Math.floor(available / (count - 1))));
+    }
+
     function layoutActorMap(data) {
       const children = new Map();
       data.actors.forEach((actor) => {
@@ -621,10 +654,10 @@
         nodes.push({
           id: `actor:${actor.id}`,
           kind: "actor",
-          x: 46 + depth * 250,
+          x: 38 + depth * 236,
           y,
-          w: 190,
-          h: 68,
+          w: 208,
+          h: 72,
           label: actor.name,
           sublabel: `${actor.type} / ${actor.role || "unit"}`,
           status: actor.status || "idle",
@@ -634,21 +667,25 @@
         kids.forEach((child) => edges.push({ id: `edge:${actor.id}:${child.id}`, from: `actor:${actor.id}`, to: `actor:${child.id}`, kind: "solid", source: { type: "structure", from: actor.id, to: child.id } }));
       }
       roots.forEach((actor) => walk(actor, 0));
-      const width = Math.max(920, ...nodes.map((node) => node.x + node.w + 80));
+      const width = Math.max(graphViewportWidth(), ...nodes.map((node) => node.x + node.w + 72));
       return { width, height: Math.max(560, cursor + 60), nodes, edges, lanes: [] };
     }
 
     function layoutEventTimeline(data) {
       const events = [...data.events].sort(byTime);
+      const start = 38;
+      const nodeW = 196;
+      const nodeH = 76;
+      const spacing = fittedSpacing(events.length, nodeW, start, 38, 166, 212);
       const nodes = events.map((event, index) => ({
         id: `event:${event.id}`,
-        kind: event.type === "done" ? "milestone" : "event",
-        x: 54 + index * 214,
-        y: 210 + (index % 2) * 92,
-        w: event.type === "done" ? 156 : 176,
-        h: event.type === "done" ? 42 : 66,
-        label: `${event.id} ${event.type}`,
-        sublabel: event.summary,
+        kind: "event",
+        x: start + index * spacing,
+        y: 112 + (index % 2) * 112,
+        w: nodeW,
+        h: nodeH,
+        label: event.id,
+        sublabel: `${event.type} · ${event.summary}`,
         status: event.status || "pending",
         source_id: event.id,
         source: event
@@ -658,32 +695,44 @@
         .filter((event) => event.parent_id && nodeIds.has(`event:${event.parent_id}`))
         .map((event) => ({ id: `parent:${event.parent_id}:${event.id}`, from: `event:${event.parent_id}`, to: `event:${event.id}`, kind: "arrow", source: { type: "parent", from: event.parent_id, to: event.id } }));
       const linkEdges = data.links.map((link, index) => ({ id: `link:${index}:${link.from}:${link.to}`, from: `event:${link.from}`, to: `event:${link.to}`, kind: edgeKind(link.type), source: link }));
-      return { width: Math.max(980, 130 + events.length * 214), height: 520, nodes, edges: [...parentEdges, ...linkEdges], lanes: [] };
+      const width = Math.max(graphViewportWidth(), start + Math.max(0, events.length - 1) * spacing + nodeW + 38);
+      return {
+        width,
+        height: 420,
+        nodes,
+        edges: [...parentEdges, ...linkEdges],
+        lanes: [{ id: "axis:time", kind: "axis", label: "TIME ORDER", x: 22, y: 205, w: width - 44, h: 1 }]
+      };
     }
 
     function layoutLaneTimeline(data) {
       const actors = [...data.actors].sort((a, b) => (statusRank[a.status] || 99) - (statusRank[b.status] || 99) || a.name.localeCompare(b.name));
       const actorIndex = new Map(actors.map((actor, index) => [actor.id, index]));
       const events = [...data.events].sort(byTime);
-      const lanes = actors.map((actor, index) => ({ id: `lane:${actor.id}`, actor_id: actor.id, label: actor.name, x: 0, y: 42 + index * 88, w: Math.max(1120, 260 + events.length * 188), h: 76, source: actor }));
+      const nodeW = 182;
+      const nodeH = 64;
+      const start = 210;
+      const spacing = fittedSpacing(events.length, nodeW, start, 42, 150, 184);
+      const width = Math.max(graphViewportWidth(), start + Math.max(0, events.length - 1) * spacing + nodeW + 42);
+      const lanes = actors.map((actor, index) => ({ id: `lane:${actor.id}`, actor_id: actor.id, label: actor.name, x: 0, y: 38 + index * 78, w: width, h: 66, source: actor }));
       const nodes = events.map((event, index) => {
         const laneIndex = actorIndex.get(event.actor_id) ?? 0;
         return {
           id: `event:${event.id}`,
           kind: "event",
-          x: 220 + index * 188,
-          y: 53 + laneIndex * 88,
-          w: 158,
-          h: 54,
-          label: `${event.id} ${event.type}`,
-          sublabel: event.summary,
+          x: start + index * spacing,
+          y: 44 + laneIndex * 78,
+          w: nodeW,
+          h: nodeH,
+          label: event.id,
+          sublabel: `${event.type} · ${event.summary}`,
           status: event.status || "pending",
           source_id: event.id,
           source: event
         };
       });
       const edges = data.links.map((link, index) => ({ id: `lane-link:${index}:${link.from}:${link.to}`, from: `event:${link.from}`, to: `event:${link.to}`, kind: edgeKind(link.type), source: link }));
-      return { width: Math.max(1120, 300 + events.length * 188), height: Math.max(620, 150 + actors.length * 88), nodes, edges, lanes };
+      return { width, height: Math.max(560, 130 + actors.length * 78), nodes, edges, lanes };
     }
 
     function sceneForView(view) {
@@ -729,11 +778,20 @@
       edgeLayer.setAttribute("height", String(scene.height));
       edgeLayer.setAttribute("viewBox", `0 0 ${scene.width} ${scene.height}`);
       const nodeMap = new Map(scene.nodes.map((node) => [node.id, node]));
-      laneLayer.innerHTML = scene.lanes.map((lane) => `
-        <div class="wg-lane" style="left:${lane.x || 0}px;top:${lane.y}px;width:${lane.w || scene.width}px;height:${lane.h}px">
-          <span class="wg-lane-label">${escapeHtml(lane.label)}</span>
-        </div>
-      `).join("");
+      laneLayer.innerHTML = scene.lanes.map((lane) => {
+        if (lane.kind === "axis") {
+          return `
+            <div class="wg-axis" style="left:${lane.x || 0}px;top:${lane.y}px;width:${lane.w || scene.width}px">
+              <span class="wg-axis-label">${escapeHtml(lane.label)}</span>
+            </div>
+          `;
+        }
+        return `
+          <div class="wg-lane" style="left:${lane.x || 0}px;top:${lane.y}px;width:${lane.w || scene.width}px;height:${lane.h}px">
+            <span class="wg-lane-label">${escapeHtml(lane.label)}</span>
+          </div>
+        `;
+      }).join("");
       edgeLayer.innerHTML = `
         <defs>
           <marker id="arrow-purple" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z" fill="#a78bfa"></path></marker>
@@ -840,6 +898,10 @@
     });
     document.getElementById("refreshBtn")?.addEventListener("click", () => {
       render(activeView);
+    });
+    window.addEventListener("resize", () => {
+      window.clearTimeout(resizeTimer);
+      resizeTimer = window.setTimeout(() => render(activeView), 120);
     });
     render("actor");
     ensureAuth();

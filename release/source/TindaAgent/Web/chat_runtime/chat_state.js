@@ -94,7 +94,7 @@
   };
   const USER_ADMIN_PERM = 511;
   const AUTH_TOKEN_KEY = "ta_auth_token";
-  const VERSION_FALLBACK = "v1.12.12";
+  const VERSION_FALLBACK = "v1.12.13";
   const SETTINGS_KEY = "tinda_settings";
   const DEFAULT_QUICK_BUTTONS = ["model","stream","terminal","compress"];
   const CONTEXT_TOKEN_DEFAULT = 16000;
