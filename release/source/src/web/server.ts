@@ -4,7 +4,7 @@ import net from "node:net";
 import path from "node:path";
 import crypto from "node:crypto";
 import { Agent, LlmClient, latestLlmRequest, type ChatMessage } from "../ai/agent.js";
-import { auditEvent, auditEventToLegacyLine, getAuditEventById, listAuditSources, readAuditEvents } from "../core/audit.js";
+import { auditEvent, getAuditLogEventById, listAuditSources, readAuditLogLines } from "../core/audit.js";
 import { loadRuntimeEnv } from "../core/env.js";
 import { appVersion, dataRoot, ensureRuntimeDirs, logRoot, projectRoot, sqliteDbFile, webRoot } from "../core/paths.js";
 import { nowIso, readJson, safeId, textOf, writeJson } from "../core/json.js";
@@ -1126,16 +1126,16 @@ app.get("/logs/read", (req, res) => {
   const sources = listAuditSources();
   if (!sources.some((file) => file.name === name)) return jsonError(res, 404, "file not found");
   const limit = Math.max(20, Math.min(Number(req.query.lines || 300), 2000));
-  const rows = readAuditEvents(limit, name);
-  const lines = rows.reverse().map(auditEventToLegacyLine);
-  res.json({ ok: true, file: name || "audit_events", line_count: lines.length, truncated: false, lines, source: "sqlite" });
+  const data = readAuditLogLines(name, limit);
+  res.json({ ok: true, file: name || "audit_events", line_count: data.lines.length, truncated: data.truncated, lines: data.lines, source: data.source });
 });
 app.get("/logs/by-id", (req, res) => {
   requirePublicRead(req);
   const id = Number.parseInt(String(req.query.id || "").replace(/^tc_/, ""), 10);
   if (!Number.isFinite(id)) return jsonError(res, 400, "invalid id");
-  const row = getAuditEventById(id);
+  const row = getAuditLogEventById(id);
   if (!row) return res.status(404).json({ ok: false, error: "id not found", id, source: "sqlite" });
+  const source = row.source_file === "sqlite" || row.source === "runtime" ? "sqlite" : row.source || "sqlite";
   res.json({
     ok: true,
     id,
@@ -1154,9 +1154,9 @@ app.get("/logs/by-id", (req, res) => {
       extra: row.extra
     },
     source_file: row.source_file || "audit_events",
-    source_path: sqliteDbFile(),
-    source_line: row.id,
-    source: "sqlite"
+    source_path: row.source_path || sqliteDbFile(),
+    source_line: row.source_line || row.id,
+    source
   });
 });
 

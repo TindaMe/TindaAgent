@@ -6,6 +6,15 @@
 
 ## Unreleased
 
+## v1.12.9 - 2026-05-30
+
+### Fixed
+
+- **旧日志文件恢复可查** — 日志页重新列出 runtime `log` 目录下的 `web.log`、`permission.log`、`ai.log`、`llm_request.jsonl`、历史 `.gz` 归档等旧日志文件，不再只显示 SQLite 和 `total.jsonl`。
+- **旧日志按需尾读** — `/logs/read` 对旧文件改为按需尾部读取，SQLite 仍作为主审计日志存储，避免首屏全量导入大日志导致卡顿。
+- **按 ID 查询兼容旧文件** — `/logs/by-id` 在 SQLite 未命中时回退扫描旧审计日志文件，恢复旧 Python 日志 ID 查询能力。
+- **日志烟测覆盖旧文件** — HTTP 功能烟测新增 legacy 日志列表和读取断言，防止日志页再次漏列旧文件。
+
 ## v1.12.8 - 2026-05-30
 
 ### Changed

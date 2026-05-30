@@ -92,6 +92,14 @@ async function main() {
     if (!idMatch) throw new Error("sqlite audit tail did not expose numeric ids");
     const logById = await request(`/logs/by-id?id=${idMatch[1]}`, { headers });
     if (!logById.event?.id || Number(logById.id) !== Number(idMatch[1]) || logById.source !== "sqlite") throw new Error("sqlite audit id lookup failed");
+    const legacyNames = new Set(logFiles.files.map((file: any) => String(file?.name || "")));
+    if (!["web.log", "permission.log", "ai.log", "llm_request.jsonl"].some((name) => legacyNames.has(name))) throw new Error("legacy log files were not listed");
+    const legacyLog = logFiles.files.find((file: any) => ["total.jsonl", "web.log", "permission.log", "ai.log"].includes(String(file?.name || "")));
+    if (legacyLog?.name) {
+      const legacyParams = new URLSearchParams({ file: String(legacyLog.name), lines: "20" });
+      const legacyTail = await request(`/logs/read?${legacyParams.toString()}`, { headers });
+      if (!Array.isArray(legacyTail.lines) || legacyTail.source !== "legacy_file") throw new Error("legacy log file tail was not readable");
+    }
 
     const cfg = await request(`/sessions/${sid}/config`, { method: "PATCH", headers, body: JSON.stringify({ max_context_tokens: 32000 }) });
     if (cfg.config?.token_limit !== 32000) throw new Error("session config did not persist token limit");
