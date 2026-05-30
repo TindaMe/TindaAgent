@@ -83,6 +83,9 @@ async function main() {
     const webSettingsReload = await request("/web-settings", { headers });
     if (webSettingsReload.quick_buttons?.join(",") !== "logs,model,stream") throw new Error("web settings quick button order did not reload");
 
+    const workgraphPage = await request("/workgraph", { headers });
+    if (!String(workgraphPage || "").includes("WORKGRAPH")) throw new Error("workgraph page did not render");
+
     const logFiles = await request("/logs/files", { headers });
     if (!Array.isArray(logFiles.files) || !logFiles.files.some((file: any) => file.name === "audit_events" && file.source === "sqlite")) throw new Error("sqlite audit source was not listed");
     const logTail = await request("/logs/read?file=audit_events&lines=40", { headers });

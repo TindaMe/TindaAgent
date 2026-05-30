@@ -6,6 +6,13 @@
 
 ## Unreleased
 
+## v1.12.11 - 2026-05-30
+
+### Added
+
+- **HOME WorkGraph 入口** — HOME 登录后新增浅紫色 `WORKGRAPH` 按钮，进入独立工作流渲染工作台。
+- **WorkGraph 空白画布** — 新增 `/workgraph` 页面，提供 Actor Map、Event Timeline、Lane Timeline 三视图骨架和黑紫色控制台视觉基底。
+
 ## v1.12.10 - 2026-05-30
 
 ### Fixed

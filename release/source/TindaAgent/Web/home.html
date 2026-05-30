@@ -882,6 +882,29 @@
       color: var(--text);
       transform: translateY(-2px);
     }
+    .btn-workgraph {
+      border-color: #c4b5fd;
+      background: #f1edff;
+      color: #6d28d9;
+      box-shadow: 0 8px 24px rgba(124, 58, 237, 0.14);
+    }
+    .btn-workgraph:hover {
+      border-color: #a78bfa;
+      color: #5b21b6;
+      background: #ede9fe;
+      box-shadow: 0 14px 34px rgba(124, 58, 237, 0.18);
+    }
+    [data-theme="dark"] .btn-workgraph {
+      border-color: rgba(196, 181, 253, 0.42);
+      background: rgba(167, 139, 250, 0.16);
+      color: #ddd6fe;
+      box-shadow: 0 10px 30px rgba(124, 58, 237, 0.18);
+    }
+    [data-theme="dark"] .btn-workgraph:hover {
+      border-color: rgba(221, 214, 254, 0.62);
+      background: rgba(167, 139, 250, 0.22);
+      color: #f5f3ff;
+    }
 
     /* ── Modal overlay ── */
     .modal-overlay {
@@ -1404,6 +1427,28 @@
     .version-btn.secondary {
       background: var(--ios-glass-strong);
       color: var(--text-dim);
+    }
+    .btn-admin.btn-workgraph {
+      border-color: rgba(196, 181, 253, 0.82);
+      background: rgba(241, 237, 255, 0.88);
+      color: #6d28d9;
+      box-shadow: 0 12px 30px rgba(124, 58, 237, 0.13), inset 1px 1px 0 rgba(255,255,255,0.82), inset -1px -1px 0 rgba(124,58,237,0.10);
+    }
+    [data-theme="dark"] .btn-admin.btn-workgraph {
+      border-color: rgba(196, 181, 253, 0.42);
+      background: rgba(167, 139, 250, 0.16);
+      color: #ddd6fe;
+      box-shadow: 0 12px 30px rgba(124, 58, 237, 0.16), inset 1px 1px 0 rgba(255,255,255,0.08);
+    }
+    .btn-admin.btn-workgraph:hover {
+      color: #5b21b6;
+      border-color: rgba(167, 139, 250, 0.92);
+      background: rgba(237, 233, 254, 0.94);
+    }
+    [data-theme="dark"] .btn-admin.btn-workgraph:hover {
+      color: #f5f3ff;
+      border-color: rgba(221, 214, 254, 0.62);
+      background: rgba(167, 139, 250, 0.22);
     }
     .btn-chat:hover,
     .btn-admin:hover,
@@ -2091,7 +2136,7 @@
     <span class="brand-name">TindaAgent</span>
   </div>
   <div class="header-actions">
-    <button id="versionBadge" type="button" class="version-badge version-badge-btn" title="点击选择版本">v1.12.10</button>
+    <button id="versionBadge" type="button" class="version-badge version-badge-btn" title="点击选择版本">v1.12.11</button>
     <button id="themeToggle" class="theme-toggle" type="button" aria-label="切换深色模式" data-theme="light">
       <svg class="theme-icon theme-sun" viewBox="0 0 24 24" aria-hidden="true">
         <circle cx="12" cy="12" r="4.5"></circle>
@@ -2179,6 +2224,15 @@
           <path d="M8 9h8M8 13h8M8 17h6"></path>
         </svg>
         日志查看
+      </a>
+      <a id="workgraphBtn" class="btn-admin btn-workgraph" href="/workgraph">
+        <svg class="btn-chat-icon" viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="6" cy="7" r="2.5"></circle>
+          <circle cx="18" cy="7" r="2.5"></circle>
+          <circle cx="12" cy="17" r="2.5"></circle>
+          <path d="M8.3 8.6l2.3 5.1M15.7 8.6l-2.3 5.1M8.6 7h6.8"></path>
+        </svg>
+        WORKGRAPH
       </a>
 
     </div>
@@ -2400,6 +2454,7 @@
     switchBtn: document.getElementById("u_switch_btn"),
     adminBtn: document.getElementById("adminBtn"),
     logsBtn: document.getElementById("logsBtn"),
+    workgraphBtn: document.getElementById("workgraphBtn"),
     chatBtn: document.querySelector(".btn-chat"),
     loginTip: document.getElementById("loginTip"),
     authMsg: document.getElementById("authMsg"),
@@ -2848,6 +2903,7 @@
     if (ui.chatBtn) ui.chatBtn.classList.toggle("disabled", !loggedIn);
     if (ui.adminBtn) ui.adminBtn.classList.toggle("show", loggedIn && isAdminUser(authState.user));
     if (ui.logsBtn) ui.logsBtn.classList.toggle("show", loggedIn);
+    if (ui.workgraphBtn) ui.workgraphBtn.classList.toggle("show", loggedIn);
     if (ui.loginTip) ui.loginTip.style.display = loggedIn ? "none" : "block";
     if (ui.modalOverlay) {
       if (!loggedIn) {
@@ -3085,6 +3141,15 @@
       return;
     }
     smoothNavigate("/logs");
+  });
+  ui.workgraphBtn?.addEventListener("click", (e) => {
+    e.preventDefault();
+    if (!authState.logged_in) {
+      setAuthMessage("请先选择账户登录");
+      openModal();
+      return;
+    }
+    smoothNavigate("/workgraph");
   });
 
   ui.switchBtn?.addEventListener("click", loginSelectedUser);

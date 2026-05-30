@@ -94,6 +94,7 @@ const AUTH_OPEN_PATHS = new Set([
   "/app",
   "/settings",
   "/logs",
+  "/workgraph",
   "/model-diagnostics",
   "/model-data",
   "/llm-request",
@@ -544,6 +545,7 @@ app.get("/chat", (_req, res) => sendHtml(res, "chat.html"));
 app.get("/app", (_req, res) => sendHtml(res, "chat.html"));
 app.get("/settings", (_req, res) => sendHtml(res, "settings.html"));
 app.get("/logs", (_req, res) => sendHtml(res, "logs.html"));
+app.get("/workgraph", (_req, res) => sendHtml(res, "workgraph.html"));
 app.get("/model-diagnostics", (_req, res) => sendHtml(res, "model_diagnostics.html"));
 app.get("/llm-request", (_req, res) => sendHtml(res, "llm_request.html"));
 app.get("/model-data", (_req, res) => sendHtml(res, "llm_request.html"));
