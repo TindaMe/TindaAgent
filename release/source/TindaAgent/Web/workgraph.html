@@ -350,6 +350,10 @@
     .wg-node.event {
       border-radius: 8px;
     }
+    .wg-node.lane-event {
+      border-radius: 8px;
+      justify-content: flex-start;
+    }
     .wg-node.milestone {
       border-radius: 999px;
     }
@@ -425,14 +429,75 @@
       stroke-width: 2.2;
       filter: drop-shadow(0 0 10px rgba(196, 181, 253, 0.30));
     }
+    body[data-view="lane"] .wg-edge {
+      opacity: 0.24;
+      stroke-width: 1.1;
+      filter: none;
+    }
+    body[data-view="lane"] .wg-edge.active,
+    body[data-view="lane"] .wg-edge.selected-edge {
+      opacity: 0.86;
+      stroke-width: 2;
+      filter: drop-shadow(0 0 8px rgba(196, 181, 253, 0.22));
+    }
+    body[data-view="lane"] .wg-edge.handoff,
+    body[data-view="lane"] .wg-edge.audit {
+      stroke-dasharray: 3 6;
+    }
+    body.details-collapsed {
+      grid-template-rows: 56px 1fr 36px;
+    }
     footer {
       min-height: 0;
       border-top: 1px solid rgba(196, 181, 253, 0.12);
       background: rgba(8, 5, 18, 0.82);
       display: grid;
       grid-template-columns: 0.82fr 1.18fr;
+      grid-template-rows: 24px 1fr;
       gap: 10px;
-      padding: 10px 12px 12px;
+      padding: 8px 12px 12px;
+    }
+    .details-bar {
+      grid-column: 1 / -1;
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      color: var(--text-dim);
+      font-size: 11px;
+      font-weight: 900;
+      letter-spacing: 0.10em;
+      text-transform: uppercase;
+    }
+    .details-summary {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .details-toggle {
+      height: 22px;
+      border: 1px solid rgba(196, 181, 253, 0.18);
+      border-radius: 7px;
+      padding: 0 9px;
+      background: rgba(32, 22, 51, 0.72);
+      color: var(--purple-soft);
+      font-size: 10px;
+      font-weight: 950;
+      letter-spacing: 0.08em;
+      cursor: pointer;
+    }
+    body.details-collapsed footer {
+      display: flex;
+      align-items: center;
+      padding: 0 12px;
+    }
+    body.details-collapsed .details-bar {
+      width: 100%;
+    }
+    body.details-collapsed .detail-panel {
+      display: none;
     }
     .detail-panel {
       min-width: 0;
@@ -540,6 +605,10 @@
   </main>
 
   <footer>
+    <div class="details-bar">
+      <span class="details-summary" id="detailsSummary">SELECTED · null</span>
+      <button class="details-toggle" type="button" id="detailsToggle">COLLAPSE</button>
+    </div>
     <section class="detail-panel">
       <div class="detail-head">Selected</div>
       <pre id="selectedPanel">null</pre>
@@ -559,9 +628,13 @@
     const nodeLayer = document.getElementById("nodeLayer");
     const selectedPanel = document.getElementById("selectedPanel");
     const rawPanel = document.getElementById("rawPanel");
+    const detailsSummary = document.getElementById("detailsSummary");
+    const detailsToggle = document.getElementById("detailsToggle");
     let activeView = "actor";
     let activeSelection = "";
     let resizeTimer = 0;
+    let detailsCollapsed = false;
+    let detailsTouched = false;
 
     const workflow = {
       workflow_id: "wf_workgraph_sample",
@@ -629,6 +702,22 @@
       if (count <= 1) return max;
       const available = graphViewportWidth() - start - end - nodeWidth;
       return Math.max(min, Math.min(max, Math.floor(available / (count - 1))));
+    }
+
+    function actorOrderByFirstEvent(data) {
+      const seen = new Set();
+      const ids = [];
+      [...data.events].sort(byTime).forEach((event) => {
+        if (event.actor_id && !seen.has(event.actor_id)) {
+          seen.add(event.actor_id);
+          ids.push(event.actor_id);
+        }
+      });
+      data.actors.forEach((actor) => {
+        if (!seen.has(actor.id)) ids.push(actor.id);
+      });
+      const actorMap = new Map(data.actors.map((actor) => [actor.id, actor]));
+      return ids.map((id) => actorMap.get(id)).filter(Boolean);
     }
 
     function layoutActorMap(data) {
@@ -706,22 +795,24 @@
     }
 
     function layoutLaneTimeline(data) {
-      const actors = [...data.actors].sort((a, b) => (statusRank[a.status] || 99) - (statusRank[b.status] || 99) || a.name.localeCompare(b.name));
+      const actors = actorOrderByFirstEvent(data);
       const actorIndex = new Map(actors.map((actor, index) => [actor.id, index]));
       const events = [...data.events].sort(byTime);
-      const nodeW = 182;
-      const nodeH = 64;
-      const start = 210;
-      const spacing = fittedSpacing(events.length, nodeW, start, 42, 150, 184);
+      const nodeW = 210;
+      const nodeH = 72;
+      const laneH = 82;
+      const laneTop = 26;
+      const start = 218;
+      const spacing = fittedSpacing(events.length, nodeW, start, 42, 154, 194);
       const width = Math.max(graphViewportWidth(), start + Math.max(0, events.length - 1) * spacing + nodeW + 42);
-      const lanes = actors.map((actor, index) => ({ id: `lane:${actor.id}`, actor_id: actor.id, label: actor.name, x: 0, y: 38 + index * 78, w: width, h: 66, source: actor }));
+      const lanes = actors.map((actor, index) => ({ id: `lane:${actor.id}`, actor_id: actor.id, label: actor.name, x: 0, y: laneTop + index * laneH, w: width, h: laneH - 8, source: actor }));
       const nodes = events.map((event, index) => {
         const laneIndex = actorIndex.get(event.actor_id) ?? 0;
         return {
           id: `event:${event.id}`,
-          kind: "event",
+          kind: "lane-event",
           x: start + index * spacing,
-          y: 44 + laneIndex * 78,
+          y: laneTop + 7 + laneIndex * laneH,
           w: nodeW,
           h: nodeH,
           label: event.id,
@@ -731,8 +822,8 @@
           source: event
         };
       });
-      const edges = data.links.map((link, index) => ({ id: `lane-link:${index}:${link.from}:${link.to}`, from: `event:${link.from}`, to: `event:${link.to}`, kind: edgeKind(link.type), source: link }));
-      return { width, height: Math.max(560, 130 + actors.length * 78), nodes, edges, lanes };
+      const edges = data.links.map((link, index) => ({ id: `lane-link:${index}:${link.from}:${link.to}`, from: `event:${link.from}`, to: `event:${link.to}`, kind: edgeKind(link.type), layout: "lane", source: link }));
+      return { width, height: Math.max(620, 58 + actors.length * laneH), nodes, edges, lanes };
     }
 
     function sceneForView(view) {
@@ -752,6 +843,15 @@
       const from = nodeMap.get(edge.from);
       const to = nodeMap.get(edge.to);
       if (!from || !to) return "";
+      if (edge.layout === "lane") {
+        const fromRight = centerOf(from, "right");
+        const toLeft = centerOf(to, "left");
+        const a = toLeft.x > fromRight.x + 24 ? fromRight : { x: from.x + from.w / 2, y: from.y + from.h / 2 };
+        const b = toLeft.x > fromRight.x + 24 ? toLeft : { x: to.x + to.w / 2, y: to.y + to.h / 2 };
+        const midX = a.x + (b.x - a.x) * 0.5;
+        if (Math.abs(a.y - b.y) < 4) return `M ${a.x} ${a.y} L ${b.x} ${b.y}`;
+        return `M ${a.x} ${a.y} L ${midX} ${a.y} L ${midX} ${b.y} L ${b.x} ${b.y}`;
+      }
       const horizontal = Math.abs((to.x || 0) - (from.x || 0)) >= Math.abs((to.y || 0) - (from.y || 0));
       const a = centerOf(from, horizontal ? "right" : "bottom");
       const b = centerOf(to, horizontal ? "left" : "top");
@@ -839,6 +939,13 @@
       const node = scene.nodes.find((item) => item.id === nodeId);
       selectedPanel.textContent = JSON.stringify(node ? { id: node.id, kind: node.kind, source_id: node.source_id, status: node.status } : null, null, 2);
       rawPanel.textContent = JSON.stringify(node?.source || workflow, null, 2);
+      detailsSummary.textContent = node ? `SELECTED · ${node.source_id} · ${node.status}` : "SELECTED · null";
+    }
+
+    function setDetailsCollapsed(next) {
+      detailsCollapsed = Boolean(next);
+      document.body.classList.toggle("details-collapsed", detailsCollapsed);
+      detailsToggle.textContent = detailsCollapsed ? "EXPAND" : "COLLAPSE";
     }
 
     function renderLegend() {
@@ -857,6 +964,7 @@
 
     function render(view = activeView) {
       activeView = view;
+      document.body.dataset.view = view;
       const scene = sceneForView(view);
       document.getElementById("workflowName").textContent = workflow.name;
       document.getElementById("workflowMeta").textContent = `status=${workflow.status} · events=${workflow.events.length}`;
@@ -865,6 +973,7 @@
       document.getElementById("linkCount").textContent = String(workflow.links.length);
       document.getElementById("laneCount").textContent = String(view === "lane" ? workflow.actors.length : 0);
       activeSelection = "";
+      if (!detailsTouched) setDetailsCollapsed(view === "lane");
       renderLegend();
       renderScene(scene);
     }
@@ -898,6 +1007,10 @@
     });
     document.getElementById("refreshBtn")?.addEventListener("click", () => {
       render(activeView);
+    });
+    detailsToggle.addEventListener("click", () => {
+      detailsTouched = true;
+      setDetailsCollapsed(!detailsCollapsed);
     });
     window.addEventListener("resize", () => {
       window.clearTimeout(resizeTimer);
