@@ -83,6 +83,16 @@ async function main() {
     const webSettingsReload = await request("/web-settings", { headers });
     if (webSettingsReload.quick_buttons?.join(",") !== "logs,model,stream") throw new Error("web settings quick button order did not reload");
 
+    const logFiles = await request("/logs/files", { headers });
+    if (!Array.isArray(logFiles.files) || !logFiles.files.some((file: any) => file.name === "audit_events" && file.source === "sqlite")) throw new Error("sqlite audit source was not listed");
+    const logTail = await request("/logs/read?file=audit_events&lines=40", { headers });
+    if (!Array.isArray(logTail.lines) || !logTail.lines.some((line: string) => line.includes("GET /logs/files"))) throw new Error("sqlite audit tail did not include previous log list event");
+    const idLine = [...logTail.lines].reverse().find((line: string) => /^\[\d+\]/.test(String(line)));
+    const idMatch = String(idLine || "").match(/^\[(\d+)\]/);
+    if (!idMatch) throw new Error("sqlite audit tail did not expose numeric ids");
+    const logById = await request(`/logs/by-id?id=${idMatch[1]}`, { headers });
+    if (!logById.event?.id || Number(logById.id) !== Number(idMatch[1]) || logById.source !== "sqlite") throw new Error("sqlite audit id lookup failed");
+
     const cfg = await request(`/sessions/${sid}/config`, { method: "PATCH", headers, body: JSON.stringify({ max_context_tokens: 32000 }) });
     if (cfg.config?.token_limit !== 32000) throw new Error("session config did not persist token limit");
     const cfg2 = await request(`/sessions/${sid}/config`, { headers });

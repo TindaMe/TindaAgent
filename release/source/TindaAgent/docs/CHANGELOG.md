@@ -6,6 +6,19 @@
 
 ## Unreleased
 
+## v1.12.8 - 2026-05-30
+
+### Changed
+
+- **审计日志切换到 SQLite** — 运行时审计事件改写入 `Data/tinda-agent.sqlite3` 的 `audit_events` 表，使用 SQLite 自增 ID 作为全局事件序号。
+- **日志查看接口 SQLite 化** — `/logs/files`、`/logs/read`、`/logs/by-id` 保持原响应形态，但查询路径改为 SQLite，并兼容旧日志选择和按 ID 定位。
+- **旧日志轻量迁移** — 首次查询仅导入 `total.jsonl` 尾部最多 50000 行，保留旧 ID 并让新事件从历史最大 ID 后继续递增，避免启动或日志页被归档日志阻塞。
+
+### Fixed
+
+- **大日志读取性能** — legacy 日志迁移改为文件尾部分块读取，不再一次性加载完整 `total.jsonl`。
+- **日志烟测覆盖** — HTTP 功能烟测新增 SQLite 日志列表、读取和按 ID 查询验证，并继续隔离真实 Web 设置文件。
+
 ## v1.12.7 - 2026-05-30
 
 ### Fixed

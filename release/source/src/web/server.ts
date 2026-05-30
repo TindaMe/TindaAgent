@@ -4,9 +4,9 @@ import net from "node:net";
 import path from "node:path";
 import crypto from "node:crypto";
 import { Agent, LlmClient, latestLlmRequest, type ChatMessage } from "../ai/agent.js";
-import { auditEvent } from "../core/audit.js";
+import { auditEvent, auditEventToLegacyLine, getAuditEventById, listAuditSources, readAuditEvents } from "../core/audit.js";
 import { loadRuntimeEnv } from "../core/env.js";
-import { appVersion, dataRoot, ensureRuntimeDirs, legacyLogRoot, logRoot, projectRoot, sqliteDbFile, webRoot } from "../core/paths.js";
+import { appVersion, dataRoot, ensureRuntimeDirs, logRoot, projectRoot, sqliteDbFile, webRoot } from "../core/paths.js";
 import { nowIso, readJson, safeId, textOf, writeJson } from "../core/json.js";
 import {
   PUBLIC_EXECUTE,
@@ -276,19 +276,10 @@ function modelProvidersPayload() {
   };
 }
 
-function readLogTail(file: string, maxLines: number): string[] {
-  const text = fs.readFileSync(file, "utf8");
-  return text.split(/\r?\n/).slice(-maxLines);
-}
-
 function safeLogName(raw: string): string {
   const name = path.basename(String(raw || "").trim());
-  if (!/^[A-Za-z0-9._-]+$/.test(name)) return "";
+  if (!/^[A-Za-z0-9._-]+$/.test(name) && name !== "audit_events") return "";
   return name;
-}
-
-function logFileCandidates(name: string): string[] {
-  return [path.join(logRoot(), name), path.join(legacyLogRoot(), name)];
 }
 
 function estimateUsage(rows: Array<{ content?: string | null }>): number {
@@ -1126,49 +1117,47 @@ app.post("/sessions/:session_id/tool-calls/:tool_call_id/skip", (req, res) => {
 
 app.get("/logs/files", (req, res) => {
   requirePublicRead(req);
-  const roots = [logRoot(), legacyLogRoot()];
-  const seen = new Set<string>();
-  const files: any[] = [];
-  for (const root of roots) {
-    if (!fs.existsSync(root)) continue;
-    for (const name of fs.readdirSync(root)) {
-      if (seen.has(name) || name.startsWith(".")) continue;
-      const file = path.join(root, name);
-      if (!fs.statSync(file).isFile()) continue;
-      const st = fs.statSync(file);
-      files.push({ name, size_bytes: st.size, updated_at: st.mtime.toISOString() });
-      seen.add(name);
-    }
-  }
-  files.sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)));
-  res.json({ ok: true, files });
+  res.json({ ok: true, files: listAuditSources() });
 });
 app.get("/logs/read", (req, res) => {
   requirePublicRead(req);
   const name = safeLogName(String(req.query.file || ""));
   if (!name) return jsonError(res, 400, "invalid file name");
-  const file = logFileCandidates(name).find((p) => fs.existsSync(p));
-  if (!file) return jsonError(res, 404, "file not found");
-  const lines = readLogTail(file, Math.max(20, Math.min(Number(req.query.lines || 300), 2000)));
-  res.json({ ok: true, file: name, line_count: lines.length, truncated: false, lines });
+  const sources = listAuditSources();
+  if (!sources.some((file) => file.name === name)) return jsonError(res, 404, "file not found");
+  const limit = Math.max(20, Math.min(Number(req.query.lines || 300), 2000));
+  const rows = readAuditEvents(limit, name);
+  const lines = rows.reverse().map(auditEventToLegacyLine);
+  res.json({ ok: true, file: name || "audit_events", line_count: lines.length, truncated: false, lines, source: "sqlite" });
 });
 app.get("/logs/by-id", (req, res) => {
   requirePublicRead(req);
   const id = Number.parseInt(String(req.query.id || "").replace(/^tc_/, ""), 10);
   if (!Number.isFinite(id)) return jsonError(res, 400, "invalid id");
-  for (const file of logFileCandidates("total.jsonl")) {
-    if (!fs.existsSync(file)) continue;
-    const lines = fs.readFileSync(file, "utf8").split(/\r?\n/).reverse();
-    for (const line of lines) {
-      try {
-        const row = JSON.parse(line);
-        if (Number(row.id || row.event?.id) === id) return res.json({ ok: true, id, event: row.event || row, source_file: path.basename(file), source_path: file, source_line: 0 });
-      } catch {
-        // ignore
-      }
-    }
-  }
-  res.status(404).json({ ok: false, error: "id not found", id });
+  const row = getAuditEventById(id);
+  if (!row) return res.status(404).json({ ok: false, error: "id not found", id, source: "sqlite" });
+  res.json({
+    ok: true,
+    id,
+    event: {
+      id: row.id,
+      ts: row.ts,
+      time: row.ts,
+      op_type: row.op_type,
+      subsystem: row.subsystem,
+      func: row.func,
+      dir: row.dir,
+      file: row.file,
+      path: row.file_path,
+      file_path: row.file_path,
+      content: row.content,
+      extra: row.extra
+    },
+    source_file: row.source_file || "audit_events",
+    source_path: sqliteDbFile(),
+    source_line: row.id,
+    source: "sqlite"
+  });
 });
 
 app.use((error: any, _req: Request, res: Response, _next: NextFunction) => {
