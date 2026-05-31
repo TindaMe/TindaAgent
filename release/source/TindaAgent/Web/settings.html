@@ -786,7 +786,7 @@
       <p class="sub">TindaAgent 版本信息</p>
       <div class="version-row">
         <span>版本</span>
-        <span class="ver" id="versionLabel">v1.12.14</span>
+        <span class="ver" id="versionLabel">v1.12.15</span>
       </div>
     </div>
   </div>
@@ -1236,7 +1236,7 @@
       try {
         const res = await apiFetch("/system/version");
         const data = await res.json();
-        const v = data?.effective_version || data?.version || "v1.12.14";
+        const v = data?.effective_version || data?.version || "v1.12.15";
         document.getElementById("versionLabel").textContent = v.startsWith("v") ? v : "v" + v;
       } catch {}
     })();

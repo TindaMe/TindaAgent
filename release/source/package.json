@@ -1,6 +1,6 @@
 {
   "name": "tinda-agent",
-  "version": "1.12.14",
+  "version": "1.12.15",
   "description": "TindaAgent - TypeScript web and CLI agent platform",
   "type": "module",
   "private": true,

@@ -1,5 +1,5 @@
 #!/bin/bash
-SOURCE=/mnt/e/Python/release/source
+SOURCE="$(cd "$(dirname "$0")" && pwd)"
 case "${1:-}" in
     gateway) exec bash "$SOURCE/start.sh" "${@:2}" ;;
     --help|-h|help)

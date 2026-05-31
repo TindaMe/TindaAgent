@@ -4,20 +4,12 @@ SOURCE="$(cd "$(dirname "$0")" && pwd)"
 BIN="$HOME/.local/bin"
 mkdir -p "$BIN"
 
-cat > "$BIN/tinda" << 'SCRIPT'
-#!/bin/bash
-SOURCE=/mnt/e/Python/release/source
-case "${1:-}" in
-    gateway) exec bash "$SOURCE/start.sh" "${@:2}" ;;
-    --help|-h|help)
-        echo "TindaAgent"
-        echo "  tinda          启动 CLI"
-        echo "  tinda gateway   启动 Web 服务"
-        ;;
-    *) cd "$SOURCE" && exec npm run tinda -- "$@" ;;
-esac
-SCRIPT
+if ! command -v realpath >/dev/null 2>&1; then
+    echo "realpath not found; run ./tinda.sh from the project directory instead"
+    exit 127
+fi
 
-chmod +x "$BIN/tinda"
+TARGET="$(realpath --relative-to="$BIN" "$SOURCE/tinda.sh")"
+ln -sfn "$TARGET" "$BIN/tinda"
 echo "done — tinda 已安装到 $BIN/tinda"
 echo "试试: tinda --help"
